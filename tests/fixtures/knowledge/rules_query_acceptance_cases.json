@@ -265,6 +265,54 @@
     "expect_human_review": false
   },
   {
+    "case_id": "negative_plain_narrative_hang_coat",
+    "query_text": "我把湿外套挂在门边",
+    "deterministic_resolution_required": false,
+    "minimum_matches": 0,
+    "expected_topics": [],
+    "expect_human_review": false
+  },
+  {
+    "case_id": "negative_filler_only_enen",
+    "query_text": "嗯嗯",
+    "deterministic_resolution_required": false,
+    "minimum_matches": 0,
+    "expected_topics": [],
+    "expect_human_review": false
+  },
+  {
+    "case_id": "negative_acknowledgment_received",
+    "query_text": "收到，先这样吧",
+    "deterministic_resolution_required": false,
+    "minimum_matches": 0,
+    "expected_topics": [],
+    "expect_human_review": false
+  },
+  {
+    "case_id": "negative_daily_chat_weather",
+    "query_text": "今天天气真冷",
+    "deterministic_resolution_required": false,
+    "minimum_matches": 0,
+    "expected_topics": [],
+    "expect_human_review": false
+  },
+  {
+    "case_id": "negative_greeting_to_npc",
+    "query_text": "老板你好，我们到了",
+    "deterministic_resolution_required": false,
+    "minimum_matches": 0,
+    "expected_topics": [],
+    "expect_human_review": false
+  },
+  {
+    "case_id": "negative_daily_action_rest",
+    "query_text": "我先去休息一下",
+    "deterministic_resolution_required": false,
+    "minimum_matches": 0,
+    "expected_topics": [],
+    "expect_human_review": false
+  },
+  {
     "case_id": "positive_multi_term_listen_and_spot",
     "query_text": "我一边聆听动静一边仔细侦查房间",
     "deterministic_resolution_required": false,

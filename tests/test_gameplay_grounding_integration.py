@@ -49,6 +49,9 @@ def test_resolve_rules_query_text_auto_fallback_uses_terms_and_strips_fillers() 
     [
         ("我走到窗户旁边坐了下来", None),
         ("我去看", None),
+        ("嗯嗯", None),
+        ("收到，先这样吧", None),
+        ("我先去休息一下", None),
     ],
 )
 def test_resolve_rules_query_text_auto_fallback_returns_none_for_negative_or_too_short_text(
