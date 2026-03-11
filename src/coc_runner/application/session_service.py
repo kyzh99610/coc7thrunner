@@ -336,6 +336,20 @@ class SessionService:
             session, viewer_id=viewer_id, viewer_role=viewer_role
         )
 
+    def export_session(
+        self,
+        session_id: str,
+        *,
+        language_preference: LanguagePreference | None = None,
+    ) -> dict[str, Any]:
+        keeper_view = self.get_session_view(
+            session_id,
+            viewer_id=None,
+            viewer_role=ViewerRole.KEEPER,
+            language_preference=language_preference,
+        )
+        return keeper_view.model_dump(mode="json")
+
     def submit_player_action(
         self,
         session_id: str,
