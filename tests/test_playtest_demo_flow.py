@@ -186,6 +186,160 @@ def _clue_map(state_payload: dict) -> dict[str, dict]:
     return {clue["clue_id"]: clue for clue in state_payload["scenario"]["clues"]}
 
 
+def _get_session_state(
+    client: TestClient,
+    session_id: str,
+    *,
+    viewer_role: str,
+    viewer_id: str | None = None,
+) -> dict:
+    params = {"viewer_role": viewer_role}
+    if viewer_id is not None:
+        params["viewer_id"] = viewer_id
+    response = client.get(
+        f"/sessions/{session_id}/state",
+        params=params,
+    )
+    assert response.status_code == 200
+    return response.json()
+
+
+def _advance_whispering_guesthouse_to_room_truth_current(
+    client: TestClient,
+    session_id: str,
+) -> tuple[dict, dict, dict]:
+    lobby_action = client.post(
+        f"/sessions/{session_id}/player-action",
+        json={
+            "actor_id": "investigator-1",
+            "action_text": "我在前厅调查柜台和墙角，看看有没有异常痕迹。",
+            "structured_action": {"type": "investigate_lobby"},
+        },
+    )
+    assert lobby_action.status_code == 202
+
+    find_note_response = client.post(
+        f"/sessions/{session_id}/manual-action",
+        json={
+            "operator_id": KEEPER_ACTOR_ID,
+            "actor_id": KEEPER_ACTOR_ID,
+            "actor_type": "keeper",
+            "action_text": "KP裁定：调查员在柜台后发现一张染潮纸条，内容把线索指向二楼走廊。",
+            "structured_action": {"type": "keeper_find_note"},
+            "effects": {
+                "clue_state_effects": [
+                    {
+                        "clue_id": "clue_whisper_note",
+                        "status": "shared_with_party",
+                        "share_with_party": True,
+                        "add_discovered_by": ["investigator-1"],
+                        "discovered_via": "manual_find_note",
+                    }
+                ]
+            },
+        },
+    )
+    assert find_note_response.status_code == 202
+
+    corridor_action = client.post(
+        f"/sessions/{session_id}/player-action",
+        json={
+            "actor_id": "investigator-1",
+            "action_text": "我前往二楼走廊，并贴着门缝聆听门后的动静。",
+            "structured_action": {"type": "listen_at_door"},
+        },
+    )
+    assert corridor_action.status_code == 202
+
+    corridor_manual = client.post(
+        f"/sessions/{session_id}/manual-action",
+        json={
+            "operator_id": KEEPER_ACTOR_ID,
+            "actor_id": KEEPER_ACTOR_ID,
+            "actor_type": "keeper",
+            "action_text": "KP裁定：门后确实传来断续低语，调查员确认异常来自上锁客房内侧。",
+            "structured_action": {"type": "keeper_confirm_whisper"},
+            "effects": {
+                "scene_transitions": [{"scene_id": "scene_second_floor_corridor"}],
+                "clue_state_effects": [
+                    {
+                        "clue_id": "clue_room_whisper",
+                        "status": "shared_with_party",
+                        "share_with_party": True,
+                        "add_discovered_by": ["investigator-1"],
+                        "discovered_via": "manual_confirm_whisper",
+                    }
+                ],
+            },
+        },
+    )
+    assert corridor_manual.status_code == 202
+
+    keeper_state = _get_session_state(client, session_id, viewer_role="keeper")
+    investigator_one_state = _get_session_state(
+        client,
+        session_id,
+        viewer_role="investigator",
+        viewer_id="investigator-1",
+    )
+    investigator_two_state = _get_session_state(
+        client,
+        session_id,
+        viewer_role="investigator",
+        viewer_id="investigator-2",
+    )
+    return keeper_state, investigator_one_state, investigator_two_state
+
+
+def _complete_whispering_guesthouse_room_truth(
+    client: TestClient,
+    session_id: str,
+) -> None:
+    room_action = client.post(
+        f"/sessions/{session_id}/player-action",
+        json={
+            "actor_id": "investigator-1",
+            "action_text": "我进入客房，调查桌上的日志碎页和地板上的水痕。",
+            "structured_action": {"type": "investigate_room_truth"},
+        },
+    )
+    assert room_action.status_code == 202
+
+    room_truth_manual = client.post(
+        f"/sessions/{session_id}/manual-action",
+        json={
+            "operator_id": KEEPER_ACTOR_ID,
+            "actor_id": KEEPER_ACTOR_ID,
+            "actor_type": "keeper",
+            "action_text": "KP裁定：调查员找到破碎日志并确认房内真相，潮湿低语对其理智造成了冲击。",
+            "structured_action": {"type": "keeper_resolve_room_truth"},
+            "effects": {
+                "scene_transitions": [{"scene_id": "scene_locked_guest_room"}],
+                "clue_state_effects": [
+                    {
+                        "clue_id": "clue_log_fragment",
+                        "status": "private_to_actor",
+                        "private_to_actor_ids": ["investigator-1"],
+                        "add_owner_actor_ids": ["investigator-1"],
+                        "add_discovered_by": ["investigator-1"],
+                        "discovered_via": "manual_room_truth",
+                    }
+                ],
+                "character_stat_effects": [{"actor_id": "investigator-1", "san_delta": -3}],
+                "status_effects": [
+                    {
+                        "actor_id": "investigator-1",
+                        "add_status_effects": ["受潮低语萦绕"],
+                        "add_temporary_conditions": ["需要进行一次理智相关人工审阅"],
+                        "add_private_notes": ["破碎日志记着住客在门后低语里逐渐失去理智。"],
+                    }
+                ],
+            },
+        },
+    )
+    assert room_truth_manual.status_code == 202
+
+
 def test_keeper_demo_summary_stays_coherent_during_short_blackout_clinic_run(
     client: TestClient,
 ) -> None:
@@ -503,6 +657,184 @@ def test_manual_smoke_flow_covers_room_truth_completion_and_visibility_isolation
         investigator_one_final_clues
     )
     assert investigator_two_final_clue_ids == {"clue_whisper_note", "clue_room_whisper"}
+    assert "clue_log_fragment" in keeper_investigator_one_state["clue_ids"]
+    assert "clue_log_fragment" not in investigator_two_state["clue_ids"]
+
+
+def test_snapshot_import_allows_completing_room_truth_third_beat_without_losing_history(
+    client: TestClient,
+) -> None:
+    _register_smoke_rule_source(client, source_id="manual-smoke-room-truth-import")
+    start_response = client.post(
+        "/sessions/start",
+        json={
+            "keeper_name": "KP",
+            "scenario": _minimal_whispering_guesthouse_smoke_scenario(),
+            "participants": [
+                make_participant("investigator-1", "里昂"),
+                make_participant("investigator-2", "周岚"),
+            ],
+        },
+    )
+    assert start_response.status_code == 201
+    original_session_id = start_response.json()["session_id"]
+
+    keeper_before_snapshot, investigator_one_before_snapshot, investigator_two_before_snapshot = (
+        _advance_whispering_guesthouse_to_room_truth_current(client, original_session_id)
+    )
+    beats_before_snapshot = _beat_map(keeper_before_snapshot)
+    investigator_one_clues_before_snapshot = _clue_map(investigator_one_before_snapshot)
+    investigator_two_clue_ids_before_snapshot = {
+        clue["clue_id"] for clue in investigator_two_before_snapshot["scenario"]["clues"]
+    }
+
+    assert beats_before_snapshot["beat_find_note"]["status"] == "completed"
+    assert beats_before_snapshot["beat_reach_corridor"]["status"] == "completed"
+    assert beats_before_snapshot["beat_room_truth"]["status"] == "current"
+    assert keeper_before_snapshot["progress_state"]["current_beat"] == "beat_room_truth"
+    assert investigator_one_clues_before_snapshot["clue_room_whisper"]["status"] == "shared_with_party"
+    assert "clue_log_fragment" not in investigator_two_clue_ids_before_snapshot
+    assert any(
+        prompt["category"] == "sanity_review" and prompt["status"] == "pending"
+        for prompt in keeper_before_snapshot["keeper_workflow"]["active_prompts"]
+    )
+
+    original_snapshot_response = client.get(f"/sessions/{original_session_id}/snapshot")
+    assert original_snapshot_response.status_code == 200
+    original_snapshot = original_snapshot_response.json()
+    original_timeline_len = len(original_snapshot["timeline"])
+
+    import_response = client.post("/sessions/import", json=original_snapshot)
+    assert import_response.status_code == 201
+    imported_session_id = import_response.json()["new_session_id"]
+
+    imported_keeper_before_finish = _get_session_state(
+        client,
+        imported_session_id,
+        viewer_role="keeper",
+    )
+    imported_investigator_one_before_finish = _get_session_state(
+        client,
+        imported_session_id,
+        viewer_role="investigator",
+        viewer_id="investigator-1",
+    )
+    imported_investigator_two_before_finish = _get_session_state(
+        client,
+        imported_session_id,
+        viewer_role="investigator",
+        viewer_id="investigator-2",
+    )
+    imported_snapshot_before_finish_response = client.get(
+        f"/sessions/{imported_session_id}/snapshot"
+    )
+    assert imported_snapshot_before_finish_response.status_code == 200
+    imported_snapshot_before_finish = imported_snapshot_before_finish_response.json()
+
+    imported_beats_before_finish = _beat_map(imported_keeper_before_finish)
+    imported_prompt_before_finish = next(
+        prompt
+        for prompt in imported_keeper_before_finish["keeper_workflow"]["active_prompts"]
+        if prompt["category"] == "sanity_review"
+    )
+    pre_finish_sanity = imported_investigator_one_before_finish["own_character_state"]["current_sanity"]
+    pre_finish_visible_event_count = len(imported_keeper_before_finish["visible_events"])
+    pre_finish_authoritative_action_count = len(
+        imported_keeper_before_finish["visible_authoritative_actions"]
+    )
+
+    assert imported_beats_before_finish["beat_room_truth"]["status"] == "current"
+    assert imported_keeper_before_finish["progress_state"]["current_beat"] == "beat_room_truth"
+    assert imported_prompt_before_finish["status"] == "pending"
+    assert "clue_log_fragment" not in {
+        clue["clue_id"] for clue in imported_investigator_two_before_finish["scenario"]["clues"]
+    }
+    assert len(imported_snapshot_before_finish["timeline"]) == original_timeline_len + 1
+    assert imported_snapshot_before_finish["timeline"][-1]["event_type"] == "import"
+
+    _complete_whispering_guesthouse_room_truth(client, imported_session_id)
+
+    keeper_final = _get_session_state(client, imported_session_id, viewer_role="keeper")
+    investigator_one_final = _get_session_state(
+        client,
+        imported_session_id,
+        viewer_role="investigator",
+        viewer_id="investigator-1",
+    )
+    investigator_two_final = _get_session_state(
+        client,
+        imported_session_id,
+        viewer_role="investigator",
+        viewer_id="investigator-2",
+    )
+    imported_snapshot_after_finish_response = client.get(
+        f"/sessions/{imported_session_id}/snapshot"
+    )
+    assert imported_snapshot_after_finish_response.status_code == 200
+    imported_snapshot_after_finish = imported_snapshot_after_finish_response.json()
+
+    final_beats = _beat_map(keeper_final)
+    keeper_final_clues = _clue_map(keeper_final)
+    investigator_one_final_clues = _clue_map(investigator_one_final)
+    investigator_two_final_clue_ids = {
+        clue["clue_id"] for clue in investigator_two_final["scenario"]["clues"]
+    }
+    room_truth_history = keeper_final["progress_state"]["completed_objective_history"]
+    investigator_one_state = investigator_one_final["own_character_state"]
+    investigator_two_state = investigator_two_final["own_character_state"]
+    keeper_investigator_one_state = keeper_final["visible_character_states_by_actor"]["investigator-1"]
+
+    assert final_beats["beat_room_truth"]["status"] == "completed"
+    assert any(record["objective_id"] == "obj_room_truth" for record in room_truth_history)
+    assert all(
+        objective["objective_id"] != "obj_room_truth"
+        for objective in keeper_final["keeper_workflow"]["unresolved_objectives"]
+    )
+    assert investigator_one_final_clues["clue_log_fragment"]["status"] == "private_to_actor"
+    assert "clue_log_fragment" not in investigator_two_final_clue_ids
+    assert keeper_final_clues["clue_log_fragment"]["status"] == "private_to_actor"
+    assert investigator_one_state["current_sanity"] == pre_finish_sanity - 3
+    assert "受潮低语萦绕" in investigator_one_state["status_effects"]
+    assert "需要进行一次理智相关人工审阅" in investigator_one_state["temporary_conditions"]
+    assert any("破碎日志记着住客在门后低语里逐渐失去理智。" in note for note in investigator_one_state["private_notes"])
+    assert any(
+        "破碎日志记着住客在门后低语里逐渐失去理智。" in note
+        for note in keeper_investigator_one_state["private_notes"]
+    )
+    assert any(
+        prompt["category"] == "sanity_review"
+        and prompt["status"] == imported_prompt_before_finish["status"]
+        for prompt in keeper_final["keeper_workflow"]["active_prompts"]
+    )
+    assert len(keeper_final["visible_events"]) == pre_finish_visible_event_count + 2
+    assert len(keeper_final["visible_authoritative_actions"]) == (
+        pre_finish_authoritative_action_count + 2
+    )
+    assert any(
+        event["text"] == "KP裁定：门后确实传来断续低语，调查员确认异常来自上锁客房内侧。"
+        for event in keeper_final["visible_events"]
+    )
+    assert any(
+        event["text"] == "KP裁定：调查员找到破碎日志并确认房内真相，潮湿低语对其理智造成了冲击。"
+        for event in keeper_final["visible_events"]
+    )
+    assert len(imported_snapshot_after_finish["timeline"]) == (
+        len(imported_snapshot_before_finish["timeline"]) + 2
+    )
+    assert imported_snapshot_after_finish["timeline"][-2]["text"] == (
+        "我进入客房，调查桌上的日志碎页和地板上的水痕。"
+    )
+    assert imported_snapshot_after_finish["timeline"][-1]["text"] == (
+        "KP裁定：调查员找到破碎日志并确认房内真相，潮湿低语对其理智造成了冲击。"
+    )
+    assert imported_snapshot_after_finish["authoritative_actions"][-2]["text"] == (
+        "我进入客房，调查桌上的日志碎页和地板上的水痕。"
+    )
+    assert imported_snapshot_after_finish["authoritative_actions"][-1]["text"] == (
+        "KP裁定：调查员找到破碎日志并确认房内真相，潮湿低语对其理智造成了冲击。"
+    )
+    assert imported_investigator_one_before_finish["keeper_workflow"] is None
+    assert investigator_two_final["keeper_workflow"] is None
     assert "clue_log_fragment" in keeper_investigator_one_state["clue_ids"]
     assert "clue_log_fragment" not in investigator_two_state["clue_ids"]
 
