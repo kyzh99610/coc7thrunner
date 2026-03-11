@@ -34,6 +34,82 @@ def _beat_map(state_payload: dict) -> dict[str, dict]:
     return {beat["beat_id"]: beat for beat in state_payload["scenario"]["beats"]}
 
 
+def _trigger_keeper_prompt_assignment(
+    client: TestClient,
+    *,
+    keeper_id: str,
+    assigned_to: str | None = None,
+) -> dict:
+    prompt_payload = {
+        "prompt_text": "KP：确认是否需要跟进这条新线索。",
+        "category": "assignment_check",
+        "reason": "测试 keeper prompt 的分配目标回填。",
+    }
+    if assigned_to is not None:
+        prompt_payload["assigned_to"] = assigned_to
+
+    start_response = client.post(
+        "/sessions/start",
+        json={
+            "keeper_name": "KP",
+            "keeper_id": keeper_id,
+            "scenario": make_scenario(
+                clues=[
+                    {
+                        "clue_id": "clue-ledger",
+                        "title": "关键账页",
+                        "text": "账页上记着可推动调查的关键日期。",
+                        "visibility_scope": "kp_only",
+                    }
+                ],
+                beats=[
+                    {
+                        "beat_id": "beat-log-review",
+                        "title": "查看账页",
+                        "start_unlocked": True,
+                        "complete_conditions": {
+                            "clue_discovered": {"clue_id": "clue-ledger"}
+                        },
+                        "consequences": [{"queue_kp_prompts": [prompt_payload]}],
+                    }
+                ],
+            ),
+            "participants": [make_participant("investigator-1", "林舟")],
+        },
+    )
+    assert start_response.status_code == 201
+    session_id = start_response.json()["session_id"]
+
+    action_response = client.post(
+        f"/sessions/{session_id}/player-action",
+        json={
+            "actor_id": "investigator-1",
+            "action_text": "我从账册里翻出关键账页。",
+            "structured_action": {"type": "review_ledger"},
+            "effects": {
+                "clue_state_effects": [
+                    {
+                        "clue_id": "clue-ledger",
+                        "status": "shared_with_party",
+                        "share_with_party": True,
+                        "add_discovered_by": ["investigator-1"],
+                        "discovered_via": "review_ledger",
+                    }
+                ]
+            },
+        },
+    )
+    assert action_response.status_code == 202
+
+    keeper_state = client.get(
+        f"/sessions/{session_id}/state",
+        params={"viewer_role": "keeper"},
+    ).json()
+    prompts = keeper_state["keeper_workflow"]["active_prompts"]
+    assert len(prompts) == 1
+    return prompts[0]
+
+
 def test_approved_action_unlocks_followup_beat(client: TestClient) -> None:
     _register_spot_hidden_rule(client, source_id="beat-approved-rule")
     start_response = client.post(
@@ -464,6 +540,25 @@ def test_beat_completion_applies_consequences_and_records_progress_audit(
     assert keeper_progress["queued_kp_prompts"][0]["category"] == "npc_reaction"
     assert keeper_progress["queued_kp_prompts"][0]["source_action_id"] == authoritative_action["action_id"]
     assert keeper_progress["transition_history"][-1]["trigger_action_id"] == authoritative_action["action_id"]
+
+
+def test_keeper_prompt_defaults_assigned_to_current_session_keeper(client: TestClient) -> None:
+    prompt = _trigger_keeper_prompt_assignment(
+        client,
+        keeper_id="keeper_custom_001",
+    )
+
+    assert prompt["assigned_to"] == "keeper_custom_001"
+
+
+def test_keeper_prompt_preserves_explicit_assigned_to_over_session_keeper(client: TestClient) -> None:
+    prompt = _trigger_keeper_prompt_assignment(
+        client,
+        keeper_id="keeper_custom_001",
+        assigned_to="keeper-ops",
+    )
+
+    assert prompt["assigned_to"] == "keeper-ops"
 
 
 def test_actor_scoped_clue_visibility_conditions_unlock_followup_beat(

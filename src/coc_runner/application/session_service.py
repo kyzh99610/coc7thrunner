@@ -538,19 +538,36 @@ class SessionService:
             request.language_preference,
             session.language_preference,
         )
+        actor_id = request.actor_id or session.keeper_id
         self._authorize_operator(
             session,
             operator_id=request.operator_id,
             language=effective_language,
+            error_detail={
+                "message": self._message("operator_not_authorized", effective_language),
+                "session_id": session.session_id,
+                "operator_id": request.operator_id,
+                "actor_id": actor_id,
+                "actor_type": request.actor_type.value,
+                "expected_keeper_actor_id": session.keeper_id,
+                "actual_session_keeper_name": session.keeper_name,
+                "permission_check_inputs": {
+                    "operator_id": request.operator_id,
+                    "actor_id": actor_id,
+                    "actor_type": request.actor_type.value,
+                    "expected_keeper_actor_id": session.keeper_id,
+                    "actual_session_keeper_name": session.keeper_name,
+                    "operator_matches_expected_keeper": request.operator_id == session.keeper_id,
+                },
+            },
         )
         current_time = datetime.now(timezone.utc)
         visible_to = self._normalize_visible_to(
-            actor_id=request.actor_id or session.keeper_id,
+            actor_id=actor_id,
             visibility_scope=request.visibility_scope,
             visible_to=request.visible_to,
         )
         expected_version = session.state_version
-        actor_id = request.actor_id or session.keeper_id
         rules_grounding = self._ground_rules_for_action(
             actor_id=actor_id,
             actor_type=request.actor_type,
@@ -1124,10 +1141,11 @@ class SessionService:
         *,
         operator_id: str,
         language: LanguagePreference,
+        error_detail: dict[str, Any] | None = None,
     ) -> None:
         if operator_id == session.keeper_id:
             return
-        raise PermissionError(self._message("operator_not_authorized", language))
+        raise PermissionError(error_detail or self._message("operator_not_authorized", language))
 
     def _update_keeper_prompt(
         self,
@@ -2307,6 +2325,11 @@ class SessionService:
                     )
                 )
             for kp_prompt in consequence.queue_kp_prompts:
+                assigned_to = (
+                    kp_prompt.assigned_to.strip() if kp_prompt.assigned_to is not None else ""
+                )
+                if not assigned_to:
+                    assigned_to = session.keeper_id
                 progress_state.queued_kp_prompts.append(
                     QueuedKPPrompt(
                         prompt_text=kp_prompt.prompt_text,
@@ -2315,7 +2338,7 @@ class SessionService:
                         source_action_id=authoritative_action.action_id,
                         category=kp_prompt.category,
                         priority=kp_prompt.priority,
-                        assigned_to=kp_prompt.assigned_to,
+                        assigned_to=assigned_to,
                         notes=[],
                         status=KeeperPromptStatus.PENDING,
                         trigger_reason=kp_prompt.reason
