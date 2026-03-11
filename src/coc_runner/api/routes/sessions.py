@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
+from pydantic import ValidationError
 
 from coc_runner.api.dependencies import get_session_service
 from coc_runner.application.session_service import SessionService
@@ -20,6 +21,7 @@ from coc_runner.domain.models import (
     ReviewDraftResponse,
     RollbackRequest,
     RollbackResponse,
+    SessionImportResponse,
     SessionStartRequest,
     SessionStartResponse,
     UpdateKeeperPromptRequest,
@@ -220,6 +222,48 @@ def export_session(
     except ConflictError as exc:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
     except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+
+
+@router.get("/{session_id}/snapshot", response_model=dict[str, Any])
+def snapshot_session(
+    session_id: str,
+    language_preference: LanguagePreference | None = Query(default=None),
+    service: SessionService = Depends(get_session_service),
+) -> dict[str, Any]:
+    try:
+        return service.snapshot_session(
+            session_id,
+            language_preference=language_preference,
+        )
+    except LookupError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    except PermissionError as exc:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)) from exc
+    except ConflictError as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+
+
+@router.post("/import", response_model=SessionImportResponse, status_code=status.HTTP_201_CREATED)
+def import_session(
+    payload: dict[str, Any],
+    language_preference: LanguagePreference | None = Query(default=None),
+    service: SessionService = Depends(get_session_service),
+) -> SessionImportResponse:
+    try:
+        return service.import_session(
+            payload,
+            language_preference=language_preference,
+        )
+    except LookupError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    except PermissionError as exc:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)) from exc
+    except ConflictError as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+    except (ValidationError, ValueError) as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
 
 

@@ -3,6 +3,7 @@ from __future__ import annotations
 import re
 from datetime import datetime, timezone
 from typing import Any
+from uuid import uuid4
 
 from coc_runner.domain.errors import ConflictError
 from coc_runner.domain.models import (
@@ -64,6 +65,7 @@ from coc_runner.domain.models import (
     SceneTransitionEffect,
     SessionEvent,
     SessionCharacterState,
+    SessionImportResponse,
     SessionParticipant,
     SessionStartRequest,
     SessionStartResponse,
@@ -349,6 +351,69 @@ class SessionService:
             language_preference=language_preference,
         )
         return keeper_view.model_dump(mode="json")
+
+    def snapshot_session(
+        self,
+        session_id: str,
+        *,
+        language_preference: LanguagePreference | None = None,
+    ) -> dict[str, Any]:
+        error_language = self._resolve_language(language_preference)
+        session = self._load_session(session_id, language=error_language)
+        return session.model_dump(mode="json")
+
+    def import_session(
+        self,
+        payload: dict[str, Any],
+        *,
+        language_preference: LanguagePreference | None = None,
+    ) -> SessionImportResponse:
+        self._resolve_language(language_preference)
+        imported_session = SessionState.model_validate(payload)
+        original_session_id = imported_session.session_id
+        original_version = imported_session.state_version
+        current_time = datetime.now(timezone.utc)
+
+        restored_session = imported_session.model_copy(deep=True)
+        restored_session.session_id = f"session-{uuid4().hex}"
+        restored_session.state_version = 1
+        restored_session.created_at = current_time
+        restored_session.updated_at = current_time
+        restored_session.timeline.append(
+            SessionEvent(
+                event_type=EventType.IMPORT,
+                actor_type=ActorType.SYSTEM,
+                visibility_scope=VisibilityScope.PUBLIC,
+                text=f"从存档 {original_session_id} (version {original_version}) 恢复",
+                structured_payload={
+                    "original_session_id": original_session_id,
+                    "original_version": original_version,
+                },
+                language_preference=restored_session.language_preference,
+                created_at=current_time,
+            )
+        )
+        restored_session.audit_log.append(
+            AuditLogEntry(
+                action=AuditActionType.IMPORT,
+                session_version=1,
+                details={
+                    "original_session_id": original_session_id,
+                    "original_version": original_version,
+                },
+                created_at=current_time,
+            )
+        )
+        self.repository.create(
+            restored_session,
+            reason=f"imported_from_{original_session_id}",
+        )
+        return SessionImportResponse(
+            original_session_id=original_session_id,
+            new_session_id=restored_session.session_id,
+            state_version=restored_session.state_version,
+            warnings=[],
+        )
 
     def submit_player_action(
         self,

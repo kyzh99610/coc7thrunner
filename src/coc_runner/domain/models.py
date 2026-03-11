@@ -91,6 +91,7 @@ class EventType(StrEnum):
     PLAYER_ACTION = "player_action"
     REVIEWED_ACTION = "reviewed_action"
     MANUAL_ACTION = "manual_action"
+    IMPORT = "import"
     ROLLBACK = "rollback"
 
 
@@ -98,6 +99,7 @@ class AuditActionType(StrEnum):
     DRAFT_CREATED = "draft_created"
     REVIEW_DECISION = "review_decision"
     KEEPER_PROMPT_UPDATED = "keeper_prompt_updated"
+    IMPORT = "import"
     ROLLBACK = "rollback"
 
 
@@ -1285,6 +1287,13 @@ class RollbackResponse(BaseModel):
     state_version: int
     language_preference: LanguagePreference
     current_view: InvestigatorView
+
+
+class SessionImportResponse(BaseModel):
+    original_session_id: str
+    new_session_id: str
+    state_version: int
+    warnings: list[str] = Field(default_factory=list)
 
 
 SessionEvent.model_rebuild()
