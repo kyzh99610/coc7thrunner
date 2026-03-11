@@ -560,10 +560,16 @@ def test_manual_smoke_flow_covers_room_truth_completion_and_visibility_isolation
     assert keeper_scenes_after_corridor["scene_locked_guest_room"]["revealed"] is True
     assert investigator_one_clues_after_corridor["clue_room_whisper"]["status"] == "shared_with_party"
     assert investigator_two_clues_after_corridor["clue_room_whisper"]["status"] == "shared_with_party"
+    queued_prompts_after_corridor = {
+        prompt["category"]: prompt for prompt in keeper_after_corridor["progress_state"]["queued_kp_prompts"]
+    }
+    assert queued_prompts_after_corridor["scene_followup"]["status"] == "dismissed"
+    assert queued_prompts_after_corridor["scene_followup"]["dismissed_at"] is not None
     assert any(
         prompt["category"] == "sanity_review" and prompt["status"] == "pending"
         for prompt in keeper_after_corridor["keeper_workflow"]["active_prompts"]
     )
+    assert queued_prompts_after_corridor["sanity_review"]["status"] == "pending"
 
     room_action = client.post(
         f"/sessions/{session_id}/player-action",
@@ -648,10 +654,11 @@ def test_manual_smoke_flow_covers_room_truth_completion_and_visibility_isolation
         "破碎日志记着住客在门后低语里逐渐失去理智。" in note
         for note in keeper_investigator_one_state["private_notes"]
     )
-    assert any(
-        prompt["category"] == "sanity_review" and prompt["status"] == "pending"
-        for prompt in keeper_final["keeper_workflow"]["active_prompts"]
-    )
+    final_prompt_states = {
+        prompt["category"]: prompt for prompt in keeper_final["progress_state"]["queued_kp_prompts"]
+    }
+    assert final_prompt_states["sanity_review"]["status"] == "dismissed"
+    assert final_prompt_states["sanity_review"]["dismissed_at"] is not None
     assert {"clue_whisper_note", "clue_room_whisper", "clue_log_fragment"} == set(keeper_final_clues)
     assert {"clue_whisper_note", "clue_room_whisper", "clue_log_fragment"} == set(
         investigator_one_final_clues
@@ -801,11 +808,12 @@ def test_snapshot_import_allows_completing_room_truth_third_beat_without_losing_
         "破碎日志记着住客在门后低语里逐渐失去理智。" in note
         for note in keeper_investigator_one_state["private_notes"]
     )
-    assert any(
-        prompt["category"] == "sanity_review"
-        and prompt["status"] == imported_prompt_before_finish["status"]
-        for prompt in keeper_final["keeper_workflow"]["active_prompts"]
-    )
+    final_prompt_states = {
+        prompt["category"]: prompt for prompt in keeper_final["progress_state"]["queued_kp_prompts"]
+    }
+    assert imported_prompt_before_finish["status"] == "pending"
+    assert final_prompt_states["sanity_review"]["status"] == "dismissed"
+    assert final_prompt_states["sanity_review"]["dismissed_at"] is not None
     assert len(keeper_final["visible_events"]) == pre_finish_visible_event_count + 2
     assert len(keeper_final["visible_authoritative_actions"]) == (
         pre_finish_authoritative_action_count + 2

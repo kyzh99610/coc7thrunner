@@ -124,6 +124,193 @@ def _trigger_keeper_prompt_assignment(
     return keeper_state["keeper_workflow"]["active_prompts"][0]
 
 
+def _start_scene_change_prompt_session(client: TestClient) -> tuple[str, dict[str, str]]:
+    start_response = client.post(
+        "/sessions/start",
+        json={
+            "keeper_name": "KP",
+            "scenario": make_scenario(
+                start_scene_id="scene.lobby",
+                scenes=[
+                    {
+                        "scene_id": "scene.lobby",
+                        "title": "前厅",
+                        "summary": "前厅里还能继续追索线索。",
+                        "revealed": True,
+                    },
+                    {
+                        "scene_id": "scene.archive",
+                        "title": "档案室",
+                        "summary": "档案室里有新的调查目标。",
+                        "revealed": False,
+                    },
+                ],
+                clues=[
+                    {
+                        "clue_id": "clue-ledger",
+                        "title": "账页线索",
+                        "text": "账页把调查指向档案室。",
+                        "visibility_scope": "kp_only",
+                    }
+                ],
+                beats=[
+                    {
+                        "beat_id": "beat-log-review",
+                        "title": "查看账页",
+                        "start_unlocked": True,
+                        "complete_conditions": {
+                            "clue_discovered": {"clue_id": "clue-ledger"}
+                        },
+                        "consequences": [
+                            {
+                                "queue_kp_prompts": [
+                                    {
+                                        "prompt_text": "KP：处理前厅线索的后续引导。",
+                                        "category": "scene_followup",
+                                        "scene_id": "scene.lobby",
+                                        "reason": "前厅线索已明确，需要跟进。",
+                                    },
+                                    {
+                                        "prompt_text": "KP：记住证人的紧张反应。",
+                                        "category": "npc_reaction",
+                                        "scene_id": "scene.lobby",
+                                        "reason": "证人还留在原场景里。",
+                                    },
+                                ]
+                            }
+                        ],
+                    }
+                ],
+            ),
+            "participants": [make_participant("investigator-1", "林舟")],
+        },
+    )
+    assert start_response.status_code == 201
+    session_id = start_response.json()["session_id"]
+
+    action_response = client.post(
+        f"/sessions/{session_id}/player-action",
+        json={
+            "actor_id": "investigator-1",
+            "action_text": "我从账册里翻出关键账页。",
+            "structured_action": {"type": "review_ledger"},
+            "effects": {
+                "clue_state_effects": [
+                    {
+                        "clue_id": "clue-ledger",
+                        "status": "shared_with_party",
+                        "share_with_party": True,
+                        "add_discovered_by": ["investigator-1"],
+                        "discovered_via": "review_ledger",
+                    }
+                ]
+            },
+        },
+    )
+    assert action_response.status_code == 202
+
+    keeper_state = client.get(
+        f"/sessions/{session_id}/state",
+        params={"viewer_role": "keeper"},
+    ).json()
+    prompt_ids_by_category = {
+        prompt["category"]: prompt["prompt_id"]
+        for prompt in keeper_state["keeper_workflow"]["active_prompts"]
+    }
+    return session_id, prompt_ids_by_category
+
+
+def _start_expiring_beat_prompt_session(client: TestClient) -> tuple[str, str]:
+    start_response = client.post(
+        "/sessions/start",
+        json={
+            "keeper_name": "KP",
+            "scenario": make_scenario(
+                clues=[
+                    {
+                        "clue_id": "clue-alpha",
+                        "title": "第一条线索",
+                        "text": "它把调查推进到第二拍。",
+                        "visibility_scope": "kp_only",
+                    },
+                    {
+                        "clue_id": "clue-beta",
+                        "title": "第二条线索",
+                        "text": "它会完成第二拍并进入下一拍。",
+                        "visibility_scope": "kp_only",
+                    },
+                ],
+                beats=[
+                    {
+                        "beat_id": "beat-alpha",
+                        "title": "推进第一拍",
+                        "start_unlocked": True,
+                        "complete_conditions": {
+                            "clue_discovered": {"clue_id": "clue-alpha"}
+                        },
+                        "consequences": [
+                            {
+                                "queue_kp_prompts": [
+                                    {
+                                        "prompt_text": "KP：第二拍结束前记得处理这个提醒。",
+                                        "category": "beat_followup",
+                                        "expires_after_beat": "beat-beta",
+                                        "reason": "这个提醒只在第二拍有效。",
+                                    }
+                                ]
+                            }
+                        ],
+                        "next_beats": ["beat-beta"],
+                    },
+                    {
+                        "beat_id": "beat-beta",
+                        "title": "推进第二拍",
+                        "complete_conditions": {
+                            "clue_discovered": {"clue_id": "clue-beta"}
+                        },
+                        "next_beats": ["beat-gamma"],
+                    },
+                    {
+                        "beat_id": "beat-gamma",
+                        "title": "推进第三拍",
+                    },
+                ],
+            ),
+            "participants": [make_participant("investigator-1", "林舟")],
+        },
+    )
+    assert start_response.status_code == 201
+    session_id = start_response.json()["session_id"]
+
+    alpha_action = client.post(
+        f"/sessions/{session_id}/player-action",
+        json={
+            "actor_id": "investigator-1",
+            "action_text": "我先拿到第一条线索。",
+            "structured_action": {"type": "discover_alpha"},
+            "effects": {
+                "clue_state_effects": [
+                    {
+                        "clue_id": "clue-alpha",
+                        "status": "shared_with_party",
+                        "share_with_party": True,
+                        "add_discovered_by": ["investigator-1"],
+                        "discovered_via": "discover_alpha",
+                    }
+                ]
+            },
+        },
+    )
+    assert alpha_action.status_code == 202
+
+    keeper_state = client.get(
+        f"/sessions/{session_id}/state",
+        params={"viewer_role": "keeper"},
+    ).json()
+    prompt_id = keeper_state["keeper_workflow"]["active_prompts"][0]["prompt_id"]
+    return session_id, prompt_id
+
+
 def test_approved_action_unlocks_followup_beat(client: TestClient) -> None:
     _register_spot_hidden_rule(client, source_id="beat-approved-rule")
     start_response = client.post(
@@ -937,6 +1124,197 @@ def test_keeper_prompt_lifecycle_supports_acknowledge_complete_and_dismiss(
         for transition in final_summary["recent_beat_transitions"]
     )
     assert any("最近推进" in line for line in final_summary["summary_lines"])
+
+
+def test_pending_prompt_auto_dismisses_on_scene_change(client: TestClient) -> None:
+    session_id, prompt_ids_by_category = _start_scene_change_prompt_session(client)
+
+    acknowledge_response = client.post(
+        f"/sessions/{session_id}/keeper-prompts/{prompt_ids_by_category['npc_reaction']}/status",
+        json={"operator_id": "keeper-1", "status": "acknowledged"},
+    )
+    assert acknowledge_response.status_code == 200
+
+    transition_response = client.post(
+        f"/sessions/{session_id}/manual-action",
+        json={
+            "operator_id": "keeper-1",
+            "actor_id": "keeper-1",
+            "actor_type": "keeper",
+            "action_text": "KP裁定：调查员离开前厅，转入档案室。",
+            "structured_action": {"type": "move_to_archive"},
+            "effects": {
+                "scene_transitions": [{"scene_id": "scene.archive"}]
+            },
+        },
+    )
+    assert transition_response.status_code == 202
+
+    keeper_state = client.get(
+        f"/sessions/{session_id}/state",
+        params={"viewer_role": "keeper"},
+    ).json()
+    queued_prompts = {
+        prompt["category"]: prompt
+        for prompt in keeper_state["progress_state"]["queued_kp_prompts"]
+    }
+    active_categories = {
+        prompt["category"] for prompt in keeper_state["keeper_workflow"]["active_prompts"]
+    }
+
+    assert queued_prompts["scene_followup"]["status"] == "dismissed"
+    assert queued_prompts["scene_followup"]["dismissed_at"] is not None
+    assert "scene_followup" not in active_categories
+    assert queued_prompts["npc_reaction"]["status"] == "acknowledged"
+    assert queued_prompts["npc_reaction"]["dismissed_at"] is None
+    assert "npc_reaction" in active_categories
+
+    snapshot_response = client.get(f"/sessions/{session_id}/snapshot")
+    assert snapshot_response.status_code == 200
+    audit_log = snapshot_response.json()["audit_log"]
+    assert audit_log[-1]["action"] == "keeper_prompt_updated"
+    assert audit_log[-1]["details"]["reason"] == "scene_changed"
+    assert prompt_ids_by_category["scene_followup"] in audit_log[-1]["details"]["affected_prompt_ids"]
+    assert audit_log[-1]["details"]["old_scene_id"] == "scene.lobby"
+    assert audit_log[-1]["details"]["new_scene_id"] == "scene.archive"
+
+
+def test_prompt_without_scene_id_is_not_auto_dismissed_on_scene_change(client: TestClient) -> None:
+    session_id, prompt_ids_by_category = _start_scene_change_prompt_session(client)
+
+    snapshot_response = client.get(f"/sessions/{session_id}/snapshot")
+    assert snapshot_response.status_code == 200
+    snapshot = snapshot_response.json()
+    snapshot["progress_state"]["queued_kp_prompts"][0]["scene_id"] = None
+
+    import_response = client.post("/sessions/import", json=snapshot)
+    assert import_response.status_code == 201
+    imported_session_id = import_response.json()["new_session_id"]
+
+    transition_response = client.post(
+        f"/sessions/{imported_session_id}/manual-action",
+        json={
+            "operator_id": "keeper-1",
+            "actor_id": "keeper-1",
+            "actor_type": "keeper",
+            "action_text": "KP裁定：调查员离开前厅，转入档案室。",
+            "structured_action": {"type": "move_to_archive"},
+            "effects": {
+                "scene_transitions": [{"scene_id": "scene.archive"}]
+            },
+        },
+    )
+    assert transition_response.status_code == 202
+
+    keeper_state = client.get(
+        f"/sessions/{imported_session_id}/state",
+        params={"viewer_role": "keeper"},
+    ).json()
+    queued_prompts = {
+        prompt["prompt_id"]: prompt
+        for prompt in keeper_state["progress_state"]["queued_kp_prompts"]
+    }
+
+    assert queued_prompts[prompt_ids_by_category["scene_followup"]]["status"] == "pending"
+    assert queued_prompts[prompt_ids_by_category["scene_followup"]]["scene_id"] is None
+
+
+def test_pending_prompt_auto_dismisses_when_expires_after_beat_is_passed(
+    client: TestClient,
+) -> None:
+    session_id, prompt_id = _start_expiring_beat_prompt_session(client)
+
+    beta_action = client.post(
+        f"/sessions/{session_id}/player-action",
+        json={
+            "actor_id": "investigator-1",
+            "action_text": "我继续拿到第二条线索，完成这一拍。",
+            "structured_action": {"type": "discover_beta"},
+            "effects": {
+                "clue_state_effects": [
+                    {
+                        "clue_id": "clue-beta",
+                        "status": "shared_with_party",
+                        "share_with_party": True,
+                        "add_discovered_by": ["investigator-1"],
+                        "discovered_via": "discover_beta",
+                    }
+                ]
+            },
+        },
+    )
+    assert beta_action.status_code == 202
+
+    keeper_state = client.get(
+        f"/sessions/{session_id}/state",
+        params={"viewer_role": "keeper"},
+    ).json()
+    prompt = next(
+        prompt
+        for prompt in keeper_state["progress_state"]["queued_kp_prompts"]
+        if prompt["prompt_id"] == prompt_id
+    )
+    assert prompt["expires_after_beat"] == "beat-beta"
+    assert prompt["status"] == "dismissed"
+    assert prompt["dismissed_at"] is not None
+    assert all(
+        active_prompt["prompt_id"] != prompt_id
+        for active_prompt in keeper_state["keeper_workflow"]["active_prompts"]
+    )
+
+    snapshot_response = client.get(f"/sessions/{session_id}/snapshot")
+    assert snapshot_response.status_code == 200
+    audit_log = snapshot_response.json()["audit_log"]
+    assert audit_log[-1]["details"]["reason"] == "beat_expired"
+    assert prompt_id in audit_log[-1]["details"]["affected_prompt_ids"]
+    assert "beat-beta" in audit_log[-1]["details"]["expired_beat_ids"]
+
+
+def test_acknowledged_prompt_does_not_auto_dismiss_when_beat_expires(client: TestClient) -> None:
+    session_id, prompt_id = _start_expiring_beat_prompt_session(client)
+
+    acknowledge_response = client.post(
+        f"/sessions/{session_id}/keeper-prompts/{prompt_id}/status",
+        json={"operator_id": "keeper-1", "status": "acknowledged"},
+    )
+    assert acknowledge_response.status_code == 200
+
+    beta_action = client.post(
+        f"/sessions/{session_id}/player-action",
+        json={
+            "actor_id": "investigator-1",
+            "action_text": "我继续拿到第二条线索，完成这一拍。",
+            "structured_action": {"type": "discover_beta"},
+            "effects": {
+                "clue_state_effects": [
+                    {
+                        "clue_id": "clue-beta",
+                        "status": "shared_with_party",
+                        "share_with_party": True,
+                        "add_discovered_by": ["investigator-1"],
+                        "discovered_via": "discover_beta",
+                    }
+                ]
+            },
+        },
+    )
+    assert beta_action.status_code == 202
+
+    keeper_state = client.get(
+        f"/sessions/{session_id}/state",
+        params={"viewer_role": "keeper"},
+    ).json()
+    prompt = next(
+        prompt
+        for prompt in keeper_state["progress_state"]["queued_kp_prompts"]
+        if prompt["prompt_id"] == prompt_id
+    )
+    assert prompt["status"] == "acknowledged"
+    assert prompt["dismissed_at"] is None
+    assert any(
+        active_prompt["prompt_id"] == prompt_id and active_prompt["status"] == "acknowledged"
+        for active_prompt in keeper_state["keeper_workflow"]["active_prompts"]
+    )
 
 
 def test_scene_objective_takes_precedence_over_duplicate_beat_fallback_objective(

@@ -568,6 +568,7 @@ class QueueKPPromptConsequence(BaseModel):
     scene_id: str | None = None
     priority: KeeperPromptPriority = KeeperPromptPriority.MEDIUM
     assigned_to: str | None = None
+    expires_after_beat: str | None = None
     reason: str | None = None
 
 
@@ -683,6 +684,7 @@ class QueuedKPPrompt(BaseModel):
     category: str | None = None
     priority: KeeperPromptPriority = KeeperPromptPriority.MEDIUM
     assigned_to: str | None = None
+    expires_after_beat: str | None = None
     notes: list[str] = Field(default_factory=list)
     status: KeeperPromptStatus = KeeperPromptStatus.PENDING
     trigger_reason: str | None = None

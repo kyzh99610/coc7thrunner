@@ -1304,6 +1304,92 @@ class SessionService:
         elif status == KeeperPromptStatus.COMPLETED:
             prompt.completed_at = current_time
 
+    def _auto_dismiss_scene_bound_pending_prompts(
+        self,
+        session: SessionState,
+        *,
+        old_scene_id: str | None,
+        new_scene_id: str | None,
+        source_action_id: str | None,
+        current_time: datetime,
+        language: LanguagePreference,
+    ) -> list[str]:
+        if old_scene_id is None or new_scene_id is None or old_scene_id == new_scene_id:
+            return []
+        dismissed_prompt_ids: list[str] = []
+        for prompt in session.progress_state.queued_kp_prompts:
+            if prompt.status != KeeperPromptStatus.PENDING:
+                continue
+            if prompt.scene_id is None:
+                continue
+            if prompt.scene_id != old_scene_id or prompt.scene_id == new_scene_id:
+                continue
+            self._transition_keeper_prompt(
+                prompt,
+                status=KeeperPromptStatus.DISMISSED,
+                current_time=current_time,
+                language=language,
+            )
+            dismissed_prompt_ids.append(prompt.prompt_id)
+        if dismissed_prompt_ids:
+            self._append_audit_log(
+                session,
+                action=AuditActionType.KEEPER_PROMPT_UPDATED,
+                actor_id=None,
+                subject_id=None,
+                current_time=current_time,
+                details={
+                    "reason": "scene_changed",
+                    "affected_prompt_ids": dismissed_prompt_ids,
+                    "old_scene_id": old_scene_id,
+                    "new_scene_id": new_scene_id,
+                    "source_action_id": source_action_id,
+                },
+            )
+        return dismissed_prompt_ids
+
+    def _auto_dismiss_expired_pending_prompts(
+        self,
+        session: SessionState,
+        *,
+        expired_beat_ids: list[str],
+        source_action_id: str | None,
+        current_time: datetime,
+        language: LanguagePreference,
+    ) -> list[str]:
+        normalized_expired_beat_ids = list(dict.fromkeys(expired_beat_ids))
+        if not normalized_expired_beat_ids:
+            return []
+        dismissed_prompt_ids: list[str] = []
+        expired_beat_id_set = set(normalized_expired_beat_ids)
+        for prompt in session.progress_state.queued_kp_prompts:
+            if prompt.status != KeeperPromptStatus.PENDING:
+                continue
+            if prompt.expires_after_beat not in expired_beat_id_set:
+                continue
+            self._transition_keeper_prompt(
+                prompt,
+                status=KeeperPromptStatus.DISMISSED,
+                current_time=current_time,
+                language=language,
+            )
+            dismissed_prompt_ids.append(prompt.prompt_id)
+        if dismissed_prompt_ids:
+            self._append_audit_log(
+                session,
+                action=AuditActionType.KEEPER_PROMPT_UPDATED,
+                actor_id=None,
+                subject_id=None,
+                current_time=current_time,
+                details={
+                    "reason": "beat_expired",
+                    "affected_prompt_ids": dismissed_prompt_ids,
+                    "expired_beat_ids": normalized_expired_beat_ids,
+                    "source_action_id": source_action_id,
+                },
+            )
+        return dismissed_prompt_ids
+
     def _ensure_draft_reviewable(
         self,
         session: SessionState,
@@ -2250,13 +2336,26 @@ class SessionService:
                     )
                 )
 
-        current_transition = self._refresh_current_beat(
+        current_transition, passed_beat_ids = self._refresh_current_beat(
             session,
             trigger_action_id=authoritative_action.action_id,
             language=language,
         )
         if current_transition is not None:
             transitions.append(current_transition)
+        expired_prompt_beat_ids = [
+            transition.beat_id
+            for transition in transitions
+            if transition.transition == ScenarioBeatTransitionType.COMPLETED
+        ]
+        expired_prompt_beat_ids.extend(passed_beat_ids)
+        self._auto_dismiss_expired_pending_prompts(
+            session,
+            expired_beat_ids=expired_prompt_beat_ids,
+            source_action_id=authoritative_action.action_id,
+            current_time=current_time,
+            language=language,
+        )
         self._sync_beat_statuses(session)
         if transitions:
             progress_state.last_updated_at = current_time
@@ -2419,6 +2518,7 @@ class SessionService:
                         category=kp_prompt.category,
                         priority=kp_prompt.priority,
                         assigned_to=assigned_to,
+                        expires_after_beat=kp_prompt.expires_after_beat,
                         notes=[],
                         status=KeeperPromptStatus.PENDING,
                         trigger_reason=kp_prompt.reason
@@ -3062,7 +3162,7 @@ class SessionService:
         *,
         trigger_action_id: str,
         language: LanguagePreference,
-    ) -> ScenarioBeatTransitionRecord | None:
+    ) -> tuple[ScenarioBeatTransitionRecord | None, list[str]]:
         progress_state = session.progress_state
         previous_current_beat = progress_state.current_beat
         if previous_current_beat in progress_state.blocked_beats or previous_current_beat in progress_state.completed_beats:
@@ -3072,8 +3172,11 @@ class SessionService:
                 if beat.beat_id in progress_state.unlocked_beats and beat.beat_id not in progress_state.blocked_beats:
                     progress_state.current_beat = beat.beat_id
                     break
+        passed_beat_ids: list[str] = []
+        if previous_current_beat is not None and progress_state.current_beat != previous_current_beat:
+            passed_beat_ids.append(previous_current_beat)
         if progress_state.current_beat == previous_current_beat or progress_state.current_beat is None:
-            return None
+            return None, passed_beat_ids
         current_beat = self._find_beat(session.scenario.beats, progress_state.current_beat)
         self._register_beat_objective(
             session=session,
@@ -3081,12 +3184,15 @@ class SessionService:
             source_action_id=trigger_action_id,
             trigger_reason=self._message("beat_reason_current_selected", language),
         )
-        return self._build_beat_transition_record(
-            beat=current_beat,
-            transition=ScenarioBeatTransitionType.CURRENT,
-            summary=self._message("beat_current", language, title=current_beat.title),
-            trigger_action_id=trigger_action_id,
-            reason=self._message("beat_reason_current_selected", language),
+        return (
+            self._build_beat_transition_record(
+                beat=current_beat,
+                transition=ScenarioBeatTransitionType.CURRENT,
+                summary=self._message("beat_current", language, title=current_beat.title),
+                trigger_action_id=trigger_action_id,
+                reason=self._message("beat_reason_current_selected", language),
+            ),
+            passed_beat_ids,
         )
 
     @staticmethod
@@ -3349,6 +3455,7 @@ class SessionService:
                 raise ValueError(
                     self._message("scene_transition_missing_clue", language, clue_id=clue_id)
                 )
+        old_scene_id = session.current_scene.scene_id
         scene_registry_entry = self._find_scenario_scene(
             session.scenario.scenes,
             scene_id=effect.scene_id,
@@ -3397,6 +3504,14 @@ class SessionService:
                 ),
                 current_time=current_time,
             )
+        self._auto_dismiss_scene_bound_pending_prompts(
+            session,
+            old_scene_id=old_scene_id,
+            new_scene_id=session.current_scene.scene_id,
+            source_action_id=source_action_id,
+            current_time=current_time,
+            language=language,
+        )
         summary = self._message(
             "execution_scene_transition",
             language,
