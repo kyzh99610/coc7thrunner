@@ -8,6 +8,7 @@ from coc_runner.domain.models import (
     KeeperPromptPriority,
     KeeperWorkflowSummary,
     KeeperWorkflowState,
+    QueuedKPPrompt,
     SessionCharacterState,
     SessionParticipantSummary,
     SessionState,
@@ -36,6 +37,33 @@ def _is_visible_to_viewer(
 
 def _is_active_keeper_prompt(status: KeeperPromptStatus) -> bool:
     return status in {KeeperPromptStatus.PENDING, KeeperPromptStatus.ACKNOWLEDGED}
+
+
+def _effective_keeper_prompt_assignee(
+    session: SessionState,
+    prompt: QueuedKPPrompt,
+) -> str | None:
+    assigned_to = prompt.assigned_to.strip() if prompt.assigned_to is not None else ""
+    if not assigned_to:
+        return session.keeper_id
+    if assigned_to == session.keeper_id:
+        return assigned_to
+    if assigned_to.startswith("keeper_"):
+        return session.keeper_id
+    return assigned_to
+
+
+def normalize_keeper_prompt_for_keeper(
+    session: SessionState,
+    prompt: QueuedKPPrompt,
+) -> QueuedKPPrompt:
+    effective_assigned_to = _effective_keeper_prompt_assignee(session, prompt)
+    if effective_assigned_to == prompt.assigned_to:
+        return prompt.model_copy(deep=True)
+    return prompt.model_copy(
+        deep=True,
+        update={"assigned_to": effective_assigned_to},
+    )
 
 
 def _priority_label(priority: KeeperPromptPriority) -> str:
@@ -271,29 +299,35 @@ def filter_session_for_viewer(
     visible_character_states_by_actor: dict[str, SessionCharacterState] = {}
     behavior_memory_by_actor: dict[str, list[BehaviorPrecedent]] = {}
     keeper_workflow = None
+    keeper_progress_state = None
     if viewer_role == ViewerRole.KEEPER:
         visible_private_state_by_actor = {
             participant.actor_id: participant.secrets for participant in session.participants
         }
         visible_character_states_by_actor = dict(session.character_states)
         behavior_memory_by_actor = session.behavior_memory
+        keeper_progress_state = session.progress_state.model_copy(deep=True)
+        keeper_progress_state.queued_kp_prompts = [
+            normalize_keeper_prompt_for_keeper(session, prompt)
+            for prompt in session.progress_state.queued_kp_prompts
+        ]
         active_prompts = [
             prompt.model_copy(deep=True)
-            for prompt in session.progress_state.queued_kp_prompts
+            for prompt in keeper_progress_state.queued_kp_prompts
             if _is_active_keeper_prompt(prompt.status)
         ]
         unresolved_objectives = [
             objective.model_copy(deep=True)
-            for objective in session.progress_state.active_scene_objectives
+            for objective in keeper_progress_state.active_scene_objectives
             if not objective.resolved
         ]
         recent_completed_objectives = [
             objective.model_copy(deep=True)
-            for objective in reversed(session.progress_state.completed_objective_history[-5:])
+            for objective in reversed(keeper_progress_state.completed_objective_history[-5:])
         ]
         recent_transitions = [
             transition.model_copy(deep=True)
-            for transition in reversed(session.progress_state.transition_history[-5:])
+            for transition in reversed(keeper_progress_state.transition_history[-5:])
         ]
         prompt_lines = _build_prompt_lines(
             session=session,
@@ -379,7 +413,7 @@ def filter_session_for_viewer(
         visible_private_state_by_actor=visible_private_state_by_actor,
         visible_character_states_by_actor=visible_character_states_by_actor,
         behavior_memory_by_actor=behavior_memory_by_actor,
-        progress_state=session.progress_state if viewer_role == ViewerRole.KEEPER else None,
+        progress_state=keeper_progress_state if viewer_role == ViewerRole.KEEPER else None,
         keeper_workflow=keeper_workflow,
         state_version=session.state_version,
         updated_at=session.updated_at,

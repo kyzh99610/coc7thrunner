@@ -34,12 +34,12 @@ def _beat_map(state_payload: dict) -> dict[str, dict]:
     return {beat["beat_id"]: beat for beat in state_payload["scenario"]["beats"]}
 
 
-def _trigger_keeper_prompt_assignment(
+def _start_session_with_keeper_prompt_assignment(
     client: TestClient,
     *,
     keeper_id: str,
     assigned_to: str | None = None,
-) -> dict:
+) -> tuple[str, dict]:
     prompt_payload = {
         "prompt_text": "KP：确认是否需要跟进这条新线索。",
         "category": "assignment_check",
@@ -107,7 +107,21 @@ def _trigger_keeper_prompt_assignment(
     ).json()
     prompts = keeper_state["keeper_workflow"]["active_prompts"]
     assert len(prompts) == 1
-    return prompts[0]
+    return session_id, keeper_state
+
+
+def _trigger_keeper_prompt_assignment(
+    client: TestClient,
+    *,
+    keeper_id: str,
+    assigned_to: str | None = None,
+) -> dict:
+    _, keeper_state = _start_session_with_keeper_prompt_assignment(
+        client,
+        keeper_id=keeper_id,
+        assigned_to=assigned_to,
+    )
+    return keeper_state["keeper_workflow"]["active_prompts"][0]
 
 
 def test_approved_action_unlocks_followup_beat(client: TestClient) -> None:
@@ -559,6 +573,69 @@ def test_keeper_prompt_preserves_explicit_assigned_to_over_session_keeper(client
     )
 
     assert prompt["assigned_to"] == "keeper-ops"
+
+
+def test_keeper_view_compatibly_claims_legacy_keeper_alias_prompt(client: TestClient) -> None:
+    session_id, keeper_state = _start_session_with_keeper_prompt_assignment(
+        client,
+        keeper_id="keeper-1",
+        assigned_to="keeper_wow_001",
+    )
+
+    prompt = keeper_state["keeper_workflow"]["active_prompts"][0]
+    assert prompt["assigned_to"] == "keeper-1"
+    assert keeper_state["progress_state"]["queued_kp_prompts"][0]["assigned_to"] == "keeper-1"
+
+    snapshot_response = client.get(f"/sessions/{session_id}/snapshot")
+    assert snapshot_response.status_code == 200
+    assert snapshot_response.json()["progress_state"]["queued_kp_prompts"][0]["assigned_to"] == "keeper_wow_001"
+
+
+def test_current_keeper_can_acknowledge_legacy_keeper_alias_prompt(client: TestClient) -> None:
+    session_id, keeper_state = _start_session_with_keeper_prompt_assignment(
+        client,
+        keeper_id="keeper-1",
+        assigned_to="keeper_wow_001",
+    )
+    prompt_id = keeper_state["keeper_workflow"]["active_prompts"][0]["prompt_id"]
+
+    response = client.post(
+        f"/sessions/{session_id}/keeper-prompts/{prompt_id}/status",
+        json={
+            "operator_id": "keeper-1",
+            "status": "acknowledged",
+        },
+    )
+    assert response.status_code == 200
+    assert response.json()["prompt"]["status"] == "acknowledged"
+    assert response.json()["prompt"]["assigned_to"] == "keeper-1"
+
+    updated_keeper_state = client.get(
+        f"/sessions/{session_id}/state",
+        params={"viewer_role": "keeper"},
+    ).json()
+    assert updated_keeper_state["keeper_workflow"]["active_prompts"][0]["status"] == "acknowledged"
+    assert updated_keeper_state["keeper_workflow"]["active_prompts"][0]["assigned_to"] == "keeper-1"
+
+    snapshot_response = client.get(f"/sessions/{session_id}/snapshot")
+    assert snapshot_response.status_code == 200
+    assert snapshot_response.json()["progress_state"]["queued_kp_prompts"][0]["assigned_to"] == "keeper_wow_001"
+
+
+def test_investigator_view_remains_unchanged_for_legacy_keeper_alias_prompt(client: TestClient) -> None:
+    session_id, _ = _start_session_with_keeper_prompt_assignment(
+        client,
+        keeper_id="keeper-1",
+        assigned_to="keeper_wow_001",
+    )
+
+    investigator_state = client.get(
+        f"/sessions/{session_id}/state",
+        params={"viewer_role": "investigator", "viewer_id": "investigator-1"},
+    ).json()
+
+    assert investigator_state["keeper_workflow"] is None
+    assert investigator_state["progress_state"] is None
 
 
 def test_actor_scoped_clue_visibility_conditions_unlock_followup_beat(

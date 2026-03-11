@@ -78,7 +78,7 @@ from coc_runner.domain.models import (
     ViewerRole,
     VisibilityScope,
 )
-from coc_runner.domain.secrets import filter_session_for_viewer
+from coc_runner.domain.secrets import filter_session_for_viewer, normalize_keeper_prompt_for_keeper
 from coc_runner.infrastructure.knowledge_repositories import KnowledgeRepository
 from coc_runner.infrastructure.repositories import SessionRepository
 from knowledge.retrieval import KnowledgeRetriever
@@ -805,12 +805,13 @@ class SessionService:
             viewer_id=None,
             viewer_role=ViewerRole.KEEPER,
         ).keeper_workflow
+        response_prompt = normalize_keeper_prompt_for_keeper(session, prompt)
         return UpdateKeeperPromptResponse(
             message=self._message("keeper_prompt_updated", effective_language),
             session_id=session.session_id,
             state_version=session.state_version,
             language_preference=effective_language,
-            prompt=prompt,
+            prompt=response_prompt,
             keeper_workflow=keeper_workflow or KeeperWorkflowState(),
         )
 
