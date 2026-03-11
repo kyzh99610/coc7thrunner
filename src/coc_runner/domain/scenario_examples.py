@@ -535,7 +535,6 @@ def build_blackout_clinic_scenario() -> ScenarioScaffold:
                                 category="npc_pressure",
                                 scene_id="scene.clinic_reception",
                                 priority=KeeperPromptPriority.HIGH,
-                                assigned_to="keeper-1",
                                 reason="护士知道病历室里发生了异常，但不敢直说。",
                             )
                         ],

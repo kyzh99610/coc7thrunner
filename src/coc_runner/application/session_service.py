@@ -3,6 +3,7 @@ from __future__ import annotations
 import re
 from datetime import datetime, timezone
 from typing import Any
+from uuid import uuid4
 
 from coc_runner.domain.errors import ConflictError
 from coc_runner.domain.models import (
@@ -64,6 +65,7 @@ from coc_runner.domain.models import (
     SceneTransitionEffect,
     SessionEvent,
     SessionCharacterState,
+    SessionImportResponse,
     SessionParticipant,
     SessionStartRequest,
     SessionStartResponse,
@@ -76,7 +78,7 @@ from coc_runner.domain.models import (
     ViewerRole,
     VisibilityScope,
 )
-from coc_runner.domain.secrets import filter_session_for_viewer
+from coc_runner.domain.secrets import filter_session_for_viewer, normalize_keeper_prompt_for_keeper
 from coc_runner.infrastructure.knowledge_repositories import KnowledgeRepository
 from coc_runner.infrastructure.repositories import SessionRepository
 from knowledge.retrieval import KnowledgeRetriever
@@ -336,6 +338,83 @@ class SessionService:
             session, viewer_id=viewer_id, viewer_role=viewer_role
         )
 
+    def export_session(
+        self,
+        session_id: str,
+        *,
+        language_preference: LanguagePreference | None = None,
+    ) -> dict[str, Any]:
+        keeper_view = self.get_session_view(
+            session_id,
+            viewer_id=None,
+            viewer_role=ViewerRole.KEEPER,
+            language_preference=language_preference,
+        )
+        return keeper_view.model_dump(mode="json")
+
+    def snapshot_session(
+        self,
+        session_id: str,
+        *,
+        language_preference: LanguagePreference | None = None,
+    ) -> dict[str, Any]:
+        error_language = self._resolve_language(language_preference)
+        session = self._load_session(session_id, language=error_language)
+        return session.model_dump(mode="json")
+
+    def import_session(
+        self,
+        payload: dict[str, Any],
+        *,
+        language_preference: LanguagePreference | None = None,
+    ) -> SessionImportResponse:
+        self._resolve_language(language_preference)
+        imported_session = SessionState.model_validate(payload)
+        original_session_id = imported_session.session_id
+        original_version = imported_session.state_version
+        current_time = datetime.now(timezone.utc)
+
+        restored_session = imported_session.model_copy(deep=True)
+        restored_session.session_id = f"session-{uuid4().hex}"
+        restored_session.state_version = 1
+        restored_session.created_at = current_time
+        restored_session.updated_at = current_time
+        restored_session.timeline.append(
+            SessionEvent(
+                event_type=EventType.IMPORT,
+                actor_type=ActorType.SYSTEM,
+                visibility_scope=VisibilityScope.PUBLIC,
+                text=f"从存档 {original_session_id} (version {original_version}) 恢复",
+                structured_payload={
+                    "original_session_id": original_session_id,
+                    "original_version": original_version,
+                },
+                language_preference=restored_session.language_preference,
+                created_at=current_time,
+            )
+        )
+        restored_session.audit_log.append(
+            AuditLogEntry(
+                action=AuditActionType.IMPORT,
+                session_version=1,
+                details={
+                    "original_session_id": original_session_id,
+                    "original_version": original_version,
+                },
+                created_at=current_time,
+            )
+        )
+        self.repository.create(
+            restored_session,
+            reason=f"imported_from_{original_session_id}",
+        )
+        return SessionImportResponse(
+            original_session_id=original_session_id,
+            new_session_id=restored_session.session_id,
+            state_version=restored_session.state_version,
+            warnings=[],
+        )
+
     def submit_player_action(
         self,
         session_id: str,
@@ -538,19 +617,36 @@ class SessionService:
             request.language_preference,
             session.language_preference,
         )
+        actor_id = request.actor_id or session.keeper_id
         self._authorize_operator(
             session,
             operator_id=request.operator_id,
             language=effective_language,
+            error_detail={
+                "message": self._message("operator_not_authorized", effective_language),
+                "session_id": session.session_id,
+                "operator_id": request.operator_id,
+                "actor_id": actor_id,
+                "actor_type": request.actor_type.value,
+                "expected_keeper_actor_id": session.keeper_id,
+                "actual_session_keeper_name": session.keeper_name,
+                "permission_check_inputs": {
+                    "operator_id": request.operator_id,
+                    "actor_id": actor_id,
+                    "actor_type": request.actor_type.value,
+                    "expected_keeper_actor_id": session.keeper_id,
+                    "actual_session_keeper_name": session.keeper_name,
+                    "operator_matches_expected_keeper": request.operator_id == session.keeper_id,
+                },
+            },
         )
         current_time = datetime.now(timezone.utc)
         visible_to = self._normalize_visible_to(
-            actor_id=request.actor_id or session.keeper_id,
+            actor_id=actor_id,
             visibility_scope=request.visibility_scope,
             visible_to=request.visible_to,
         )
         expected_version = session.state_version
-        actor_id = request.actor_id or session.keeper_id
         rules_grounding = self._ground_rules_for_action(
             actor_id=actor_id,
             actor_type=request.actor_type,
@@ -709,12 +805,13 @@ class SessionService:
             viewer_id=None,
             viewer_role=ViewerRole.KEEPER,
         ).keeper_workflow
+        response_prompt = normalize_keeper_prompt_for_keeper(session, prompt)
         return UpdateKeeperPromptResponse(
             message=self._message("keeper_prompt_updated", effective_language),
             session_id=session.session_id,
             state_version=session.state_version,
             language_preference=effective_language,
-            prompt=prompt,
+            prompt=response_prompt,
             keeper_workflow=keeper_workflow or KeeperWorkflowState(),
         )
 
@@ -1124,10 +1221,11 @@ class SessionService:
         *,
         operator_id: str,
         language: LanguagePreference,
+        error_detail: dict[str, Any] | None = None,
     ) -> None:
         if operator_id == session.keeper_id:
             return
-        raise PermissionError(self._message("operator_not_authorized", language))
+        raise PermissionError(error_detail or self._message("operator_not_authorized", language))
 
     def _update_keeper_prompt(
         self,
@@ -2307,6 +2405,11 @@ class SessionService:
                     )
                 )
             for kp_prompt in consequence.queue_kp_prompts:
+                assigned_to = (
+                    kp_prompt.assigned_to.strip() if kp_prompt.assigned_to is not None else ""
+                )
+                if not assigned_to:
+                    assigned_to = session.keeper_id
                 progress_state.queued_kp_prompts.append(
                     QueuedKPPrompt(
                         prompt_text=kp_prompt.prompt_text,
@@ -2315,7 +2418,7 @@ class SessionService:
                         source_action_id=authoritative_action.action_id,
                         category=kp_prompt.category,
                         priority=kp_prompt.priority,
-                        assigned_to=kp_prompt.assigned_to,
+                        assigned_to=assigned_to,
                         notes=[],
                         status=KeeperPromptStatus.PENDING,
                         trigger_reason=kp_prompt.reason

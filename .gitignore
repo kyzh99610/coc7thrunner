@@ -1,7 +1,14 @@
 __pycache__/
 .pytest_cache/
+.pytest-run-execution/
 .venv/
 .tools/
 .tmp/
+.test-artifacts/
+test-artifacts/
+pytestrun/
+pytestrun-new*/
 *.pyc
 data/
+
+# Keep hand-saved session dumps and milestone notes under notes/.

@@ -153,6 +153,7 @@ def test_rules_query_acceptance_cases_use_persisted_knowledge(client: TestClient
 
         minimum_matches = case.get("minimum_matches", 1)
         if minimum_matches == 0:
+            assert case.get("expected_topics", []) == [], case["case_id"]
             assert result.matched_chunks == [], case["case_id"]
             assert result.citations == [], case["case_id"]
             assert result.chinese_answer_draft is None, case["case_id"]
@@ -227,6 +228,7 @@ def test_rules_query_acceptance_cases_with_zero_minimum_matches_return_no_chunks
         assert response.status_code == 200, case["case_id"]
         result = RuleQueryResult.model_validate(response.json())
 
+        assert case.get("expected_topics", []) == [], case["case_id"]
         assert result.matched_chunks == [], case["case_id"]
         assert result.citations == [], case["case_id"]
         assert result.chinese_answer_draft is None, case["case_id"]

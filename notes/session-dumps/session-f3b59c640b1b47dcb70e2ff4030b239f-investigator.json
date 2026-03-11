@@ -1,0 +1,1088 @@
+{
+  "session_id": "session-f3b59c640b1b47dcb70e2ff4030b239f",
+  "viewer_id": "actor_leon_desktop_001",
+  "viewer_role": "investigator",
+  "keeper_name": "WoW",
+  "language_preference": "zh-CN",
+  "scenario": {
+    "scenario_id": "mist_harbor_inn_demo_full_001",
+    "title": "雾港旅店的低语（完整版 smoke）",
+    "hook": "一名调查员在港口旅店留宿时，听闻深夜走廊传来低语，并发现一张来历不明的纸条。",
+    "starting_location": "雾港旅店前厅",
+    "start_scene_id": "scene_inn_lobby",
+    "tags": [
+      "调查",
+      "旅店",
+      "港口",
+      "轻量试玩"
+    ],
+    "scenes": [
+      {
+        "scene_id": "scene_inn_lobby",
+        "title": "旅店前厅",
+        "summary": "前厅里光线昏黄，柜台后的老板神色疲惫，窗外能看到雾气中的港口轮廓。",
+        "phase": "investigation",
+        "visibility_scope": "public",
+        "visible_to": [],
+        "revealed": true,
+        "linked_clue_ids": [
+          "clue_whisper_note"
+        ],
+        "scene_objectives": [],
+        "keeper_notes": [],
+        "runtime_notes": []
+      },
+      {
+        "scene_id": "scene_second_floor_corridor",
+        "title": "二楼走廊",
+        "summary": "走廊地板微微起翘，尽头的房门下有一道不自然的阴影，像是有人在里面无声徘徊。",
+        "phase": "investigation",
+        "visibility_scope": "public",
+        "visible_to": [],
+        "revealed": true,
+        "linked_clue_ids": [
+          "clue_room_whisper"
+        ],
+        "scene_objectives": [],
+        "keeper_notes": [],
+        "runtime_notes": []
+      },
+      {
+        "scene_id": "scene_locked_guest_room",
+        "title": "上锁客房",
+        "summary": "房内残留着潮湿腥味，桌上摊着写到一半的日志，墙角有一道拖拽过的水痕。",
+        "phase": "investigation",
+        "visibility_scope": "public",
+        "visible_to": [],
+        "revealed": true,
+        "linked_clue_ids": [],
+        "scene_objectives": [],
+        "keeper_notes": [],
+        "runtime_notes": []
+      }
+    ],
+    "clues": [
+      {
+        "clue_id": "clue_whisper_note",
+        "title": "染潮纸条",
+        "text": "纸条上只写着一句话：不要听门后的声音。",
+        "status": "shared_with_party",
+        "visibility_scope": "public",
+        "visible_to": [],
+        "core_clue_flag": true,
+        "alternate_paths": [
+          "与旅店老板交谈获得提示"
+        ],
+        "fail_forward_text": "即使侦查失败，调查员仍能注意到这张纸条，但会让老板开始留意他的举动。",
+        "discovered_by": [
+          "actor_leon_desktop_001"
+        ],
+        "owner_actor_ids": [
+          "actor_leon_desktop_001"
+        ],
+        "discovered_via": "前厅侦查成功",
+        "discovery_triggers": [],
+        "fail_forward_triggers": [],
+        "last_updated_at": "2026-03-11T06:31:55.331549Z",
+        "language_preference": "zh-CN"
+      },
+      {
+        "clue_id": "clue_room_whisper",
+        "title": "门后低语",
+        "text": "门板另一侧传来断断续续的耳语，像是有人在重复一段祈祷文。",
+        "status": "shared_with_party",
+        "visibility_scope": "public",
+        "visible_to": [],
+        "core_clue_flag": false,
+        "alternate_paths": [],
+        "fail_forward_text": "",
+        "discovered_by": [],
+        "owner_actor_ids": [],
+        "discovered_via": "抵达二楼走廊",
+        "discovery_triggers": [],
+        "fail_forward_triggers": [],
+        "last_updated_at": "2026-03-11T06:33:53.064602Z",
+        "language_preference": "zh-CN"
+      }
+    ],
+    "beats": [],
+    "npcs": [],
+    "language_preference": "zh-CN"
+  },
+  "current_scene": {
+    "scene_id": "scene_second_floor_corridor",
+    "title": "二楼走廊",
+    "summary": "里昂已经抵达二楼走廊，并锁定了低语来源的方向。",
+    "phase": "investigation"
+  },
+  "participants": [
+    {
+      "actor_id": "actor_leon_desktop_001",
+      "display_name": "里昂 冯 耶格尔",
+      "kind": "human",
+      "character": {
+        "id": "char_leon_von_jager_xlsx_desktop_001",
+        "name": "里昂 冯 耶格尔",
+        "occupation": "物理学教授",
+        "age": 26,
+        "language_preference": "zh-CN",
+        "attributes": {
+          "strength": 60,
+          "constitution": 55,
+          "size": 65,
+          "dexterity": 65,
+          "appearance": 65,
+          "intelligence": 80,
+          "power": 50,
+          "education": 90
+        },
+        "skills": {
+          "会计": 5,
+          "法律": 5,
+          "人类学": 1,
+          "图书馆使用": 65,
+          "估价": 5,
+          "聆听": 60,
+          "考古学": 1,
+          "锁匠": 1,
+          "机械维修": 10,
+          "医学": 1,
+          "博物学": 10,
+          "取悦": 15,
+          "导航": 10,
+          "攀爬": 20,
+          "神秘学": 5,
+          "计算机使用 Ω": 5,
+          "操作重型机械": 1,
+          "信用评级": 40,
+          "说服": 10,
+          "克苏鲁神话": 0,
+          "乔装": 5,
+          "精神分析": 1,
+          "闪避": 80,
+          "心理学": 70,
+          "汽车驾驶": 20,
+          "骑术": 5,
+          "电气维修": 10,
+          "物理学": 99,
+          "电子学 Ω": 1,
+          "话术": 5,
+          "斗殴": 80,
+          "妙手": 55,
+          "侦查": 60,
+          "潜行": 60,
+          "手枪": 80,
+          "游泳": 20,
+          "步枪/霰弹枪": 47,
+          "投掷": 20,
+          "追踪": 10,
+          "驯兽": 5,
+          "急救": 30,
+          "潜水": 1,
+          "历史": 5,
+          "爆破": 1,
+          "恐吓": 15,
+          "读唇": 1,
+          "跳跃": 20,
+          "催眠": 1,
+          "英语": 75,
+          "炮术": 1,
+          "自定义技能": 0,
+          "德语": 90
+        },
+        "notes": "背景摘要：描述：金发妹妹头 蓝眼 身高185\n信仰：重建德国，横扫欧洲，做回自己\n重要人：我自己\n重要地：在柏林的家\n宝物：印着自己名字的铁十字勋章\n特质：0043『车万人』\n你的敏捷与闪避检定获得奖励骰。\n0135『铜皮铁甲』\n你的皮肤拥有1点护甲。\n导入备注：里昂出生在一个德国历史悠久的贵族家庭中，父亲为伯爵，母亲为某外交官之家女，里昂出生后两年母亲又诞下一女，家人一词在里昂的记忆里还算美好，父亲虽然大多数时候很严厉，但是母亲无时无刻的温柔正好跟父亲的严厉在家里达成了微妙的平衡，妹妹的性格则更像妈妈一点，温柔中带着坚毅，里昂10岁的时候他发现自己的家庭条件似乎并没有同龄的贵族小朋友这么好，他向父亲询问，父亲则是简单的回答道“因为自己家族参加的一场战争游戏打输了”“那不可以赢回来吗？”“有一些东西一旦输了就无法赢回，等你长大了就明白了”就是这样一番令年幼的他半懂不懂的话语，在里昂心理种下了对“胜利”渴求的种子，此后在里昂的少年和青年时期无论在学习还是运动上都力所能及的做到每战必胜。\n里昂18岁时终于凭借着自己的努力与天赋成功的考入了柏林洪堡大学物理系，自己的妹妹也在同年加入了希特勒青年团，成为了预备军的一员，里昂1年后被妹妹引荐，也成为了纳粹党的一员，一年之后德国的扩充领地行为进入了白热化阶段，里昂作为一名光荣的纳粹党员也暂停了学业，自告奋勇的冲上了战线，在服役半年后不幸在夜里被一名敌军的流弹击中了右侧的肩胛骨，被自己的同团战友半拖半背回到了大本营，在经过半个月的治疗过后里昂虽然捡回了一条命，但军医判断里昂已暂时失去了拿起武器的能力，便开了退伍通知要求里昂好好回家养伤，可里昂觉得自己刚上线六个月就歇菜，未免太过丢人，自己肯定还能为国家做些什么，见状如此，长官于心不忍，鉴于里昂之前是物理系的学生，便把他调进了后方参加火箭研发后期部门工作，在那里里昂有着之前在大学实验室工作的经历表现十分不错，很快受到了铁十字勋章的嘉奖，当上了军官，半年后大部队成功返回柏林，里昂开始在大学继续学习直到毕业，三年后，里昂毕业，第二次世界大战也进入了最后的高潮，他便再次回到战线后方带领着自己的团队进行着火箭研发工程，妄想着自己的国家征服了全欧洲后自己带着同胞们再一次征服神秘的外太空，没想到的是一年之后，德国战败，希特勒在自己的碉堡地下室饮弹自尽，余下的纳粹党人们死的死疯的疯，更雪上加霜的是自己的亲生妹妹得知战败后也用氰化物自尽追随着他们的伟大领袖而去，父母也被盟军抓住判了无期徒刑，自己眼看着也要亡命于祖国，这个时候由于美国急速推出了“回形针行动”里昂也为了还能继续活着选择参加了这次引渡，很快被评为一等人才，被发配去阿拉巴马州做物理学教授，他自己害怕那些追捕纳粹党人的赏金猎人，便和官方合作拿到了新的身份，美国阿拉巴马本地人，化名“诺亚·阿兹纳布尔”开始了自己的第二人生，在阿拉巴马大学他温和有礼，与人为善，还因为自己金发蓝瞳的惹眼长相获得了一些女性学生与同事的追捧，慢慢的，里昂逐渐忘却了自己过去的人生与心愿，他自己在心里已经开始自我认同了自己是一个美国人的事实，直到那一天的到来，美国发布了新的探索法令，跳高行动，皆在公开招募各种能人异士参加探索神秘的南极，里昂看见这条法令时虎躯一震，他知道这次探索必定会获得对国家，乃至人类社会以及文明有所收获的珍宝，如果，只是如果，这次冒险能发现大到足以复国的力量呢？里昂这么想着，如同被润滑的老旧齿轮一般，他的整个人生，心愿，父亲的回答，听到希特勒自杀的战友们的表情，服毒自尽妹妹的死状在眼前一遍一遍咔哒咔哒的重复回放着，冰冷且麻木的内心重新燃起，解封，他知道这次探索他非去不可，如果有一丝一毫的复国希望，他都要不计任何代价的紧紧抓住......",
+        "max_hit_points": 12,
+        "max_magic_points": 10,
+        "starting_sanity": 50
+      }
+    }
+  ],
+  "visible_events": [
+    {
+      "event_id": "event-690c0339ad8d4f6d97fb9a7fc5e02347",
+      "event_type": "session_started",
+      "actor_id": null,
+      "actor_type": "system",
+      "visibility_scope": "public",
+      "visible_to": [],
+      "text": "会话已创建：雾港旅店的低语（完整版 smoke）",
+      "structured_payload": {
+        "scenario_id": "mist_harbor_inn_demo_full_001",
+        "participant_count": 1
+      },
+      "rules_grounding": null,
+      "is_authoritative": true,
+      "hallucination_flag": false,
+      "language_preference": "zh-CN",
+      "created_at": "2026-03-11T06:05:17.938161Z"
+    },
+    {
+      "event_id": "event-f657d75b7cf2406597fc75590e7fd952",
+      "event_type": "player_action",
+      "actor_id": "actor_leon_desktop_001",
+      "actor_type": "investigator",
+      "visibility_scope": "public",
+      "visible_to": [],
+      "text": "我在旅店前厅仔细观察柜台、地板和附近桌面，寻找和深夜低语有关的纸张、留言或被匆忙遗落的物品。",
+      "structured_payload": {
+        "action_type": "investigate",
+        "target_scene_id": "scene_inn_lobby",
+        "intent": "search_for_hidden_clue",
+        "authoritative_action_id": "action-589f67c8fcbf46b4a3da72e7f66205a2",
+        "source_type": "human_player",
+        "effects": {
+          "scene_transitions": [],
+          "clue_state_effects": [],
+          "character_stat_effects": [],
+          "inventory_effects": [],
+          "visibility_effects": [],
+          "status_effects": []
+        },
+        "effect_contract_origin": "explicit",
+        "applied_effects": [],
+        "applied_beat_transitions": [],
+        "execution_summary": null
+      },
+      "rules_grounding": null,
+      "is_authoritative": true,
+      "hallucination_flag": false,
+      "language_preference": "zh-CN",
+      "created_at": "2026-03-11T06:05:59.859683Z"
+    },
+    {
+      "event_id": "event-380132b50e0e48f0a1c2e9a5a3387da7",
+      "event_type": "manual_action",
+      "actor_id": "keeper-1",
+      "actor_type": "keeper",
+      "visibility_scope": "public",
+      "visible_to": [],
+      "text": "KP裁定：里昂在前厅搜索时发现了一张被潮气浸染的纸条，上面写着“不要听门后的声音”。",
+      "structured_payload": {
+        "action_type": "keeper_adjudication",
+        "source_action_kind": "followup_to_player_action",
+        "target_actor_id": "actor_leon_desktop_001",
+        "target_scene_id": "scene_inn_lobby",
+        "intent": "resolve_first_core_clue",
+        "authoritative_action_id": "action-3172af063b70461a942d17b3c99eb2ae",
+        "source_type": "manual_operator",
+        "effects": {
+          "scene_transitions": [],
+          "clue_state_effects": [
+            {
+              "clue_id": "clue_whisper_note",
+              "clue_title": "染潮纸条",
+              "status": "discovered",
+              "visibility_scope": "public",
+              "visible_to": [],
+              "add_visible_to": [],
+              "remove_visible_to": [],
+              "discovered_by": [],
+              "add_discovered_by": [
+                "actor_leon_desktop_001"
+              ],
+              "remove_discovered_by": [],
+              "owner_actor_ids": [],
+              "add_owner_actor_ids": [
+                "actor_leon_desktop_001"
+              ],
+              "remove_owner_actor_ids": [],
+              "discovered_via": "前厅侦查成功",
+              "share_with_party": true,
+              "private_to_actor_ids": [],
+              "activate_fail_forward": false
+            }
+          ],
+          "character_stat_effects": [],
+          "inventory_effects": [],
+          "visibility_effects": [],
+          "status_effects": []
+        },
+        "effect_contract_origin": "explicit",
+        "applied_effects": [
+          {
+            "effect_type": "clue_state",
+            "target_ref": "clue_whisper_note",
+            "summary": "线索“染潮纸条”已更新为已共享给全队",
+            "reversible_by_rollback": true
+          },
+          {
+            "effect_type": "beat_consequence.reveal_scene",
+            "target_ref": "scene_second_floor_corridor",
+            "summary": "新场景线索“scene_second_floor_corridor”已加入推进状态",
+            "reversible_by_rollback": true
+          },
+          {
+            "effect_type": "beat_consequence.kp_prompt",
+            "target_ref": "beat_find_note",
+            "summary": "已为剧情节点“找到染潮纸条”加入 KP 提示",
+            "reversible_by_rollback": true
+          },
+          {
+            "effect_type": "beat_consequence.scene_objective",
+            "target_ref": "beat_find_note",
+            "summary": "场景目标“找到与深夜低语有关的第一条线索”已标记完成",
+            "reversible_by_rollback": true
+          }
+        ],
+        "applied_beat_transitions": [
+          {
+            "beat_id": "beat_find_note",
+            "transition": "completed",
+            "summary": "剧情节点“找到染潮纸条”已完成",
+            "trigger_action_id": "action-3172af063b70461a942d17b3c99eb2ae",
+            "reason": "满足完成条件",
+            "condition_refs": [
+              "clue_discovered:clue_whisper_note"
+            ],
+            "consequence_refs": [
+              "unlock_beat:beat_reach_corridor",
+              "unlock_beat:beat_reach_corridor",
+              "reveal_scene:scene_second_floor_corridor",
+              "queue_kp_prompt:npc_reaction",
+              "mark_scene_objective_complete:beat_find_note"
+            ]
+          },
+          {
+            "beat_id": "beat_reach_corridor",
+            "transition": "unlocked",
+            "summary": "剧情节点“进入二楼走廊”已解锁",
+            "trigger_action_id": "action-3172af063b70461a942d17b3c99eb2ae",
+            "reason": "由剧情节点“找到染潮纸条”的后续结果解锁",
+            "condition_refs": [],
+            "consequence_refs": [
+              "unlock_beat:beat_reach_corridor",
+              "next_beat:beat_find_note->beat_reach_corridor"
+            ]
+          },
+          {
+            "beat_id": "beat_reach_corridor",
+            "transition": "current",
+            "summary": "当前推进节点已切换为“进入二楼走廊”",
+            "trigger_action_id": "action-3172af063b70461a942d17b3c99eb2ae",
+            "reason": "已切换到当前可推进节点",
+            "condition_refs": [],
+            "consequence_refs": []
+          }
+        ],
+        "execution_summary": "线索“染潮纸条”已更新为已共享给全队；新场景线索“scene_second_floor_corridor”已加入推进状态；已为剧情节点“找到染潮纸条”加入 KP 提示；场景目标“找到与深夜低语有关的第一条线索”已标记完成；剧情节点“找到染潮纸条”已完成；剧情节点“进入二楼走廊”已解锁；当前推进节点已切换为“进入二楼走廊”"
+      },
+      "rules_grounding": null,
+      "is_authoritative": true,
+      "hallucination_flag": false,
+      "language_preference": "zh-CN",
+      "created_at": "2026-03-11T06:31:55.331549Z"
+    },
+    {
+      "event_id": "event-fb3dc33567244610b004cc18cd47abad",
+      "event_type": "player_action",
+      "actor_id": "actor_leon_desktop_001",
+      "actor_type": "investigator",
+      "visibility_scope": "public",
+      "visible_to": [],
+      "text": "我拿着那张染潮纸条，小心地沿着楼梯上到二楼走廊，贴近尽头那扇门，先听里面的动静，再观察门缝和门把有没有异常。",
+      "structured_payload": {
+        "action_type": "move_and_listen",
+        "target_scene_id": "scene_second_floor_corridor",
+        "intent": "reach_corridor_and_check_whisper_source",
+        "authoritative_action_id": "action-e7746899b8b945d289eb929cb329246d",
+        "source_type": "human_player",
+        "effects": {
+          "scene_transitions": [],
+          "clue_state_effects": [],
+          "character_stat_effects": [],
+          "inventory_effects": [],
+          "visibility_effects": [],
+          "status_effects": []
+        },
+        "effect_contract_origin": "explicit",
+        "applied_effects": [],
+        "applied_beat_transitions": [],
+        "execution_summary": null
+      },
+      "rules_grounding": null,
+      "is_authoritative": true,
+      "hallucination_flag": false,
+      "language_preference": "zh-CN",
+      "created_at": "2026-03-11T06:33:09.490540Z"
+    },
+    {
+      "event_id": "event-4e5e3fe28e0c4cf0bdc5b062ee69812d",
+      "event_type": "manual_action",
+      "actor_id": "keeper-1",
+      "actor_type": "keeper",
+      "visibility_scope": "public",
+      "visible_to": [],
+      "text": "KP裁定：里昂沿楼梯来到二楼走廊，门后的低语清晰可闻，低语来源已经确认，尽头那扇上锁的客房也随之成为下一步调查重点。",
+      "structured_payload": {
+        "action_type": "keeper_adjudication",
+        "source_action_kind": "followup_to_player_action",
+        "target_actor_id": "actor_leon_desktop_001",
+        "target_scene_id": "scene_second_floor_corridor",
+        "intent": "advance_to_corridor",
+        "authoritative_action_id": "action-5af8007685884bc7a53d29c294d29a44",
+        "source_type": "manual_operator",
+        "effects": {
+          "scene_transitions": [
+            {
+              "scene_id": "scene_second_floor_corridor",
+              "title": "二楼走廊",
+              "summary": "里昂已经抵达二楼走廊，并锁定了低语来源的方向。",
+              "phase": "investigation",
+              "required_current_phase": "investigation",
+              "required_discovered_clue_ids": [
+                "clue_whisper_note"
+              ],
+              "consequence_tags": [
+                "beat_progression",
+                "scene_transition"
+              ],
+              "consequence_notes": [
+                "推进第二拍：进入二楼走廊"
+              ]
+            }
+          ],
+          "clue_state_effects": [],
+          "character_stat_effects": [],
+          "inventory_effects": [],
+          "visibility_effects": [],
+          "status_effects": []
+        },
+        "effect_contract_origin": "explicit",
+        "applied_effects": [
+          {
+            "effect_type": "scene_transition",
+            "target_ref": "scene_second_floor_corridor",
+            "summary": "场景已切换到 二楼走廊（后果标签：beat_progression、scene_transition）",
+            "reversible_by_rollback": true
+          },
+          {
+            "effect_type": "clue_state",
+            "target_ref": "clue_room_whisper",
+            "summary": "线索“门后低语”已更新为已共享给全队",
+            "reversible_by_rollback": true
+          },
+          {
+            "effect_type": "beat_consequence.reveal_scene",
+            "target_ref": "scene_locked_guest_room",
+            "summary": "新场景线索“scene_locked_guest_room”已加入推进状态",
+            "reversible_by_rollback": true
+          },
+          {
+            "effect_type": "beat_consequence.kp_prompt",
+            "target_ref": "beat_reach_corridor",
+            "summary": "已为剧情节点“进入二楼走廊”加入 KP 提示",
+            "reversible_by_rollback": true
+          },
+          {
+            "effect_type": "beat_consequence.scene_objective",
+            "target_ref": "beat_reach_corridor",
+            "summary": "场景目标“抵达二楼走廊并确认低语来源”已标记完成",
+            "reversible_by_rollback": true
+          }
+        ],
+        "applied_beat_transitions": [
+          {
+            "beat_id": "beat_reach_corridor",
+            "transition": "completed",
+            "summary": "剧情节点“进入二楼走廊”已完成",
+            "trigger_action_id": "action-5af8007685884bc7a53d29c294d29a44",
+            "reason": "满足完成条件",
+            "condition_refs": [
+              "scene_is:scene_second_floor_corridor:*:*"
+            ],
+            "consequence_refs": [
+              "unlock_beat:beat_room_truth",
+              "unlock_beat:beat_room_truth",
+              "reveal_clue:clue_room_whisper",
+              "reveal_scene:scene_locked_guest_room",
+              "queue_kp_prompt:sanity_review",
+              "mark_scene_objective_complete:beat_reach_corridor"
+            ]
+          },
+          {
+            "beat_id": "beat_room_truth",
+            "transition": "unlocked",
+            "summary": "剧情节点“确认房内真相”已解锁",
+            "trigger_action_id": "action-5af8007685884bc7a53d29c294d29a44",
+            "reason": "由剧情节点“进入二楼走廊”的后续结果解锁",
+            "condition_refs": [],
+            "consequence_refs": [
+              "unlock_beat:beat_room_truth",
+              "next_beat:beat_reach_corridor->beat_room_truth"
+            ]
+          },
+          {
+            "beat_id": "beat_room_truth",
+            "transition": "current",
+            "summary": "当前推进节点已切换为“确认房内真相”",
+            "trigger_action_id": "action-5af8007685884bc7a53d29c294d29a44",
+            "reason": "已切换到当前可推进节点",
+            "condition_refs": [],
+            "consequence_refs": []
+          }
+        ],
+        "execution_summary": "场景已切换到 二楼走廊（后果标签：beat_progression、scene_transition）；线索“门后低语”已更新为已共享给全队；新场景线索“scene_locked_guest_room”已加入推进状态；已为剧情节点“进入二楼走廊”加入 KP 提示；场景目标“抵达二楼走廊并确认低语来源”已标记完成；剧情节点“进入二楼走廊”已完成；剧情节点“确认房内真相”已解锁；当前推进节点已切换为“确认房内真相”"
+      },
+      "rules_grounding": null,
+      "is_authoritative": true,
+      "hallucination_flag": false,
+      "language_preference": "zh-CN",
+      "created_at": "2026-03-11T06:33:53.064602Z"
+    }
+  ],
+  "visible_draft_actions": [],
+  "visible_reviewed_actions": [],
+  "visible_authoritative_actions": [
+    {
+      "action_id": "action-589f67c8fcbf46b4a3da72e7f66205a2",
+      "source_type": "human_player",
+      "actor_id": "actor_leon_desktop_001",
+      "actor_type": "investigator",
+      "visibility_scope": "public",
+      "visible_to": [],
+      "text": "我在旅店前厅仔细观察柜台、地板和附近桌面，寻找和深夜低语有关的纸张、留言或被匆忙遗落的物品。",
+      "structured_action": {
+        "action_type": "investigate",
+        "target_scene_id": "scene_inn_lobby",
+        "intent": "search_for_hidden_clue"
+      },
+      "effects": {
+        "scene_transitions": [],
+        "clue_state_effects": [],
+        "character_stat_effects": [],
+        "inventory_effects": [],
+        "visibility_effects": [],
+        "status_effects": []
+      },
+      "effect_contract_origin": "explicit",
+      "applied_effects": [],
+      "applied_beat_transitions": [],
+      "rules_grounding": null,
+      "review_summary": null,
+      "execution_summary": null,
+      "draft_id": null,
+      "review_id": null,
+      "canonical_event_id": "event-f657d75b7cf2406597fc75590e7fd952",
+      "invalidated_by_rollback_version": null,
+      "language_preference": "zh-CN",
+      "created_at": "2026-03-11T06:05:59.859683Z"
+    },
+    {
+      "action_id": "action-3172af063b70461a942d17b3c99eb2ae",
+      "source_type": "manual_operator",
+      "actor_id": "keeper-1",
+      "actor_type": "keeper",
+      "visibility_scope": "public",
+      "visible_to": [],
+      "text": "KP裁定：里昂在前厅搜索时发现了一张被潮气浸染的纸条，上面写着“不要听门后的声音”。",
+      "structured_action": {
+        "action_type": "keeper_adjudication",
+        "source_action_kind": "followup_to_player_action",
+        "target_actor_id": "actor_leon_desktop_001",
+        "target_scene_id": "scene_inn_lobby",
+        "intent": "resolve_first_core_clue"
+      },
+      "effects": {
+        "scene_transitions": [],
+        "clue_state_effects": [
+          {
+            "clue_id": "clue_whisper_note",
+            "clue_title": "染潮纸条",
+            "status": "discovered",
+            "visibility_scope": "public",
+            "visible_to": [],
+            "add_visible_to": [],
+            "remove_visible_to": [],
+            "discovered_by": [],
+            "add_discovered_by": [
+              "actor_leon_desktop_001"
+            ],
+            "remove_discovered_by": [],
+            "owner_actor_ids": [],
+            "add_owner_actor_ids": [
+              "actor_leon_desktop_001"
+            ],
+            "remove_owner_actor_ids": [],
+            "discovered_via": "前厅侦查成功",
+            "share_with_party": true,
+            "private_to_actor_ids": [],
+            "activate_fail_forward": false
+          }
+        ],
+        "character_stat_effects": [],
+        "inventory_effects": [],
+        "visibility_effects": [],
+        "status_effects": []
+      },
+      "effect_contract_origin": "explicit",
+      "applied_effects": [
+        {
+          "effect_type": "clue_state",
+          "target_ref": "clue_whisper_note",
+          "summary": "线索“染潮纸条”已更新为已共享给全队",
+          "reversible_by_rollback": true
+        },
+        {
+          "effect_type": "beat_consequence.reveal_scene",
+          "target_ref": "scene_second_floor_corridor",
+          "summary": "新场景线索“scene_second_floor_corridor”已加入推进状态",
+          "reversible_by_rollback": true
+        },
+        {
+          "effect_type": "beat_consequence.kp_prompt",
+          "target_ref": "beat_find_note",
+          "summary": "已为剧情节点“找到染潮纸条”加入 KP 提示",
+          "reversible_by_rollback": true
+        },
+        {
+          "effect_type": "beat_consequence.scene_objective",
+          "target_ref": "beat_find_note",
+          "summary": "场景目标“找到与深夜低语有关的第一条线索”已标记完成",
+          "reversible_by_rollback": true
+        }
+      ],
+      "applied_beat_transitions": [
+        {
+          "beat_id": "beat_find_note",
+          "transition": "completed",
+          "summary": "剧情节点“找到染潮纸条”已完成",
+          "trigger_action_id": "action-3172af063b70461a942d17b3c99eb2ae",
+          "reason": "满足完成条件",
+          "condition_refs": [
+            "clue_discovered:clue_whisper_note"
+          ],
+          "consequence_refs": [
+            "unlock_beat:beat_reach_corridor",
+            "unlock_beat:beat_reach_corridor",
+            "reveal_scene:scene_second_floor_corridor",
+            "queue_kp_prompt:npc_reaction",
+            "mark_scene_objective_complete:beat_find_note"
+          ]
+        },
+        {
+          "beat_id": "beat_reach_corridor",
+          "transition": "unlocked",
+          "summary": "剧情节点“进入二楼走廊”已解锁",
+          "trigger_action_id": "action-3172af063b70461a942d17b3c99eb2ae",
+          "reason": "由剧情节点“找到染潮纸条”的后续结果解锁",
+          "condition_refs": [],
+          "consequence_refs": [
+            "unlock_beat:beat_reach_corridor",
+            "next_beat:beat_find_note->beat_reach_corridor"
+          ]
+        },
+        {
+          "beat_id": "beat_reach_corridor",
+          "transition": "current",
+          "summary": "当前推进节点已切换为“进入二楼走廊”",
+          "trigger_action_id": "action-3172af063b70461a942d17b3c99eb2ae",
+          "reason": "已切换到当前可推进节点",
+          "condition_refs": [],
+          "consequence_refs": []
+        }
+      ],
+      "rules_grounding": null,
+      "review_summary": null,
+      "execution_summary": "线索“染潮纸条”已更新为已共享给全队；新场景线索“scene_second_floor_corridor”已加入推进状态；已为剧情节点“找到染潮纸条”加入 KP 提示；场景目标“找到与深夜低语有关的第一条线索”已标记完成；剧情节点“找到染潮纸条”已完成；剧情节点“进入二楼走廊”已解锁；当前推进节点已切换为“进入二楼走廊”",
+      "draft_id": null,
+      "review_id": null,
+      "canonical_event_id": "event-380132b50e0e48f0a1c2e9a5a3387da7",
+      "invalidated_by_rollback_version": null,
+      "language_preference": "zh-CN",
+      "created_at": "2026-03-11T06:31:55.331549Z"
+    },
+    {
+      "action_id": "action-e7746899b8b945d289eb929cb329246d",
+      "source_type": "human_player",
+      "actor_id": "actor_leon_desktop_001",
+      "actor_type": "investigator",
+      "visibility_scope": "public",
+      "visible_to": [],
+      "text": "我拿着那张染潮纸条，小心地沿着楼梯上到二楼走廊，贴近尽头那扇门，先听里面的动静，再观察门缝和门把有没有异常。",
+      "structured_action": {
+        "action_type": "move_and_listen",
+        "target_scene_id": "scene_second_floor_corridor",
+        "intent": "reach_corridor_and_check_whisper_source"
+      },
+      "effects": {
+        "scene_transitions": [],
+        "clue_state_effects": [],
+        "character_stat_effects": [],
+        "inventory_effects": [],
+        "visibility_effects": [],
+        "status_effects": []
+      },
+      "effect_contract_origin": "explicit",
+      "applied_effects": [],
+      "applied_beat_transitions": [],
+      "rules_grounding": null,
+      "review_summary": null,
+      "execution_summary": null,
+      "draft_id": null,
+      "review_id": null,
+      "canonical_event_id": "event-fb3dc33567244610b004cc18cd47abad",
+      "invalidated_by_rollback_version": null,
+      "language_preference": "zh-CN",
+      "created_at": "2026-03-11T06:33:09.490540Z"
+    },
+    {
+      "action_id": "action-5af8007685884bc7a53d29c294d29a44",
+      "source_type": "manual_operator",
+      "actor_id": "keeper-1",
+      "actor_type": "keeper",
+      "visibility_scope": "public",
+      "visible_to": [],
+      "text": "KP裁定：里昂沿楼梯来到二楼走廊，门后的低语清晰可闻，低语来源已经确认，尽头那扇上锁的客房也随之成为下一步调查重点。",
+      "structured_action": {
+        "action_type": "keeper_adjudication",
+        "source_action_kind": "followup_to_player_action",
+        "target_actor_id": "actor_leon_desktop_001",
+        "target_scene_id": "scene_second_floor_corridor",
+        "intent": "advance_to_corridor"
+      },
+      "effects": {
+        "scene_transitions": [
+          {
+            "scene_id": "scene_second_floor_corridor",
+            "title": "二楼走廊",
+            "summary": "里昂已经抵达二楼走廊，并锁定了低语来源的方向。",
+            "phase": "investigation",
+            "required_current_phase": "investigation",
+            "required_discovered_clue_ids": [
+              "clue_whisper_note"
+            ],
+            "consequence_tags": [
+              "beat_progression",
+              "scene_transition"
+            ],
+            "consequence_notes": [
+              "推进第二拍：进入二楼走廊"
+            ]
+          }
+        ],
+        "clue_state_effects": [],
+        "character_stat_effects": [],
+        "inventory_effects": [],
+        "visibility_effects": [],
+        "status_effects": []
+      },
+      "effect_contract_origin": "explicit",
+      "applied_effects": [
+        {
+          "effect_type": "scene_transition",
+          "target_ref": "scene_second_floor_corridor",
+          "summary": "场景已切换到 二楼走廊（后果标签：beat_progression、scene_transition）",
+          "reversible_by_rollback": true
+        },
+        {
+          "effect_type": "clue_state",
+          "target_ref": "clue_room_whisper",
+          "summary": "线索“门后低语”已更新为已共享给全队",
+          "reversible_by_rollback": true
+        },
+        {
+          "effect_type": "beat_consequence.reveal_scene",
+          "target_ref": "scene_locked_guest_room",
+          "summary": "新场景线索“scene_locked_guest_room”已加入推进状态",
+          "reversible_by_rollback": true
+        },
+        {
+          "effect_type": "beat_consequence.kp_prompt",
+          "target_ref": "beat_reach_corridor",
+          "summary": "已为剧情节点“进入二楼走廊”加入 KP 提示",
+          "reversible_by_rollback": true
+        },
+        {
+          "effect_type": "beat_consequence.scene_objective",
+          "target_ref": "beat_reach_corridor",
+          "summary": "场景目标“抵达二楼走廊并确认低语来源”已标记完成",
+          "reversible_by_rollback": true
+        }
+      ],
+      "applied_beat_transitions": [
+        {
+          "beat_id": "beat_reach_corridor",
+          "transition": "completed",
+          "summary": "剧情节点“进入二楼走廊”已完成",
+          "trigger_action_id": "action-5af8007685884bc7a53d29c294d29a44",
+          "reason": "满足完成条件",
+          "condition_refs": [
+            "scene_is:scene_second_floor_corridor:*:*"
+          ],
+          "consequence_refs": [
+            "unlock_beat:beat_room_truth",
+            "unlock_beat:beat_room_truth",
+            "reveal_clue:clue_room_whisper",
+            "reveal_scene:scene_locked_guest_room",
+            "queue_kp_prompt:sanity_review",
+            "mark_scene_objective_complete:beat_reach_corridor"
+          ]
+        },
+        {
+          "beat_id": "beat_room_truth",
+          "transition": "unlocked",
+          "summary": "剧情节点“确认房内真相”已解锁",
+          "trigger_action_id": "action-5af8007685884bc7a53d29c294d29a44",
+          "reason": "由剧情节点“进入二楼走廊”的后续结果解锁",
+          "condition_refs": [],
+          "consequence_refs": [
+            "unlock_beat:beat_room_truth",
+            "next_beat:beat_reach_corridor->beat_room_truth"
+          ]
+        },
+        {
+          "beat_id": "beat_room_truth",
+          "transition": "current",
+          "summary": "当前推进节点已切换为“确认房内真相”",
+          "trigger_action_id": "action-5af8007685884bc7a53d29c294d29a44",
+          "reason": "已切换到当前可推进节点",
+          "condition_refs": [],
+          "consequence_refs": []
+        }
+      ],
+      "rules_grounding": null,
+      "review_summary": null,
+      "execution_summary": "场景已切换到 二楼走廊（后果标签：beat_progression、scene_transition）；线索“门后低语”已更新为已共享给全队；新场景线索“scene_locked_guest_room”已加入推进状态；已为剧情节点“进入二楼走廊”加入 KP 提示；场景目标“抵达二楼走廊并确认低语来源”已标记完成；剧情节点“进入二楼走廊”已完成；剧情节点“确认房内真相”已解锁；当前推进节点已切换为“确认房内真相”",
+      "draft_id": null,
+      "review_id": null,
+      "canonical_event_id": "event-4e5e3fe28e0c4cf0bdc5b062ee69812d",
+      "invalidated_by_rollback_version": null,
+      "language_preference": "zh-CN",
+      "created_at": "2026-03-11T06:33:53.064602Z"
+    }
+  ],
+  "own_private_state": {
+    "private_notes": [],
+    "personal_clues": [],
+    "personal_goals": [],
+    "hidden_flags": [],
+    "knowledge_history": []
+  },
+  "own_character_state": {
+    "actor_id": "actor_leon_desktop_001",
+    "current_hit_points": 12,
+    "current_magic_points": 10,
+    "current_sanity": 50,
+    "core_stat_baseline": {
+      "strength": 60,
+      "dexterity": 65,
+      "power": 50,
+      "constitution": 55,
+      "appearance": 65,
+      "education": 90,
+      "size": 65,
+      "intelligence": 80
+    },
+    "skill_baseline": {
+      "会计": 5,
+      "法律": 5,
+      "人类学": 1,
+      "图书馆使用": 65,
+      "估价": 5,
+      "聆听": 60,
+      "考古学": 1,
+      "锁匠": 1,
+      "机械维修": 10,
+      "医学": 1,
+      "博物学": 10,
+      "取悦": 15,
+      "导航": 10,
+      "攀爬": 20,
+      "神秘学": 5,
+      "计算机使用 Ω": 5,
+      "操作重型机械": 1,
+      "信用评级": 40,
+      "说服": 10,
+      "克苏鲁神话": 0,
+      "乔装": 5,
+      "精神分析": 1,
+      "闪避": 80,
+      "心理学": 70,
+      "汽车驾驶": 20,
+      "骑术": 5,
+      "电气维修": 10,
+      "物理学": 99,
+      "电子学 Ω": 1,
+      "话术": 5,
+      "斗殴": 80,
+      "妙手": 55,
+      "侦查": 60,
+      "潜行": 60,
+      "手枪": 80,
+      "游泳": 20,
+      "步枪/霰弹枪": 47,
+      "投掷": 20,
+      "追踪": 10,
+      "驯兽": 5,
+      "急救": 30,
+      "潜水": 1,
+      "历史": 5,
+      "爆破": 1,
+      "恐吓": 15,
+      "读唇": 1,
+      "跳跃": 20,
+      "催眠": 1,
+      "英语": 75,
+      "炮术": 1,
+      "自定义技能": 0,
+      "德语": 90
+    },
+    "inventory": [
+      "黑色墨镜",
+      "白色内衣",
+      "白色线裤",
+      "黑色立领风衣",
+      "腰带",
+      "蓝色牛仔裤",
+      "黑色运动鞋"
+    ],
+    "status_effects": [],
+    "temporary_conditions": [],
+    "clue_ids": [
+      "clue_whisper_note"
+    ],
+    "private_notes": [
+      "导入背景：描述：金发妹妹头 蓝眼 身高185\n信仰：重建德国，横扫欧洲，做回自己\n重要人：我自己\n重要地：在柏林的家\n宝物：印着自己名字的铁十字勋章\n特质：0043『车万人』\n你的敏捷与闪避检定获得奖励骰。\n0135『铜皮铁甲』\n你的皮肤拥有1点护甲。",
+      "导入备注：里昂出生在一个德国历史悠久的贵族家庭中，父亲为伯爵，母亲为某外交官之家女，里昂出生后两年母亲又诞下一女，家人一词在里昂的记忆里还算美好，父亲虽然大多数时候很严厉，但是母亲无时无刻的温柔正好跟父亲的严厉在家里达成了微妙的平衡，妹妹的性格则更像妈妈一点，温柔中带着坚毅，里昂10岁的时候他发现自己的家庭条件似乎并没有同龄的贵族小朋友这么好，他向父亲询问，父亲则是简单的回答道“因为自己家族参加的一场战争游戏打输了”“那不可以赢回来吗？”“有一些东西一旦输了就无法赢回，等你长大了就明白了”就是这样一番令年幼的他半懂不懂的话语，在里昂心理种下了对“胜利”渴求的种子，此后在里昂的少年和青年时期无论在学习还是运动上都力所能及的做到每战必胜。\n里昂18岁时终于凭借着自己的努力与天赋成功的考入了柏林洪堡大学物理系，自己的妹妹也在同年加入了希特勒青年团，成为了预备军的一员，里昂1年后被妹妹引荐，也成为了纳粹党的一员，一年之后德国的扩充领地行为进入了白热化阶段，里昂作为一名光荣的纳粹党员也暂停了学业，自告奋勇的冲上了战线，在服役半年后不幸在夜里被一名敌军的流弹击中了右侧的肩胛骨，被自己的同团战友半拖半背回到了大本营，在经过半个月的治疗过后里昂虽然捡回了一条命，但军医判断里昂已暂时失去了拿起武器的能力，便开了退伍通知要求里昂好好回家养伤，可里昂觉得自己刚上线六个月就歇菜，未免太过丢人，自己肯定还能为国家做些什么，见状如此，长官于心不忍，鉴于里昂之前是物理系的学生，便把他调进了后方参加火箭研发后期部门工作，在那里里昂有着之前在大学实验室工作的经历表现十分不错，很快受到了铁十字勋章的嘉奖，当上了军官，半年后大部队成功返回柏林，里昂开始在大学继续学习直到毕业，三年后，里昂毕业，第二次世界大战也进入了最后的高潮，他便再次回到战线后方带领着自己的团队进行着火箭研发工程，妄想着自己的国家征服了全欧洲后自己带着同胞们再一次征服神秘的外太空，没想到的是一年之后，德国战败，希特勒在自己的碉堡地下室饮弹自尽，余下的纳粹党人们死的死疯的疯，更雪上加霜的是自己的亲生妹妹得知战败后也用氰化物自尽追随着他们的伟大领袖而去，父母也被盟军抓住判了无期徒刑，自己眼看着也要亡命于祖国，这个时候由于美国急速推出了“回形针行动”里昂也为了还能继续活着选择参加了这次引渡，很快被评为一等人才，被发配去阿拉巴马州做物理学教授，他自己害怕那些追捕纳粹党人的赏金猎人，便和官方合作拿到了新的身份，美国阿拉巴马本地人，化名“诺亚·阿兹纳布尔”开始了自己的第二人生，在阿拉巴马大学他温和有礼，与人为善，还因为自己金发蓝瞳的惹眼长相获得了一些女性学生与同事的追捧，慢慢的，里昂逐渐忘却了自己过去的人生与心愿，他自己在心里已经开始自我认同了自己是一个美国人的事实，直到那一天的到来，美国发布了新的探索法令，跳高行动，皆在公开招募各种能人异士参加探索神秘的南极，里昂看见这条法令时虎躯一震，他知道这次探索必定会获得对国家，乃至人类社会以及文明有所收获的珍宝，如果，只是如果，这次冒险能发现大到足以复国的力量呢？里昂这么想着，如同被润滑的老旧齿轮一般，他的整个人生，心愿，父亲的回答，听到希特勒自杀的战友们的表情，服毒自尽妹妹的死状在眼前一遍一遍咔哒咔哒的重复回放着，冰冷且麻木的内心重新燃起，解封，他知道这次探索他非去不可，如果有一丝一毫的复国希望，他都要不计任何代价的紧紧抓住......"
+    ],
+    "secret_state_refs": [
+      "knowledge_source:char_leon_von_jager_xlsx_desktop_001",
+      "knowledge_source:char_leon_von_jager_xlsx_desktop_001:secrets",
+      "knowledge_source:char_leon_von_jager_xlsx_desktop_001:template:coc7th_integrated_workbook_v1"
+    ],
+    "import_source_id": "char_leon_von_jager_xlsx_desktop_001",
+    "import_template_profile": "coc7th_integrated_workbook_v1",
+    "import_manual_review_required": true,
+    "import_review_pending": true,
+    "last_import_sync_policy": "initialize_if_missing",
+    "last_import_sync_report": {
+      "policy": "initialize_if_missing",
+      "manual_review_required": true,
+      "review_pending": true,
+      "applied_fields": [
+        "participant.display_name",
+        "participant.character.name",
+        "participant.character.occupation",
+        "participant.character.age",
+        "participant.character.attributes",
+        "participant.character.skills",
+        "participant.character.notes",
+        "participant.imported_character_source_id",
+        "character_state.core_stat_baseline",
+        "character_state.skill_baseline",
+        "character_state.import_source_id",
+        "character_state.import_template_profile",
+        "character_state.import_manual_review_required",
+        "character_state.current_hit_points",
+        "character_state.current_magic_points",
+        "character_state.current_sanity",
+        "character_state.inventory",
+        "character_state.private_notes",
+        "character_state.secret_state_refs"
+      ],
+      "skipped_fields": [
+        "character_state.status_effects",
+        "character_state.temporary_conditions",
+        "character_state.clue_ids"
+      ],
+      "ambiguous_fields": [
+        "skill_placeholder:技艺①",
+        "skill_placeholder:技艺②",
+        "skill_placeholder:技艺③",
+        "skill_placeholder:科学②",
+        "skill_placeholder:科学③",
+        "skill_placeholder:格斗①",
+        "skill_placeholder:格斗②",
+        "skill_placeholder:格斗③",
+        "skill_placeholder:射击②",
+        "skill_placeholder:射击③",
+        "skill_placeholder:外语②",
+        "skill_placeholder:外语③",
+        "occupation_helper_mismatch:92:教授（原作向）:物理学教授",
+        "occupation_skill_expectation_missing:母语"
+      ],
+      "warnings": [
+        "检测到未填写的模板占位技能：外语②、外语③、射击②、射击③、技艺①、技艺②、技艺③、格斗①、格斗②、格斗③、科学②、科学③，需要人工确认后再补全。",
+        "简化卡与辅助表当前仅作补充参考，仍需 KP 人工复核关键字段。",
+        "职业序号 92 在辅助表中对应“教授（原作向）”，但人物卡主表填写为“物理学教授”。",
+        "辅助表职业模板期望本职技能可能包括：母语。当前人物卡未可靠匹配这些技能，建议人工复核。"
+      ],
+      "key_field_provenance": {
+        "investigator_name": {
+          "source_workbook": "Leon Von Jager.xlsx",
+          "source_sheet": "人物卡",
+          "source_anchor": "E3"
+        },
+        "occupation": {
+          "source_workbook": "Leon Von Jager.xlsx",
+          "source_sheet": "人物卡",
+          "source_anchor": "E5"
+        },
+        "occupation_sequence_id": {
+          "source_workbook": "Leon Von Jager.xlsx",
+          "source_sheet": "人物卡",
+          "source_anchor": "M5"
+        },
+        "core_stats.strength": {
+          "source_workbook": "Leon Von Jager.xlsx",
+          "source_sheet": "人物卡",
+          "source_anchor": "U3"
+        },
+        "derived_stats.hp": {
+          "source_workbook": "Leon Von Jager.xlsx",
+          "source_sheet": "人物卡",
+          "source_anchor": "E10"
+        },
+        "derived_stats.mp": {
+          "source_workbook": "Leon Von Jager.xlsx",
+          "source_sheet": "人物卡",
+          "source_anchor": "W10"
+        },
+        "derived_stats.san": {
+          "source_workbook": "Leon Von Jager.xlsx",
+          "source_sheet": "人物卡",
+          "source_anchor": "N10"
+        },
+        "starting_inventory": {
+          "source_workbook": "Leon Von Jager.xlsx",
+          "source_sheet": "简化卡 骰娘导入",
+          "source_anchor": "B22:K25"
+        }
+      },
+      "static_import_field_scope": [
+        "participant.display_name",
+        "participant.character.name",
+        "participant.character.occupation",
+        "participant.character.age",
+        "participant.character.attributes",
+        "participant.character.skills",
+        "participant.character.notes",
+        "participant.imported_character_source_id",
+        "character_state.core_stat_baseline",
+        "character_state.skill_baseline",
+        "character_state.import_source_id",
+        "character_state.import_template_profile",
+        "character_state.import_manual_review_required"
+      ],
+      "session_authoritative_field_scope": [
+        "character_state.current_hit_points",
+        "character_state.current_magic_points",
+        "character_state.current_sanity",
+        "character_state.inventory",
+        "character_state.status_effects",
+        "character_state.temporary_conditions",
+        "character_state.clue_ids",
+        "character_state.private_notes",
+        "character_state.secret_state_refs"
+      ]
+    },
+    "last_updated_at": "2026-03-11T06:31:55.331549Z"
+  },
+  "visible_private_state_by_actor": {},
+  "visible_character_states_by_actor": {},
+  "behavior_memory_by_actor": {},
+  "progress_state": null,
+  "keeper_workflow": null,
+  "state_version": 6,
+  "updated_at": "2026-03-11T06:37:27.873141Z"
+}
