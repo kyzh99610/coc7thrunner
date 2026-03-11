@@ -1,0 +1,275 @@
+[
+  {
+    "case_id": "hard_and_extreme_combo",
+    "query_text": "困难成功和极难成功怎么算",
+    "deterministic_resolution_required": true,
+    "minimum_matches": 2,
+    "expected_topics": ["term:hard_success", "term:extreme_success"],
+    "expected_top_topic_any_of": ["term:hard_success", "term:extreme_success"],
+    "expect_human_review": false,
+    "expected_answer_contains": ["优先参考", "引用："],
+    "expected_citation_prefix": "《"
+  },
+  {
+    "case_id": "hard_success_half",
+    "query_text": "困难成功是技能的一半吗",
+    "deterministic_resolution_required": true,
+    "minimum_matches": 1,
+    "expected_topics": ["term:hard_success"],
+    "expected_top_topic": "term:hard_success",
+    "expect_human_review": false,
+    "expected_answer_contains": ["一半"],
+    "expected_citation_prefix": "《"
+  },
+  {
+    "case_id": "extreme_success_one_fifth",
+    "query_text": "极难成功是不是五分之一",
+    "deterministic_resolution_required": true,
+    "minimum_matches": 1,
+    "expected_topics": ["term:extreme_success"],
+    "expected_top_topic": "term:extreme_success",
+    "expect_human_review": false,
+    "expected_answer_contains": ["五分之一"]
+  },
+  {
+    "case_id": "pushed_roll_failure",
+    "query_text": "推动检定失败后怎么处理",
+    "deterministic_resolution_required": true,
+    "minimum_matches": 1,
+    "expected_topics": ["term:pushed_roll"],
+    "expected_top_topic": "term:pushed_roll",
+    "expect_human_review": false,
+    "expected_answer_contains": ["场景压力"]
+  },
+  {
+    "case_id": "pushed_roll_alias",
+    "query_text": "推骰失败会发生什么",
+    "deterministic_resolution_required": true,
+    "minimum_matches": 1,
+    "expected_topics": ["term:pushed_roll"],
+    "expected_top_topic": "term:pushed_roll",
+    "expected_normalized_query": "推动检定失败会发生什么",
+    "expect_human_review": false,
+    "expected_answer_contains": ["场景压力"]
+  },
+  {
+    "case_id": "spot_hidden_alias_zhencha",
+    "query_text": "侦察检定用来干什么",
+    "deterministic_resolution_required": true,
+    "minimum_matches": 1,
+    "expected_topics": ["term:spot_hidden"],
+    "expected_top_topic": "term:spot_hidden",
+    "expected_normalized_query": "侦查检定用来干什么",
+    "expect_human_review": false,
+    "expected_answer_contains": ["核心线索"]
+  },
+  {
+    "case_id": "spot_hidden_alias_guancha",
+    "query_text": "观察检定能不能发现隐藏线索",
+    "deterministic_resolution_required": true,
+    "minimum_matches": 1,
+    "expected_topics": ["term:spot_hidden"],
+    "expected_top_topic": "term:spot_hidden",
+    "expected_normalized_query": "侦查检定能不能发现隐藏线索",
+    "expect_human_review": false,
+    "expected_answer_contains": ["核心线索"]
+  },
+  {
+    "case_id": "listen_alias",
+    "query_text": "听觉判定适合用在什么场景",
+    "deterministic_resolution_required": true,
+    "minimum_matches": 1,
+    "expected_topics": ["term:listen"],
+    "expected_top_topic": "term:listen",
+    "expected_normalized_query": "聆听判定适合用在什么场景",
+    "expect_human_review": false,
+    "expected_answer_contains": ["脚步"]
+  },
+  {
+    "case_id": "library_use_alias",
+    "query_text": "查阅旧报纸该用什么技能",
+    "deterministic_resolution_required": true,
+    "minimum_matches": 1,
+    "expected_topics": ["term:library_use"],
+    "expected_top_topic": "term:library_use",
+    "expect_human_review": false,
+    "expected_answer_contains": ["档案", "报纸"]
+  },
+  {
+    "case_id": "sanity_review",
+    "query_text": "理智检定何时需要人工审阅",
+    "minimum_matches": 1,
+    "expected_topics": ["term:sanity_check"],
+    "expected_top_topic": "term:sanity_check",
+    "expect_human_review": true,
+    "expected_review_reason_contains": "理智",
+    "expected_answer_contains": ["人工审阅"]
+  },
+  {
+    "case_id": "sanity_alias",
+    "query_text": "SAN检定什么时候要人工审阅",
+    "minimum_matches": 1,
+    "expected_topics": ["term:sanity_check"],
+    "expected_top_topic": "term:sanity_check",
+    "expected_normalized_query": "理智检定什么时候要人工审阅",
+    "expect_human_review": true,
+    "expected_review_reason_contains": "人工"
+  },
+  {
+    "case_id": "sanity_point_alias",
+    "query_text": "SAN值归零会怎样",
+    "minimum_matches": 1,
+    "expected_topics": ["term:sanity_point"],
+    "expected_top_topic": "term:sanity_point",
+    "expected_normalized_query": "理智值归零会怎样",
+    "expect_human_review": true,
+    "expected_review_reason_contains": "理智"
+  },
+  {
+    "case_id": "bout_of_madness_alias",
+    "query_text": "临时疯狂什么时候需要Keeper确认",
+    "minimum_matches": 1,
+    "expected_topics": ["term:bout_of_madness"],
+    "expected_top_topic": "term:bout_of_madness",
+    "expected_normalized_query": "疯狂发作什么时候需要Keeper确认",
+    "expect_human_review": true,
+    "expected_review_reason_contains": "高风险"
+  },
+  {
+    "case_id": "house_rule_general",
+    "query_text": "我的 house rule 如何覆盖官方规则",
+    "deterministic_resolution_required": true,
+    "minimum_matches": 1,
+    "expected_top_topic": "term:house_rule",
+    "expected_normalized_query": "我的 房规 如何覆盖官方规则",
+    "expected_priority": 80,
+    "expect_human_review": false,
+    "expected_answer_contains": ["房规优先于官方规则"]
+  },
+  {
+    "case_id": "house_rule_spot_hidden",
+    "query_text": "侦查失败时房规怎么处理",
+    "deterministic_resolution_required": true,
+    "minimum_matches": 1,
+    "expected_topics": ["term:spot_hidden"],
+    "expected_top_topic": "term:spot_hidden",
+    "expected_priority": 80,
+    "expect_human_review": false,
+    "expected_answer_contains": ["核心线索"]
+  },
+  {
+    "case_id": "house_rule_pushed_roll",
+    "query_text": "房规下推动检定失败怎么处理",
+    "deterministic_resolution_required": true,
+    "minimum_matches": 1,
+    "expected_topics": ["term:pushed_roll"],
+    "expected_top_topic": "term:pushed_roll",
+    "expected_priority": 80,
+    "expect_human_review": false,
+    "expected_answer_contains": ["场景压力"]
+  },
+  {
+    "case_id": "brawl_direct",
+    "query_text": "斗殴检定适用于什么场景",
+    "deterministic_resolution_required": true,
+    "minimum_matches": 1,
+    "expected_topics": ["term:brawl"],
+    "expected_top_topic": "term:brawl",
+    "expect_human_review": false,
+    "expected_answer_contains": ["拳击"]
+  },
+  {
+    "case_id": "brawl_alias",
+    "query_text": "近战判定是不是斗殴",
+    "deterministic_resolution_required": true,
+    "minimum_matches": 1,
+    "expected_topics": ["term:brawl"],
+    "expected_top_topic": "term:brawl",
+    "expected_normalized_query": "斗殴判定是不是斗殴",
+    "expect_human_review": false,
+    "expected_answer_contains": ["徒手冲突"]
+  },
+  {
+    "case_id": "kp_only_hidden_for_investigator",
+    "query_text": "幕后真相是什么",
+    "viewer_role": "investigator",
+    "viewer_id": "investigator-1",
+    "minimum_matches": 0,
+    "expect_no_matches": true,
+    "expect_human_review": false
+  },
+  {
+    "case_id": "kp_only_visible_for_keeper",
+    "query_text": "幕后真相是什么",
+    "viewer_role": "keeper",
+    "minimum_matches": 1,
+    "expected_answer_contains": ["秘密通道"],
+    "expect_human_review": false
+  },
+  {
+    "case_id": "shared_subset_visible_for_selected_investigator",
+    "query_text": "地下室入口在哪",
+    "viewer_role": "investigator",
+    "viewer_id": "investigator-1",
+    "minimum_matches": 1,
+    "expected_answer_contains": ["酒窖木架后"],
+    "expect_human_review": false
+  },
+  {
+    "case_id": "shared_subset_hidden_for_other_investigator",
+    "query_text": "地下室入口在哪",
+    "viewer_role": "investigator",
+    "viewer_id": "investigator-2",
+    "minimum_matches": 0,
+    "expect_no_matches": true,
+    "expect_human_review": false
+  },
+  {
+    "case_id": "negative_pure_narrative",
+    "query_text": "我走到窗户旁边坐了下来",
+    "deterministic_resolution_required": false,
+    "minimum_matches": 0,
+    "expected_topics": [],
+    "expect_human_review": false
+  },
+  {
+    "case_id": "negative_filler_only_wo",
+    "query_text": "我想要",
+    "deterministic_resolution_required": false,
+    "minimum_matches": 0,
+    "expected_topics": [],
+    "expect_human_review": false
+  },
+  {
+    "case_id": "negative_greeting_hao",
+    "query_text": "好的我知道了",
+    "deterministic_resolution_required": false,
+    "minimum_matches": 0,
+    "expected_topics": [],
+    "expect_human_review": false
+  },
+  {
+    "case_id": "negative_daily_action",
+    "query_text": "我去餐厅吃早饭",
+    "deterministic_resolution_required": false,
+    "minimum_matches": 0,
+    "expected_topics": [],
+    "expect_human_review": false
+  },
+  {
+    "case_id": "negative_short_after_strip",
+    "query_text": "我去看",
+    "deterministic_resolution_required": false,
+    "minimum_matches": 0,
+    "expected_topics": [],
+    "expect_human_review": false
+  },
+  {
+    "case_id": "positive_multi_term_listen_and_spot",
+    "query_text": "我一边聆听动静一边仔细侦查房间",
+    "deterministic_resolution_required": false,
+    "minimum_matches": 2,
+    "expected_topics": ["term:listen", "term:spot_hidden"],
+    "expect_human_review": false
+  }
+]

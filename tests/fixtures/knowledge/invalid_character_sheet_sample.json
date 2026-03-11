@@ -1,0 +1,22 @@
+{
+  "character_id": "character-invalid-001",
+  "investigator_name": "",
+  "occupation": "学生",
+  "era": "1920s",
+  "core_stats": {
+    "strength": 45,
+    "constitution": 50,
+    "size": 55,
+    "dexterity": 60,
+    "appearance": 50,
+    "intelligence": 70,
+    "power": 55
+  },
+  "derived_stats": {
+    "hp": 10
+  },
+  "skills": {
+    "侦查": "sixty"
+  },
+  "extraction_confidence": 1.2
+}

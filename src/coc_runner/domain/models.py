@@ -1,0 +1,1297 @@
+from __future__ import annotations
+
+from datetime import datetime, timezone
+from typing import Any, Literal
+from uuid import uuid4
+
+from pydantic import BaseModel, ConfigDict, Field, computed_field, field_validator, model_validator
+
+from coc_runner.compat import StrEnum
+
+
+def utc_now() -> datetime:
+    return datetime.now(timezone.utc)
+
+
+class LanguagePreference(StrEnum):
+    ZH_CN = "zh-CN"
+    EN_US = "en-US"
+
+
+class VisibilityScope(StrEnum):
+    PUBLIC = "public"
+    INVESTIGATOR_PRIVATE = "investigator_private"
+    KP_ONLY = "kp_only"
+    SHARED_SUBSET = "shared_subset"
+    SHARED_CLUE = "shared_clue"
+    HIDDEN_CLUE = "hidden_clue"
+    SYSTEM_INTERNAL = "system_internal"
+
+
+class ReviewStatus(StrEnum):
+    PENDING = "pending"
+    APPROVED = "approved"
+    EDITED = "edited"
+    REJECTED = "rejected"
+    REGENERATED = "regenerated"
+    INVALIDATED = "invalidated"
+    # TODO: Snapshot rollback currently restores an earlier session snapshot, so
+    # reviewed/authoritative actions created after the target version disappear
+    # instead of being retained and marked invalidated in-place.
+
+
+class ReviewDecisionType(StrEnum):
+    APPROVE = "approve"
+    EDIT = "edit"
+    REJECT = "reject"
+    REGENERATE = "regenerate"
+    MANUAL_OVERRIDE = "manual_override"
+
+
+class RiskLevel(StrEnum):
+    LOW = "low"
+    MEDIUM = "medium"
+    HIGH = "high"
+    CRITICAL = "critical"
+
+
+class ClueProgressState(StrEnum):
+    UNDISCOVERED = "undiscovered"
+    DISCOVERED = "discovered"
+    PARTIALLY_UNDERSTOOD = "partially_understood"
+    SHARED_WITH_PARTY = "shared_with_party"
+    PRIVATE_TO_ACTOR = "private_to_actor"
+
+
+class ParticipantKind(StrEnum):
+    HUMAN = "human"
+    AI = "ai"
+
+
+class ActorType(StrEnum):
+    KEEPER = "keeper"
+    INVESTIGATOR = "investigator"
+    NPC = "npc"
+    SYSTEM = "system"
+
+
+class ViewerRole(StrEnum):
+    KEEPER = "keeper"
+    INVESTIGATOR = "investigator"
+
+
+class SessionStatus(StrEnum):
+    ACTIVE = "active"
+    PAUSED = "paused"
+    COMPLETED = "completed"
+
+
+class EventType(StrEnum):
+    SESSION_STARTED = "session_started"
+    PLAYER_ACTION = "player_action"
+    REVIEWED_ACTION = "reviewed_action"
+    MANUAL_ACTION = "manual_action"
+    ROLLBACK = "rollback"
+
+
+class AuditActionType(StrEnum):
+    DRAFT_CREATED = "draft_created"
+    REVIEW_DECISION = "review_decision"
+    KEEPER_PROMPT_UPDATED = "keeper_prompt_updated"
+    ROLLBACK = "rollback"
+
+
+class AuthoritativeActionSource(StrEnum):
+    REVIEWED_DRAFT = "reviewed_draft"
+    HUMAN_PLAYER = "human_player"
+    MANUAL_OPERATOR = "manual_operator"
+
+
+class EffectContractOrigin(StrEnum):
+    EXPLICIT = "explicit"
+    LEGACY_STRUCTURED_ACTION = "legacy_structured_action"
+
+
+class TriggerVisibilityMode(StrEnum):
+    ACTOR = "actor"
+    PARTY = "party"
+
+
+class VisibilityEffectTarget(StrEnum):
+    CLUE = "clue"
+
+
+class ScenarioBeatTransitionType(StrEnum):
+    UNLOCKED = "unlocked"
+    BLOCKED = "blocked"
+    COMPLETED = "completed"
+    CURRENT = "current"
+    FAIL_FORWARD_ACTIVATED = "fail_forward_activated"
+
+
+class ScenarioBeatStatus(StrEnum):
+    LOCKED = "locked"
+    UNLOCKED = "unlocked"
+    CURRENT = "current"
+    COMPLETED = "completed"
+    BLOCKED = "blocked"
+
+
+class KeeperPromptStatus(StrEnum):
+    PENDING = "pending"
+    ACKNOWLEDGED = "acknowledged"
+    DISMISSED = "dismissed"
+    COMPLETED = "completed"
+
+
+class KeeperPromptPriority(StrEnum):
+    LOW = "low"
+    MEDIUM = "medium"
+    HIGH = "high"
+
+
+class ObjectiveOrigin(StrEnum):
+    SCENE = "scene"
+    BEAT_FALLBACK = "beat_fallback"
+
+
+class CharacterImportSyncPolicy(StrEnum):
+    INITIALIZE_IF_MISSING = "initialize_if_missing"
+    REFRESH_STATIC_FIELDS_ONLY = "refresh_static_fields_only"
+    REFRESH_WITH_MERGE = "refresh_with_merge"
+    FORCE_REPLACE = "force_replace"
+
+
+class CharacterAttributes(BaseModel):
+    strength: int = Field(ge=1, le=99)
+    constitution: int = Field(ge=1, le=99)
+    size: int = Field(ge=1, le=99)
+    dexterity: int = Field(ge=1, le=99)
+    appearance: int = Field(ge=1, le=99)
+    intelligence: int = Field(ge=1, le=99)
+    power: int = Field(ge=1, le=99)
+    education: int = Field(ge=1, le=99)
+
+
+class Character(BaseModel):
+    id: str = Field(default_factory=lambda: f"character-{uuid4().hex}")
+    name: str = Field(min_length=1, max_length=80)
+    occupation: str = Field(min_length=1, max_length=80)
+    age: int = Field(ge=15, le=99)
+    language_preference: LanguagePreference = LanguagePreference.ZH_CN
+    attributes: CharacterAttributes
+    skills: dict[str, int] = Field(default_factory=dict)
+    notes: str | None = None
+
+    @field_validator("skills")
+    @classmethod
+    def validate_skills(cls, skills: dict[str, int]) -> dict[str, int]:
+        for skill_name, score in skills.items():
+            if not skill_name.strip():
+                raise ValueError("skill names must not be blank")
+            if not 0 <= score <= 100:
+                raise ValueError("skill scores must be between 0 and 100")
+        return skills
+
+    @computed_field(return_type=int)
+    @property
+    def max_hit_points(self) -> int:
+        return max(1, (self.attributes.constitution + self.attributes.size) // 10)
+
+    @computed_field(return_type=int)
+    @property
+    def max_magic_points(self) -> int:
+        return max(1, self.attributes.power // 5)
+
+    @computed_field(return_type=int)
+    @property
+    def starting_sanity(self) -> int:
+        return self.attributes.power
+
+
+class CharacterSecrets(BaseModel):
+    private_notes: list[str] = Field(default_factory=list)
+    personal_clues: list[str] = Field(default_factory=list)
+    personal_goals: list[str] = Field(default_factory=list)
+    hidden_flags: list[str] = Field(default_factory=list)
+    knowledge_history: list[str] = Field(default_factory=list)
+
+
+class ClueDiscoveryTrigger(BaseModel):
+    action_types: list[str] = Field(default_factory=list)
+    required_topic: str | None = None
+    status_on_discovery: ClueProgressState = ClueProgressState.DISCOVERED
+    reveal_to: TriggerVisibilityMode = TriggerVisibilityMode.ACTOR
+    assign_to_actor: bool = True
+    discovered_via: str | None = None
+
+
+class ClueFailForwardTrigger(BaseModel):
+    action_types: list[str] = Field(default_factory=list)
+    required_topic: str | None = None
+    fallback_status: ClueProgressState = ClueProgressState.PARTIALLY_UNDERSTOOD
+    reveal_to: TriggerVisibilityMode = TriggerVisibilityMode.ACTOR
+    assign_to_actor: bool = False
+    discovered_via: str = "fail_forward"
+
+
+class SceneTransitionEffect(BaseModel):
+    scene_id: str | None = None
+    title: str | None = None
+    summary: str | None = None
+    phase: str | None = None
+    required_current_phase: str | None = None
+    required_discovered_clue_ids: list[str] = Field(default_factory=list)
+    consequence_tags: list[str] = Field(default_factory=list)
+    consequence_notes: list[str] = Field(default_factory=list)
+
+
+class ClueStateEffect(BaseModel):
+    clue_id: str | None = None
+    clue_title: str | None = None
+    status: ClueProgressState | None = None
+    visibility_scope: VisibilityScope | None = None
+    visible_to: list[str] = Field(default_factory=list)
+    add_visible_to: list[str] = Field(default_factory=list)
+    remove_visible_to: list[str] = Field(default_factory=list)
+    discovered_by: list[str] = Field(default_factory=list)
+    add_discovered_by: list[str] = Field(default_factory=list)
+    remove_discovered_by: list[str] = Field(default_factory=list)
+    owner_actor_ids: list[str] = Field(default_factory=list)
+    add_owner_actor_ids: list[str] = Field(default_factory=list)
+    remove_owner_actor_ids: list[str] = Field(default_factory=list)
+    discovered_via: str | None = None
+    share_with_party: bool = False
+    private_to_actor_ids: list[str] = Field(default_factory=list)
+    activate_fail_forward: bool = False
+
+
+class CharacterStatEffect(BaseModel):
+    actor_id: str
+    current_hit_points: int | None = Field(default=None, ge=0)
+    current_magic_points: int | None = Field(default=None, ge=0)
+    current_sanity: int | None = Field(default=None, ge=0, le=99)
+    hp_delta: int | None = None
+    mp_delta: int | None = None
+    san_delta: int | None = None
+
+
+class InventoryEffect(BaseModel):
+    actor_id: str
+    add_items: list[str] = Field(default_factory=list)
+    remove_items: list[str] = Field(default_factory=list)
+
+
+class VisibilityEffect(BaseModel):
+    target_kind: VisibilityEffectTarget = VisibilityEffectTarget.CLUE
+    target_id: str | None = None
+    target_title: str | None = None
+    visibility_scope: VisibilityScope | None = None
+    visible_to: list[str] = Field(default_factory=list)
+    add_visible_to: list[str] = Field(default_factory=list)
+    remove_visible_to: list[str] = Field(default_factory=list)
+
+
+class StatusEffect(BaseModel):
+    actor_id: str
+    add_status_effects: list[str] = Field(default_factory=list)
+    remove_status_effects: list[str] = Field(default_factory=list)
+    add_temporary_conditions: list[str] = Field(default_factory=list)
+    remove_temporary_conditions: list[str] = Field(default_factory=list)
+    add_private_notes: list[str] = Field(default_factory=list)
+    remove_private_notes: list[str] = Field(default_factory=list)
+    add_secret_state_refs: list[str] = Field(default_factory=list)
+    remove_secret_state_refs: list[str] = Field(default_factory=list)
+
+
+class ActionEffects(BaseModel):
+    scene_transitions: list[SceneTransitionEffect] = Field(default_factory=list)
+    clue_state_effects: list[ClueStateEffect] = Field(default_factory=list)
+    character_stat_effects: list[CharacterStatEffect] = Field(default_factory=list)
+    inventory_effects: list[InventoryEffect] = Field(default_factory=list)
+    visibility_effects: list[VisibilityEffect] = Field(default_factory=list)
+    status_effects: list[StatusEffect] = Field(default_factory=list)
+
+
+class AppliedEffectRecord(BaseModel):
+    effect_type: str = Field(min_length=1)
+    target_ref: str = Field(min_length=1)
+    summary: str = Field(min_length=1)
+    reversible_by_rollback: bool = True
+
+
+class ScenarioClue(BaseModel):
+    clue_id: str = Field(default_factory=lambda: f"clue-{uuid4().hex}")
+    title: str = Field(min_length=1, max_length=120)
+    text: str = Field(min_length=1)
+    status: ClueProgressState = ClueProgressState.UNDISCOVERED
+    visibility_scope: VisibilityScope = VisibilityScope.PUBLIC
+    visible_to: list[str] = Field(default_factory=list)
+    core_clue_flag: bool = False
+    alternate_paths: list[str] = Field(default_factory=list)
+    fail_forward_text: str | None = None
+    discovered_by: list[str] = Field(default_factory=list)
+    owner_actor_ids: list[str] = Field(default_factory=list)
+    discovered_via: str | None = None
+    discovery_triggers: list[ClueDiscoveryTrigger] = Field(default_factory=list)
+    fail_forward_triggers: list[ClueFailForwardTrigger] = Field(default_factory=list)
+    last_updated_at: datetime = Field(default_factory=utc_now)
+    language_preference: LanguagePreference = LanguagePreference.ZH_CN
+
+    @model_validator(mode="after")
+    def validate_core_clue_support(self) -> "ScenarioClue":
+        if self.core_clue_flag and not (self.alternate_paths or self.fail_forward_text):
+            raise ValueError(
+                "core clues require alternate_paths or fail_forward_text for fail-forward support"
+            )
+        return self
+
+
+class ClueStateCondition(BaseModel):
+    clue_id: str | None = None
+    clue_title: str | None = None
+    state: ClueProgressState
+
+    @model_validator(mode="after")
+    def validate_clue_ref(self) -> "ClueStateCondition":
+        if self.clue_id or self.clue_title:
+            return self
+        raise ValueError("clue_state conditions require clue_id or clue_title")
+
+
+class ClueDiscoveredCondition(BaseModel):
+    clue_id: str | None = None
+    clue_title: str | None = None
+
+    @model_validator(mode="after")
+    def validate_clue_ref(self) -> "ClueDiscoveredCondition":
+        if self.clue_id or self.clue_title:
+            return self
+        raise ValueError("clue_discovered conditions require clue_id or clue_title")
+
+
+class SceneIsCondition(BaseModel):
+    scene_id: str | None = None
+    title: str | None = None
+    phase: str | None = None
+
+    @model_validator(mode="after")
+    def validate_scene_ref(self) -> "SceneIsCondition":
+        if self.scene_id or self.title or self.phase:
+            return self
+        raise ValueError("scene_is conditions require scene_id, title, or phase")
+
+
+class ActorHasStatusCondition(BaseModel):
+    actor_id: str
+    status: str = Field(min_length=1)
+
+
+class AnyActorHasStatusCondition(BaseModel):
+    status: str = Field(min_length=1)
+    actor_ids: list[str] = Field(default_factory=list)
+
+
+class ClueVisibleToActorCondition(BaseModel):
+    actor_id: str
+    clue_id: str | None = None
+    clue_title: str | None = None
+
+    @model_validator(mode="after")
+    def validate_clue_ref(self) -> "ClueVisibleToActorCondition":
+        if self.clue_id or self.clue_title:
+            return self
+        raise ValueError("clue_visible_to_actor conditions require clue_id or clue_title")
+
+
+class ActorOwnsClueCondition(BaseModel):
+    actor_id: str
+    clue_id: str | None = None
+    clue_title: str | None = None
+
+    @model_validator(mode="after")
+    def validate_clue_ref(self) -> "ActorOwnsClueCondition":
+        if self.clue_id or self.clue_title:
+            return self
+        raise ValueError("actor_owns_clue conditions require clue_id or clue_title")
+
+
+class BeatStatusIsCondition(BaseModel):
+    beat_id: str = Field(min_length=1)
+    status: ScenarioBeatStatus
+
+
+class CurrentSceneInCondition(BaseModel):
+    scene_ids: list[str] = Field(default_factory=list)
+    titles: list[str] = Field(default_factory=list)
+    phases: list[str] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def validate_scene_scope(self) -> "CurrentSceneInCondition":
+        if self.scene_ids or self.titles or self.phases:
+            return self
+        raise ValueError("current_scene_in conditions require scene_ids, titles, or phases")
+
+
+class HandoffTopicCondition(BaseModel):
+    topic: str = Field(min_length=1)
+
+
+class DeterministicHandoffTopicCondition(BaseModel):
+    topic: str = Field(min_length=1)
+
+
+class ReviewRequiredCondition(BaseModel):
+    expected: bool = True
+
+
+class BeatCondition(BaseModel):
+    all_of: list["BeatCondition"] = Field(default_factory=list)
+    any_of: list["BeatCondition"] = Field(default_factory=list)
+    clue_discovered: ClueDiscoveredCondition | None = None
+    clue_state: ClueStateCondition | None = None
+    scene_is: SceneIsCondition | None = None
+    current_scene_in: CurrentSceneInCondition | None = None
+    actor_has_status: ActorHasStatusCondition | None = None
+    any_actor_has_status: AnyActorHasStatusCondition | None = None
+    clue_visible_to_actor: ClueVisibleToActorCondition | None = None
+    actor_owns_clue: ActorOwnsClueCondition | None = None
+    beat_status_is: BeatStatusIsCondition | None = None
+    deterministic_handoff_topic_matches: DeterministicHandoffTopicCondition | None = None
+    handoff_topic_matches: HandoffTopicCondition | None = None
+    review_required: ReviewRequiredCondition | None = None
+
+    @model_validator(mode="after")
+    def validate_shape(self) -> "BeatCondition":
+        branches = 0
+        if self.all_of:
+            branches += 1
+        if self.any_of:
+            branches += 1
+        if any(
+            leaf is not None
+            for leaf in (
+                self.clue_discovered,
+                self.clue_state,
+                self.scene_is,
+                self.current_scene_in,
+                self.actor_has_status,
+                self.any_actor_has_status,
+                self.clue_visible_to_actor,
+                self.actor_owns_clue,
+                self.beat_status_is,
+                self.deterministic_handoff_topic_matches,
+                self.handoff_topic_matches,
+                self.review_required,
+            )
+        ):
+            branches += 1
+        if branches != 1:
+            raise ValueError(
+                "beat conditions must define exactly one of all_of, any_of, or a single leaf condition"
+            )
+        return self
+
+
+class BeatConsequence(BaseModel):
+    unlock_beat_ids: list[str] = Field(default_factory=list)
+    block_beat_ids: list[str] = Field(default_factory=list)
+    activate_fail_forward_for_clue_ids: list[str] = Field(default_factory=list)
+    reveal_clues: list["RevealClueConsequence"] = Field(default_factory=list)
+    reveal_scenes: list["RevealSceneConsequence"] = Field(default_factory=list)
+    apply_statuses: list["ApplyStatusConsequence"] = Field(default_factory=list)
+    npc_attitude_updates: list["UpdateNPCAttitudeConsequence"] = Field(default_factory=list)
+    grant_private_notes: list["GrantPrivateNoteConsequence"] = Field(default_factory=list)
+    queue_kp_prompts: list["QueueKPPromptConsequence"] = Field(default_factory=list)
+    mark_scene_objectives_complete: list["MarkSceneObjectiveCompleteConsequence"] = Field(
+        default_factory=list
+    )
+
+
+class RevealClueConsequence(BaseModel):
+    clue_id: str | None = None
+    clue_title: str | None = None
+    status: ClueProgressState = ClueProgressState.DISCOVERED
+    share_with_party: bool = True
+    visible_to_actor_ids: list[str] = Field(default_factory=list)
+    owner_actor_ids: list[str] = Field(default_factory=list)
+    discovered_by_actor_ids: list[str] = Field(default_factory=list)
+    discovered_via: str | None = None
+
+    @model_validator(mode="after")
+    def validate_clue_ref(self) -> "RevealClueConsequence":
+        if self.clue_id or self.clue_title:
+            return self
+        raise ValueError("reveal_clue consequences require clue_id or clue_title")
+
+
+class RevealSceneConsequence(BaseModel):
+    scene_id: str | None = None
+    scene_ref: str | None = None
+    summary: str | None = None
+
+    @model_validator(mode="after")
+    def validate_scene_ref(self) -> "RevealSceneConsequence":
+        if self.scene_id or self.scene_ref:
+            return self
+        raise ValueError("reveal_scene consequences require scene_id or scene_ref")
+
+
+class ApplyStatusConsequence(BaseModel):
+    actor_id: str
+    add_status_effects: list[str] = Field(default_factory=list)
+    add_temporary_conditions: list[str] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def validate_status_payload(self) -> "ApplyStatusConsequence":
+        if self.add_status_effects or self.add_temporary_conditions:
+            return self
+        raise ValueError("apply_status consequences require at least one status or temporary condition")
+
+
+class UpdateNPCAttitudeConsequence(BaseModel):
+    npc_id: str = Field(min_length=1)
+    attitude: str = Field(min_length=1)
+    note: str | None = None
+
+
+class GrantPrivateNoteConsequence(BaseModel):
+    actor_id: str
+    note: str = Field(min_length=1)
+
+
+class QueueKPPromptConsequence(BaseModel):
+    prompt_text: str = Field(min_length=1)
+    category: str | None = None
+    scene_id: str | None = None
+    priority: KeeperPromptPriority = KeeperPromptPriority.MEDIUM
+    assigned_to: str | None = None
+    reason: str | None = None
+
+
+class MarkSceneObjectiveCompleteConsequence(BaseModel):
+    objective_id: str | None = None
+    scene_id: str | None = None
+    objective_label: str | None = None
+    beat_id: str | None = None
+
+
+class SceneObjective(BaseModel):
+    objective_id: str = Field(default_factory=lambda: f"objective-{uuid4().hex}")
+    text: str = Field(min_length=1)
+    beat_id: str | None = None
+    notes: str | None = None
+
+
+class ScenarioScene(BaseModel):
+    scene_id: str = Field(default_factory=lambda: f"scene-{uuid4().hex}")
+    title: str = Field(min_length=1, max_length=120)
+    summary: str = Field(min_length=1)
+    phase: str = Field(default="investigation", min_length=1, max_length=40)
+    visibility_scope: VisibilityScope = VisibilityScope.PUBLIC
+    visible_to: list[str] = Field(default_factory=list)
+    revealed: bool = False
+    linked_clue_ids: list[str] = Field(default_factory=list)
+    scene_objectives: list[SceneObjective] = Field(default_factory=list)
+    keeper_notes: list[str] = Field(default_factory=list)
+    runtime_notes: list[str] = Field(default_factory=list)
+
+
+class ScenarioNPC(BaseModel):
+    npc_id: str = Field(min_length=1)
+    name: str = Field(min_length=1, max_length=80)
+    role: str | None = None
+    initial_attitude: str = Field(default="neutral", min_length=1)
+    keeper_notes: list[str] = Field(default_factory=list)
+
+
+class ScenarioBeat(BaseModel):
+    beat_id: str = Field(default_factory=lambda: f"beat-{uuid4().hex}")
+    title: str = Field(min_length=1, max_length=120)
+    status: ScenarioBeatStatus = ScenarioBeatStatus.LOCKED
+    scene_objective: str | None = None
+    required_clues: list[str] = Field(default_factory=list)
+    optional_clues: list[str] = Field(default_factory=list)
+    start_unlocked: bool = False
+    unlock_conditions: BeatCondition | None = None
+    block_conditions: BeatCondition | None = None
+    complete_conditions: BeatCondition | None = None
+    unlock_when: BeatCondition | None = None
+    block_when: BeatCondition | None = None
+    complete_when: BeatCondition | None = None
+    consequences: list[BeatConsequence] = Field(default_factory=list)
+    next_beats: list[str] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def normalize_progression_fields(self) -> "ScenarioBeat":
+        if self.unlock_conditions is None and self.unlock_when is not None:
+            self.unlock_conditions = self.unlock_when
+        if self.unlock_when is None and self.unlock_conditions is not None:
+            self.unlock_when = self.unlock_conditions
+        if self.block_conditions is None and self.block_when is not None:
+            self.block_conditions = self.block_when
+        if self.block_when is None and self.block_conditions is not None:
+            self.block_when = self.block_conditions
+        if self.complete_conditions is None and self.complete_when is not None:
+            self.complete_conditions = self.complete_when
+        if self.complete_when is None and self.complete_conditions is not None:
+            self.complete_when = self.complete_conditions
+        return self
+
+
+class ScenarioBeatTransitionRecord(BaseModel):
+    beat_id: str
+    transition: ScenarioBeatTransitionType
+    summary: str = Field(min_length=1)
+    trigger_action_id: str | None = None
+    reason: str | None = None
+    condition_refs: list[str] = Field(default_factory=list)
+    consequence_refs: list[str] = Field(default_factory=list)
+
+
+class ActiveSceneObjective(BaseModel):
+    objective_id: str
+    text: str = Field(min_length=1)
+    scene_id: str | None = None
+    beat_id: str | None = None
+    origin: ObjectiveOrigin = ObjectiveOrigin.SCENE
+    source_action_id: str | None = None
+    trigger_reason: str | None = None
+    resolved: bool = False
+    resolved_by_action_id: str | None = None
+
+
+class CompletedObjectiveRecord(BaseModel):
+    objective_id: str
+    text: str = Field(min_length=1)
+    scene_id: str | None = None
+    beat_id: str | None = None
+    origin: ObjectiveOrigin = ObjectiveOrigin.SCENE
+    source_action_id: str | None = None
+    trigger_reason: str | None = None
+    completed_at: datetime = Field(default_factory=utc_now)
+
+
+class QueuedKPPrompt(BaseModel):
+    prompt_id: str = Field(default_factory=lambda: f"kp-prompt-{uuid4().hex}")
+    prompt_text: str = Field(min_length=1)
+    beat_id: str | None = None
+    scene_id: str | None = None
+    source_action_id: str | None = None
+    category: str | None = None
+    priority: KeeperPromptPriority = KeeperPromptPriority.MEDIUM
+    assigned_to: str | None = None
+    notes: list[str] = Field(default_factory=list)
+    status: KeeperPromptStatus = KeeperPromptStatus.PENDING
+    trigger_reason: str | None = None
+    created_at: datetime = Field(default_factory=utc_now)
+    updated_at: datetime = Field(default_factory=utc_now)
+    acknowledged_at: datetime | None = None
+    dismissed_at: datetime | None = None
+    completed_at: datetime | None = None
+
+
+class KeeperWorkflowSummary(BaseModel):
+    active_prompt_count: int = 0
+    unresolved_objective_count: int = 0
+    recently_completed_objectives: list[CompletedObjectiveRecord] = Field(default_factory=list)
+    recent_beat_transitions: list[ScenarioBeatTransitionRecord] = Field(default_factory=list)
+    prompt_lines: list[str] = Field(default_factory=list)
+    objective_lines: list[str] = Field(default_factory=list)
+    completed_objective_lines: list[str] = Field(default_factory=list)
+    progression_lines: list[str] = Field(default_factory=list)
+    summary_lines: list[str] = Field(default_factory=list)
+
+
+class KeeperWorkflowState(BaseModel):
+    active_prompts: list[QueuedKPPrompt] = Field(default_factory=list)
+    unresolved_objectives: list[ActiveSceneObjective] = Field(default_factory=list)
+    summary: KeeperWorkflowSummary = Field(default_factory=KeeperWorkflowSummary)
+
+
+class ScenarioProgressState(BaseModel):
+    current_beat: str | None = None
+    unlocked_beats: list[str] = Field(default_factory=list)
+    blocked_beats: list[str] = Field(default_factory=list)
+    completed_beats: list[str] = Field(default_factory=list)
+    activated_fail_forward_clues: list[str] = Field(default_factory=list)
+    revealed_scene_refs: list[str] = Field(default_factory=list)
+    completed_objectives: list[str] = Field(default_factory=list)
+    # Legacy compatibility mirror. Prefer completed_objectives in new code.
+    completed_scene_objectives: list[str] = Field(default_factory=list)
+    completed_objective_history: list[CompletedObjectiveRecord] = Field(default_factory=list)
+    npc_attitudes: dict[str, str] = Field(default_factory=dict)
+    queued_kp_prompts: list[QueuedKPPrompt] = Field(default_factory=list)
+    active_scene_objectives: list[ActiveSceneObjective] = Field(default_factory=list)
+    transition_history: list[ScenarioBeatTransitionRecord] = Field(default_factory=list)
+    last_updated_at: datetime = Field(default_factory=utc_now)
+
+    @model_validator(mode="after")
+    def normalize_completed_objective_lists(self) -> "ScenarioProgressState":
+        merged: list[str] = []
+        for value in [*self.completed_objectives, *self.completed_scene_objectives]:
+            if value not in merged:
+                merged.append(value)
+        self.completed_objectives = list(merged)
+        self.completed_scene_objectives = list(merged)
+        return self
+
+
+class CharacterImportFieldSource(BaseModel):
+    source_workbook: str
+    source_sheet: str
+    source_anchor: str | None = None
+
+
+class CharacterImportSyncReport(BaseModel):
+    policy: CharacterImportSyncPolicy
+    manual_review_required: bool = False
+    review_pending: bool = False
+    applied_fields: list[str] = Field(default_factory=list)
+    skipped_fields: list[str] = Field(default_factory=list)
+    ambiguous_fields: list[str] = Field(default_factory=list)
+    warnings: list[str] = Field(default_factory=list)
+    key_field_provenance: dict[str, CharacterImportFieldSource] = Field(default_factory=dict)
+    static_import_field_scope: list[str] = Field(default_factory=list)
+    session_authoritative_field_scope: list[str] = Field(default_factory=list)
+
+
+class SessionCharacterState(BaseModel):
+    actor_id: str
+    current_hit_points: int = Field(ge=0)
+    current_magic_points: int = Field(ge=0)
+    current_sanity: int = Field(ge=0, le=99)
+    core_stat_baseline: dict[str, int] = Field(default_factory=dict)
+    skill_baseline: dict[str, int] = Field(default_factory=dict)
+    inventory: list[str] = Field(default_factory=list)
+    status_effects: list[str] = Field(default_factory=list)
+    temporary_conditions: list[str] = Field(default_factory=list)
+    clue_ids: list[str] = Field(default_factory=list)
+    private_notes: list[str] = Field(default_factory=list)
+    secret_state_refs: list[str] = Field(default_factory=list)
+    import_source_id: str | None = None
+    import_template_profile: str | None = None
+    import_manual_review_required: bool = False
+    import_review_pending: bool = False
+    last_import_sync_policy: CharacterImportSyncPolicy | None = None
+    last_import_sync_report: CharacterImportSyncReport | None = None
+    last_updated_at: datetime = Field(default_factory=utc_now)
+
+
+class ScenarioScaffold(BaseModel):
+    scenario_id: str = Field(default_factory=lambda: f"scenario-{uuid4().hex}")
+    title: str = Field(min_length=1, max_length=120)
+    hook: str = Field(min_length=1)
+    starting_location: str = Field(min_length=1, max_length=120)
+    start_scene_id: str | None = None
+    tags: list[str] = Field(default_factory=list)
+    scenes: list[ScenarioScene] = Field(default_factory=list)
+    clues: list[ScenarioClue] = Field(default_factory=list)
+    beats: list[ScenarioBeat] = Field(default_factory=list)
+    npcs: list[ScenarioNPC] = Field(default_factory=list)
+    language_preference: LanguagePreference | None = None
+
+    @model_validator(mode="after")
+    def validate_beats(self) -> "ScenarioScaffold":
+        scene_ids = [scene.scene_id for scene in self.scenes]
+        if len(scene_ids) != len(set(scene_ids)):
+            raise ValueError("scenario scene_ids must be unique")
+        if self.start_scene_id is not None and self.start_scene_id not in set(scene_ids):
+            raise ValueError(f"scenario start_scene_id {self.start_scene_id} was not found")
+        beat_ids = [beat.beat_id for beat in self.beats]
+        if len(beat_ids) != len(set(beat_ids)):
+            raise ValueError("scenario beat_ids must be unique")
+        scene_id_set = set(scene_ids)
+        clue_refs = {
+            clue_ref
+            for clue in self.clues
+            for clue_ref in (clue.clue_id, clue.title)
+            if clue_ref
+        }
+        beat_id_set = set(beat_ids)
+        objective_ids: set[str] = set()
+
+        def validate_condition_refs(condition: BeatCondition | None, *, beat_id: str) -> None:
+            if condition is None:
+                return
+            for nested in condition.all_of:
+                validate_condition_refs(nested, beat_id=beat_id)
+            for nested in condition.any_of:
+                validate_condition_refs(nested, beat_id=beat_id)
+            if (
+                condition.scene_is is not None
+                and condition.scene_is.scene_id is not None
+                and condition.scene_is.scene_id not in scene_id_set
+            ):
+                raise ValueError(
+                    f"scenario beat {beat_id} condition references unknown scene {condition.scene_is.scene_id}"
+                )
+            if condition.current_scene_in is not None:
+                for scene_id in condition.current_scene_in.scene_ids:
+                    if scene_id not in scene_id_set:
+                        raise ValueError(
+                            f"scenario beat {beat_id} condition references unknown scene {scene_id}"
+                        )
+            if (
+                condition.beat_status_is is not None
+                and condition.beat_status_is.beat_id not in beat_id_set
+            ):
+                raise ValueError(
+                    f"scenario beat {beat_id} condition references unknown beat {condition.beat_status_is.beat_id}"
+                )
+
+        for scene in self.scenes:
+            for clue_ref in scene.linked_clue_ids:
+                if clue_ref not in clue_refs:
+                    raise ValueError(
+                        f"scenario scene {scene.scene_id} references unknown clue {clue_ref}"
+                    )
+            for objective in scene.scene_objectives:
+                if objective.objective_id in objective_ids:
+                    raise ValueError(
+                        f"scenario objective_id {objective.objective_id} must be unique"
+                    )
+                objective_ids.add(objective.objective_id)
+                if objective.beat_id is not None and objective.beat_id not in beat_id_set:
+                    raise ValueError(
+                        f"scenario scene objective {objective.objective_id} references unknown beat {objective.beat_id}"
+                    )
+        for beat in self.beats:
+            validate_condition_refs(beat.unlock_conditions or beat.unlock_when, beat_id=beat.beat_id)
+            validate_condition_refs(beat.block_conditions or beat.block_when, beat_id=beat.beat_id)
+            validate_condition_refs(beat.complete_conditions or beat.complete_when, beat_id=beat.beat_id)
+            for clue_ref in (*beat.required_clues, *beat.optional_clues):
+                if clue_ref not in clue_refs:
+                    raise ValueError(
+                        f"scenario beat {beat.beat_id} references unknown clue {clue_ref}"
+                    )
+            for next_beat_id in beat.next_beats:
+                if next_beat_id not in beat_id_set:
+                    raise ValueError(f"scenario beat {beat.beat_id} references unknown next beat {next_beat_id}")
+            for consequence in beat.consequences:
+                for target_beat_id in (*consequence.unlock_beat_ids, *consequence.block_beat_ids):
+                    if target_beat_id not in beat_id_set:
+                        raise ValueError(
+                            f"scenario beat {beat.beat_id} consequence references unknown beat {target_beat_id}"
+                        )
+                for clue_ref in consequence.activate_fail_forward_for_clue_ids:
+                    if clue_ref not in clue_refs:
+                        raise ValueError(
+                            f"scenario beat {beat.beat_id} consequence references unknown clue {clue_ref}"
+                        )
+                for reveal_clue in consequence.reveal_clues:
+                    reveal_ref = reveal_clue.clue_id or reveal_clue.clue_title or "unknown"
+                    if reveal_ref not in clue_refs:
+                        raise ValueError(
+                            f"scenario beat {beat.beat_id} consequence references unknown clue {reveal_ref}"
+                        )
+                for reveal_scene in consequence.reveal_scenes:
+                    reveal_scene_ref = reveal_scene.scene_id or reveal_scene.scene_ref or "unknown"
+                    if reveal_scene_ref not in scene_id_set:
+                        raise ValueError(
+                            f"scenario beat {beat.beat_id} consequence references unknown scene {reveal_scene_ref}"
+                        )
+                for objective_mark in consequence.mark_scene_objectives_complete:
+                    if objective_mark.beat_id is not None and objective_mark.beat_id not in beat_id_set:
+                        raise ValueError(
+                            f"scenario beat {beat.beat_id} consequence references unknown beat {objective_mark.beat_id}"
+                        )
+                    if objective_mark.scene_id is not None and objective_mark.scene_id not in scene_id_set:
+                        raise ValueError(
+                            f"scenario beat {beat.beat_id} consequence references unknown scene {objective_mark.scene_id}"
+                        )
+                    if objective_mark.objective_id is not None and objective_mark.objective_id not in objective_ids:
+                        raise ValueError(
+                            f"scenario beat {beat.beat_id} consequence references unknown objective {objective_mark.objective_id}"
+                        )
+        return self
+
+
+class SceneState(BaseModel):
+    scene_id: str = Field(default_factory=lambda: f"scene-{uuid4().hex}")
+    title: str = Field(min_length=1, max_length=120)
+    summary: str = Field(min_length=1)
+    phase: str = Field(default="investigation", min_length=1, max_length=40)
+
+
+class SessionEvent(BaseModel):
+    event_id: str = Field(default_factory=lambda: f"event-{uuid4().hex}")
+    event_type: EventType
+    actor_id: str | None = None
+    actor_type: ActorType = ActorType.SYSTEM
+    visibility_scope: VisibilityScope = VisibilityScope.PUBLIC
+    visible_to: list[str] = Field(default_factory=list)
+    text: str = Field(min_length=1)
+    structured_payload: dict[str, Any] = Field(default_factory=dict)
+    rules_grounding: "RuleGroundingSummary | None" = None
+    is_authoritative: bool = True
+    hallucination_flag: bool = False
+    language_preference: LanguagePreference = LanguagePreference.ZH_CN
+    created_at: datetime = Field(default_factory=utc_now)
+
+
+class RuleGroundingSummary(BaseModel):
+    query_text: str = Field(min_length=1)
+    normalized_query: str | None = None
+    matched_topics: list[str] = Field(default_factory=list)
+    core_clue_flag: bool = False
+    alternate_paths: list[str] = Field(default_factory=list)
+    citations: list[str] = Field(default_factory=list)
+    deterministic_resolution_required: bool = False
+    deterministic_handoff_topic: str | None = None
+    conflicts_found: bool = False
+    conflict_topics: list[str] = Field(default_factory=list)
+    conflict_explanation: str | None = None
+    human_review_recommended: bool = False
+    human_review_reason: str | None = None
+    chinese_answer_draft: str | None = None
+    review_summary: str | None = None
+
+
+class DraftAction(BaseModel):
+    draft_id: str = Field(default_factory=lambda: f"draft-{uuid4().hex}")
+    actor_id: str
+    actor_type: ActorType
+    visibility_scope: VisibilityScope
+    visible_to: list[str] = Field(default_factory=list)
+    draft_text: str = Field(min_length=1)
+    structured_action: dict[str, Any] = Field(default_factory=dict)
+    effects: ActionEffects = Field(default_factory=ActionEffects)
+    effect_contract_origin: EffectContractOrigin = EffectContractOrigin.EXPLICIT
+    risk_level: RiskLevel = RiskLevel.LOW
+    core_clue_flag: bool = False
+    affects_state: list[str] = Field(default_factory=list)
+    requires_explicit_approval: bool = False
+    rationale_summary: str = Field(default="待人工审核")
+    rules_grounding: RuleGroundingSummary | None = None
+    behavior_context: list["BehaviorPrecedent"] = Field(default_factory=list)
+    supersedes_draft_id: str | None = None
+    created_at_version: int = Field(default=1, ge=1)
+    editable_fields: list[str] = Field(
+        default_factory=lambda: ["draft_text", "structured_action", "rationale_summary"]
+    )
+    review_status: ReviewStatus = ReviewStatus.PENDING
+    language_preference: LanguagePreference = LanguagePreference.ZH_CN
+    created_at: datetime = Field(default_factory=utc_now)
+
+
+class ReviewDecision(BaseModel):
+    decision: ReviewDecisionType
+    editor_notes: str | None = None
+    approved_by: str | None = None
+    approved_at: datetime | None = None
+
+
+class BehaviorPrecedent(BaseModel):
+    precedent_id: str = Field(default_factory=lambda: f"precedent-{uuid4().hex}")
+    actor_id: str
+    source_review_id: str
+    final_text: str = Field(min_length=1)
+    final_structured_action: dict[str, Any] = Field(default_factory=dict)
+    language_preference: LanguagePreference = LanguagePreference.ZH_CN
+    created_at: datetime = Field(default_factory=utc_now)
+
+
+class ReviewedAction(BaseModel):
+    review_id: str = Field(default_factory=lambda: f"review-{uuid4().hex}")
+    draft_id: str
+    actor_id: str
+    actor_type: ActorType
+    visibility_scope: VisibilityScope
+    visible_to: list[str] = Field(default_factory=list)
+    review_status: ReviewStatus
+    final_text: str = Field(min_length=1)
+    final_structured_action: dict[str, Any] = Field(default_factory=dict)
+    effects: ActionEffects = Field(default_factory=ActionEffects)
+    effect_contract_origin: EffectContractOrigin = EffectContractOrigin.EXPLICIT
+    rules_grounding: RuleGroundingSummary | None = None
+    review_summary: str | None = None
+    execution_summary: str | None = None
+    applied_state_changes: list[str] = Field(default_factory=list)
+    applied_effects: list[AppliedEffectRecord] = Field(default_factory=list)
+    applied_beat_transitions: list[ScenarioBeatTransitionRecord] = Field(default_factory=list)
+    learn_from_final: bool = True
+    decision: ReviewDecision
+    language_preference: LanguagePreference = LanguagePreference.ZH_CN
+    authoritative_action_id: str | None = None
+    canonical_event_id: str | None = None
+    invalidated_by_rollback_version: int | None = None
+    created_at: datetime = Field(default_factory=utc_now)
+
+
+class AuthoritativeAction(BaseModel):
+    action_id: str = Field(default_factory=lambda: f"action-{uuid4().hex}")
+    source_type: AuthoritativeActionSource
+    actor_id: str
+    actor_type: ActorType
+    visibility_scope: VisibilityScope
+    visible_to: list[str] = Field(default_factory=list)
+    text: str = Field(min_length=1)
+    structured_action: dict[str, Any] = Field(default_factory=dict)
+    effects: ActionEffects = Field(default_factory=ActionEffects)
+    effect_contract_origin: EffectContractOrigin = EffectContractOrigin.EXPLICIT
+    applied_effects: list[AppliedEffectRecord] = Field(default_factory=list)
+    applied_beat_transitions: list[ScenarioBeatTransitionRecord] = Field(default_factory=list)
+    rules_grounding: RuleGroundingSummary | None = None
+    review_summary: str | None = None
+    execution_summary: str | None = None
+    draft_id: str | None = None
+    review_id: str | None = None
+    canonical_event_id: str | None = None
+    invalidated_by_rollback_version: int | None = None
+    language_preference: LanguagePreference = LanguagePreference.ZH_CN
+    created_at: datetime = Field(default_factory=utc_now)
+
+
+class AuditLogEntry(BaseModel):
+    audit_id: str = Field(default_factory=lambda: f"audit-{uuid4().hex}")
+    action: AuditActionType
+    actor_id: str | None = None
+    subject_id: str | None = None
+    session_version: int = Field(ge=1)
+    details: dict[str, Any] = Field(default_factory=dict)
+    created_at: datetime = Field(default_factory=utc_now)
+
+
+class SessionParticipant(BaseModel):
+    actor_id: str
+    display_name: str = Field(min_length=1, max_length=80)
+    kind: ParticipantKind
+    character: Character
+    imported_character_source_id: str | None = None
+    character_import_sync_policy: CharacterImportSyncPolicy = (
+        CharacterImportSyncPolicy.INITIALIZE_IF_MISSING
+    )
+    secrets: CharacterSecrets = Field(default_factory=CharacterSecrets)
+
+
+class SessionState(BaseModel):
+    model_config = ConfigDict(use_enum_values=False)
+
+    session_id: str = Field(default_factory=lambda: f"session-{uuid4().hex}")
+    keeper_id: str = Field(min_length=1, max_length=80)
+    keeper_name: str = Field(min_length=1, max_length=80)
+    language_preference: LanguagePreference = LanguagePreference.ZH_CN
+    allow_test_mode_self_review: bool = False
+    status: SessionStatus = SessionStatus.ACTIVE
+    scenario: ScenarioScaffold
+    current_scene: SceneState
+    participants: list[SessionParticipant]
+    timeline: list[SessionEvent] = Field(default_factory=list)
+    draft_actions: list[DraftAction] = Field(default_factory=list)
+    reviewed_actions: list[ReviewedAction] = Field(default_factory=list)
+    authoritative_actions: list[AuthoritativeAction] = Field(default_factory=list)
+    character_states: dict[str, SessionCharacterState] = Field(default_factory=dict)
+    progress_state: ScenarioProgressState = Field(default_factory=ScenarioProgressState)
+    behavior_memory: dict[str, list[BehaviorPrecedent]] = Field(default_factory=dict)
+    audit_log: list[AuditLogEntry] = Field(default_factory=list)
+    state_version: int = Field(default=1, ge=1)
+    created_at: datetime = Field(default_factory=utc_now)
+    updated_at: datetime = Field(default_factory=utc_now)
+
+    @model_validator(mode="after")
+    def validate_participants(self) -> "SessionState":
+        actor_ids = [participant.actor_id for participant in self.participants]
+        if len(actor_ids) != len(set(actor_ids)):
+            raise ValueError("participant actor_ids must be unique")
+        human_count = sum(participant.kind == ParticipantKind.HUMAN for participant in self.participants)
+        ai_count = sum(participant.kind == ParticipantKind.AI for participant in self.participants)
+        if human_count < 1 or human_count > 4:
+            raise ValueError("sessions require between 1 and 4 human investigators")
+        if ai_count > 4:
+            raise ValueError("sessions support at most 4 AI investigators")
+        return self
+
+
+class SessionParticipantSummary(BaseModel):
+    actor_id: str
+    display_name: str
+    kind: ParticipantKind
+    character: Character
+
+
+class InvestigatorView(BaseModel):
+    session_id: str
+    viewer_id: str | None = None
+    viewer_role: ViewerRole
+    keeper_name: str
+    language_preference: LanguagePreference
+    scenario: ScenarioScaffold
+    current_scene: SceneState
+    participants: list[SessionParticipantSummary]
+    visible_events: list[SessionEvent]
+    visible_draft_actions: list[DraftAction]
+    visible_reviewed_actions: list[ReviewedAction]
+    visible_authoritative_actions: list[AuthoritativeAction] = Field(default_factory=list)
+    own_private_state: CharacterSecrets | None = None
+    own_character_state: SessionCharacterState | None = None
+    visible_private_state_by_actor: dict[str, CharacterSecrets] = Field(default_factory=dict)
+    visible_character_states_by_actor: dict[str, SessionCharacterState] = Field(default_factory=dict)
+    behavior_memory_by_actor: dict[str, list[BehaviorPrecedent]] = Field(default_factory=dict)
+    progress_state: ScenarioProgressState | None = None
+    keeper_workflow: KeeperWorkflowState | None = None
+    state_version: int
+    updated_at: datetime
+
+
+class SessionStartRequest(BaseModel):
+    keeper_id: str | None = Field(default=None, min_length=1, max_length=80)
+    keeper_name: str = Field(min_length=1, max_length=80)
+    language_preference: LanguagePreference | None = None
+    allow_test_mode_self_review: bool = False
+    scenario: ScenarioScaffold
+    participants: list[SessionParticipant]
+
+
+class SessionStartResponse(BaseModel):
+    message: str
+    session_id: str
+    state_version: int
+    language_preference: LanguagePreference
+    keeper_view: InvestigatorView
+
+
+class PlayerActionRequest(BaseModel):
+    actor_id: str
+    action_text: str = Field(min_length=1)
+    structured_action: dict[str, Any] = Field(default_factory=lambda: {"type": "free_text_action"})
+    effects: ActionEffects | None = None
+    rules_query_text: str | None = None
+    deterministic_resolution_required: bool = False
+    visibility_scope: VisibilityScope = VisibilityScope.PUBLIC
+    visible_to: list[str] = Field(default_factory=list)
+    rationale_summary: str | None = None
+    language_preference: LanguagePreference | None = None
+
+
+class PlayerActionResponse(BaseModel):
+    message: str
+    session_id: str
+    state_version: int
+    language_preference: LanguagePreference
+    authoritative_event: SessionEvent | None = None
+    authoritative_action: AuthoritativeAction | None = None
+    draft_action: DraftAction | None = None
+
+
+class KPDraftRequest(BaseModel):
+    draft_text: str = Field(min_length=1)
+    structured_action: dict[str, Any] = Field(default_factory=lambda: {"type": "kp_note"})
+    effects: ActionEffects | None = None
+    rules_query_text: str | None = None
+    deterministic_resolution_required: bool = False
+    visibility_scope: VisibilityScope = VisibilityScope.KP_ONLY
+    visible_to: list[str] = Field(default_factory=list)
+    rationale_summary: str | None = None
+    language_preference: LanguagePreference | None = None
+
+
+class ReviewDraftRequest(BaseModel):
+    reviewer_id: str = Field(min_length=1, max_length=80)
+    decision: ReviewDecisionType
+    final_text: str | None = None
+    final_structured_action: dict[str, Any] | None = None
+    final_effects: ActionEffects | None = None
+    editor_notes: str | None = None
+    learn_from_final: bool = True
+    language_preference: LanguagePreference | None = None
+    regenerated_draft_text: str | None = None
+    regenerated_structured_action: dict[str, Any] | None = None
+    regenerated_effects: ActionEffects | None = None
+
+
+class ReviewDraftResponse(BaseModel):
+    message: str
+    session_id: str
+    state_version: int
+    language_preference: LanguagePreference
+    reviewed_action: ReviewedAction | None = None
+    authoritative_action: AuthoritativeAction | None = None
+    regenerated_draft: DraftAction | None = None
+
+
+class ManualActionRequest(BaseModel):
+    operator_id: str = Field(min_length=1, max_length=80)
+    actor_id: str | None = None
+    actor_type: ActorType = ActorType.KEEPER
+    action_text: str = Field(min_length=1)
+    structured_action: dict[str, Any] = Field(default_factory=lambda: {"type": "manual_action"})
+    effects: ActionEffects | None = None
+    rules_query_text: str | None = None
+    deterministic_resolution_required: bool = False
+    visibility_scope: VisibilityScope = VisibilityScope.PUBLIC
+    visible_to: list[str] = Field(default_factory=list)
+    language_preference: LanguagePreference | None = None
+
+
+class ApplyCharacterImportRequest(BaseModel):
+    operator_id: str = Field(min_length=1, max_length=80)
+    actor_id: str = Field(min_length=1, max_length=80)
+    source_id: str = Field(min_length=1)
+    refresh_existing: bool = True
+    sync_policy: CharacterImportSyncPolicy | None = None
+    force_apply_manual_review: bool = False
+    language_preference: LanguagePreference | None = None
+
+
+class ApplyCharacterImportResponse(BaseModel):
+    message: str
+    session_id: str
+    state_version: int
+    language_preference: LanguagePreference
+    character_state: SessionCharacterState
+    sync_report: CharacterImportSyncReport
+
+
+class UpdateKeeperPromptRequest(BaseModel):
+    operator_id: str = Field(min_length=1, max_length=80)
+    status: KeeperPromptStatus | None = None
+    add_notes: list[str] = Field(default_factory=list)
+    priority: KeeperPromptPriority | None = None
+    assigned_to: str | None = None
+    language_preference: LanguagePreference | None = None
+
+    @model_validator(mode="after")
+    def validate_changes_requested(self) -> "UpdateKeeperPromptRequest":
+        if (
+            self.status is None
+            and not self.add_notes
+            and self.priority is None
+            and self.assigned_to is None
+        ):
+            raise ValueError("keeper prompt update requires at least one change")
+        if self.assigned_to is not None and not self.assigned_to.strip():
+            raise ValueError("keeper prompt assignment must not be blank")
+        return self
+
+
+class UpdateKeeperPromptResponse(BaseModel):
+    message: str
+    session_id: str
+    state_version: int
+    language_preference: LanguagePreference
+    prompt: QueuedKPPrompt
+    keeper_workflow: KeeperWorkflowState
+
+
+class RollbackRequest(BaseModel):
+    target_version: int = Field(ge=1)
+    language_preference: LanguagePreference | None = None
+
+
+class RollbackResponse(BaseModel):
+    message: str
+    session_id: str
+    state_version: int
+    language_preference: LanguagePreference
+    current_view: InvestigatorView
+
+
+SessionEvent.model_rebuild()
+DraftAction.model_rebuild()
+ReviewedAction.model_rebuild()
+AuthoritativeAction.model_rebuild()
+BeatCondition.model_rebuild()
+BeatConsequence.model_rebuild()
+SessionState.model_rebuild()
+InvestigatorView.model_rebuild()

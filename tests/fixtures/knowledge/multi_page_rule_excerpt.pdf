@@ -1,0 +1,37 @@
+%PDF-1.4
+1 0 obj
+<< /Type /Page /Parent 6 0 R /Contents 3 0 R >>
+endobj
+2 0 obj
+<< /Type /Page /Parent 6 0 R /Contents 4 0 R >>
+endobj
+3 0 obj
+<< /Length 106 >>
+stream
+BT
+/F1 12 Tf
+72 720 Td
+(推动检定) Tj
+0 -20 Td
+(推动检定失败时会带来更严重的后果。) Tj
+ET
+endstream
+endobj
+4 0 obj
+<< /Length 108 >>
+stream
+BT
+/F1 12 Tf
+72 720 Td
+(侦查) Tj
+0 -20 Td
+(侦查用于发现隐藏线索与细微异常。) Tj
+ET
+endstream
+endobj
+6 0 obj
+<< /Type /Pages /Count 2 /Kids [1 0 R 2 0 R] >>
+endobj
+trailer
+<< /Root 6 0 R >>
+%%EOF

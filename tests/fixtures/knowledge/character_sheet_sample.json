@@ -1,0 +1,32 @@
+{
+  "character_id": "character-sample-001",
+  "investigator_name": "林舟",
+  "occupation": "记者",
+  "era": "1920s",
+  "core_stats": {
+    "strength": 50,
+    "constitution": 55,
+    "size": 60,
+    "dexterity": 65,
+    "appearance": 45,
+    "intelligence": 70,
+    "power": 60,
+    "education": 75
+  },
+  "derived_stats": {
+    "hp": 11,
+    "mp": 12,
+    "san": 60,
+    "build": "0"
+  },
+  "skills": {
+    "图书馆使用": 70,
+    "侦查": 60,
+    "聆听": 55
+  },
+  "background_traits": "谨慎且好奇。",
+  "secrets": "曾在案发当晚见过可疑访客。",
+  "campaign_notes": "与阿卡姆本地报社关系良好。",
+  "extraction_confidence": 0.98,
+  "ambiguous_fields": []
+}

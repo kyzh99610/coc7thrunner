@@ -1,0 +1,95 @@
+You are the primary implementation agent for this repository.
+
+Read these files first:
+1. README.md
+2. MVP_SPEC.md
+3. AGENTS.md
+
+Your role:
+- act as the main software engineer
+- create the repo skeleton
+- implement working code incrementally
+- run commands and tests
+- keep changes small and verifiable
+
+Non-negotiable constraints:
+1. deterministic game rules must be implemented in code, not delegated to LLMs
+2. secrets must be isolated per investigator view
+3. generated outputs should be JSON-first
+4. image generation is optional and must not define map truth
+5. no voice features in MVP
+6. support 1-4 human remote investigators and 0-4 AI investigators for testing
+7. all AI final actions must pass through a human review gate before becoming authoritative
+8. only the human-approved final version may update session history and behavior memory
+9. default user-facing language is Simplified Chinese
+10. internal code identifiers may remain English
+
+Tech stack:
+- Python 3.12
+- FastAPI
+- Pydantic v2
+- SQLAlchemy
+- Alembic
+- SQLite initially
+- React + TypeScript + Vite frontend later
+- Qdrant for vector store
+- local LLM backend abstraction
+- optional image worker abstraction
+
+What I want you to do now:
+1. create the full backend repo skeleton
+2. create pyproject.toml with sensible dependencies
+3. create FastAPI app entrypoint
+4. create base config and environment loading
+5. create initial domain schemas for:
+   - Character
+   - Session
+   - SessionEvent
+   - InvestigatorView
+   - DraftAction
+   - ReviewedAction
+   - ReviewDecision
+   - LanguagePreference
+6. create deterministic dice engine
+7. create a secrets-scoped message/event model
+8. implement a review-gate workflow model:
+   - AI proposes draft
+   - human approves/edits/rejects
+   - only final approved version is authoritative
+9. implement POST /sessions/start
+10. implement POST /sessions/{id}/player-action as a stub with proper schemas
+11. implement review endpoints:
+   - POST /reviews/{draft_id}/approve
+   - POST /reviews/{draft_id}/edit
+   - POST /reviews/{draft_id}/reject
+12. add language fields and default zh-CN behavior to user-facing generation schemas
+13. add unit tests for:
+   - dice engine
+   - secret visibility rules
+   - review gate authority rules
+   - edited-final-version replaces original draft in authoritative history
+
+Rules for execution:
+- make direct file edits
+- prefer minimal working code
+- do not over-architect
+- leave explicit TODO comments where external systems are not yet implemented
+- after each meaningful step, summarize files created and remaining blockers
+- run tests after changes when possible
+
+Definition of done for this pass:
+- repository boots
+- app starts
+- tests run
+- core skeleton exists
+- secret-aware session model exists
+- review-gate model exists
+- Chinese-first defaults exist in schemas/config
+
+Additional gameplay constraints:
+1. Core clues must have multiple retrieval paths and may not be permanently blocked by a single failed roll.
+2. Failed investigation checks should degrade quality, speed, certainty, or safety rather than hard-locking main progression.
+3. Social checks should influence access and attitude, not erase core NPC motivation.
+4. Implement low-risk vs high-risk review classification in schemas or enums.
+5. High-risk outputs must require explicit human approval.
+6. Edited approved outputs should be used for downstream behavior conditioning by default.
