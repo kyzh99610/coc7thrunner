@@ -102,6 +102,19 @@ def test_structured_error_helper_builds_expected_business_detail_shape() -> None
         "session_id": "session-654",
         "target_version": 9,
     }
+    assert build_session_action_error_detail(
+        code="session_state_invalid",
+        message="viewer_id is required for investigator views",
+        scope="session_state_request",
+        session_id="session-987",
+        viewer_role="investigator",
+    ) == {
+        "code": "session_state_invalid",
+        "message": "viewer_id is required for investigator views",
+        "scope": "session_state_request",
+        "session_id": "session-987",
+        "viewer_role": "investigator",
+    }
 
 
 def test_extract_error_detail_returns_dict_for_structured_errors_and_string_otherwise() -> None:

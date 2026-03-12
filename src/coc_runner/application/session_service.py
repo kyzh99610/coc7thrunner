@@ -332,13 +332,48 @@ class SessionService:
         language_preference: LanguagePreference | None = None,
     ) -> InvestigatorView:
         error_language = self._resolve_language(language_preference)
-        session = self._load_session(session_id, language=error_language)
-        self._validate_viewer(
-            session,
-            viewer_id=viewer_id,
-            viewer_role=viewer_role,
-            language=error_language,
-        )
+        error_context = {
+            "session_id": session_id,
+            "viewer_id": viewer_id,
+            "viewer_role": viewer_role.value,
+        }
+        try:
+            session = self._load_session(session_id, language=error_language)
+        except LookupError as exc:
+            message = exc.args[0] if exc.args and isinstance(exc.args[0], str) else self._message(
+                "session_not_found",
+                error_language,
+                session_id=session_id,
+            )
+            raise LookupError(
+                build_session_action_error_detail(
+                    code="session_state_session_not_found",
+                    message=message,
+                    scope="session_state_session",
+                    **error_context,
+                )
+            ) from exc
+        try:
+            self._validate_viewer(
+                session,
+                viewer_id=viewer_id,
+                viewer_role=viewer_role,
+                language=error_language,
+            )
+        except ValueError as exc:
+            message = exc.args[0] if exc.args and isinstance(exc.args[0], str) else self._message(
+                "viewer_id_required" if viewer_id is None else "viewer_not_participant",
+                error_language,
+                viewer_id=viewer_id,
+            )
+            raise ValueError(
+                build_session_action_error_detail(
+                    code="session_state_invalid",
+                    message=message,
+                    scope="session_state_request",
+                    **error_context,
+                )
+            ) from exc
         return filter_session_for_viewer(
             session, viewer_id=viewer_id, viewer_role=viewer_role
         )
@@ -349,11 +384,27 @@ class SessionService:
         *,
         language_preference: LanguagePreference | None = None,
     ) -> dict[str, Any]:
-        keeper_view = self.get_session_view(
-            session_id,
+        error_language = self._resolve_language(language_preference)
+        try:
+            session = self._load_session(session_id, language=error_language)
+        except LookupError as exc:
+            message = exc.args[0] if exc.args and isinstance(exc.args[0], str) else self._message(
+                "session_not_found",
+                error_language,
+                session_id=session_id,
+            )
+            raise LookupError(
+                build_session_action_error_detail(
+                    code="session_export_session_not_found",
+                    message=message,
+                    scope="session_export_session",
+                    session_id=session_id,
+                )
+            ) from exc
+        keeper_view = filter_session_for_viewer(
+            session,
             viewer_id=None,
             viewer_role=ViewerRole.KEEPER,
-            language_preference=language_preference,
         )
         return keeper_view.model_dump(mode="json")
 
@@ -364,7 +415,22 @@ class SessionService:
         language_preference: LanguagePreference | None = None,
     ) -> dict[str, Any]:
         error_language = self._resolve_language(language_preference)
-        session = self._load_session(session_id, language=error_language)
+        try:
+            session = self._load_session(session_id, language=error_language)
+        except LookupError as exc:
+            message = exc.args[0] if exc.args and isinstance(exc.args[0], str) else self._message(
+                "session_not_found",
+                error_language,
+                session_id=session_id,
+            )
+            raise LookupError(
+                build_session_action_error_detail(
+                    code="session_snapshot_session_not_found",
+                    message=message,
+                    scope="session_snapshot_session",
+                    session_id=session_id,
+                )
+            ) from exc
         return session.model_dump(mode="json")
 
     def import_session(

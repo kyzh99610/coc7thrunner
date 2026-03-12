@@ -683,7 +683,89 @@ def test_session_not_found_uses_request_language_or_default(client: TestClient) 
         params={"viewer_role": "keeper", "language_preference": "en-US"},
     )
     assert state_response.status_code == 404
-    assert state_response.json()["detail"] == "Session missing-session was not found"
+    assert state_response.json()["detail"] == {
+        "code": "session_state_session_not_found",
+        "message": "Session missing-session was not found",
+        "session_id": "missing-session",
+        "viewer_role": "keeper",
+        "scope": "session_state_session",
+    }
+
+
+def test_state_invalid_viewer_returns_structured_400_without_mutating_session(
+    client: TestClient,
+) -> None:
+    session_id = _start_session(
+        client,
+        participants=[make_participant("investigator-1", "林舟")],
+    )
+    snapshot_before_state = client.get(f"/sessions/{session_id}/snapshot").json()
+
+    state_response = client.get(
+        f"/sessions/{session_id}/state",
+        params={"viewer_role": "investigator"},
+    )
+
+    assert state_response.status_code == 400
+    assert state_response.json()["detail"] == {
+        "code": "session_state_invalid",
+        "message": "调查员视图必须提供 viewer_id",
+        "session_id": session_id,
+        "viewer_role": "investigator",
+        "scope": "session_state_request",
+    }
+    snapshot_after_state = client.get(f"/sessions/{session_id}/snapshot").json()
+    assert snapshot_after_state == snapshot_before_state
+
+
+def test_export_missing_session_returns_structured_404_with_language_override(
+    client: TestClient,
+) -> None:
+    zh_response = client.get("/sessions/missing-export/export")
+    assert zh_response.status_code == 404
+    assert zh_response.json()["detail"] == {
+        "code": "session_export_session_not_found",
+        "message": "未找到会话 missing-export",
+        "session_id": "missing-export",
+        "scope": "session_export_session",
+    }
+
+    en_response = client.get(
+        "/sessions/missing-export/export",
+        params={"language_preference": "en-US"},
+    )
+    assert en_response.status_code == 404
+    assert en_response.json()["detail"] == {
+        "code": "session_export_session_not_found",
+        "message": "Session missing-export was not found",
+        "session_id": "missing-export",
+        "scope": "session_export_session",
+    }
+
+
+def test_snapshot_missing_session_returns_structured_404_with_language_override(
+    client: TestClient,
+) -> None:
+    zh_response = client.get("/sessions/missing-snapshot/snapshot")
+    assert zh_response.status_code == 404
+    assert zh_response.json()["detail"] == {
+        "code": "session_snapshot_session_not_found",
+        "message": "未找到会话 missing-snapshot",
+        "session_id": "missing-snapshot",
+        "scope": "session_snapshot_session",
+    }
+
+    en_response = client.get(
+        "/sessions/missing-snapshot/snapshot",
+        params={"language_preference": "en-US"},
+    )
+    assert en_response.status_code == 404
+    assert en_response.json()["detail"] == {
+        "code": "session_snapshot_session_not_found",
+        "message": "Session missing-snapshot was not found",
+        "session_id": "missing-snapshot",
+        "scope": "session_snapshot_session",
+    }
 
 
 def test_rollback_event_text_uses_request_language_override(client: TestClient) -> None:
