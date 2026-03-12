@@ -165,6 +165,34 @@ def _import_character_sheet_source(client: TestClient, *, source_id: str) -> dic
     return response.json()
 
 
+def _register_text_rule_source(
+    client: TestClient,
+    *,
+    source_id: str,
+    source_title_zh: str,
+    content: str,
+    default_priority: int = 45,
+) -> None:
+    register_response = client.post(
+        "/knowledge/register-source",
+        json={
+            "source_id": source_id,
+            "source_kind": "rulebook",
+            "source_format": "markdown",
+            "source_title_zh": source_title_zh,
+            "document_identity": source_id,
+            "default_priority": default_priority,
+            "is_authoritative": True,
+        },
+    )
+    assert register_response.status_code == 201
+    ingest_response = client.post(
+        "/knowledge/ingest-text",
+        json={"source_id": source_id, "content": content},
+    )
+    assert ingest_response.status_code == 200
+
+
 def _make_cross_environment_client(suffix: str) -> tuple[TestClient, Path]:
     base_dir = Path("test-artifacts")
     base_dir.mkdir(exist_ok=True)
@@ -518,5 +546,112 @@ def test_cross_environment_import_returns_structured_missing_source_warnings_but
             assert imported_participant["imported_character_source_id"] == source_id
             assert imported_character_state["import_source_id"] == source_id
             assert imported_character_state["secret_state_refs"] == original_secret_refs
+    finally:
+        shutil.rmtree(run_dir, ignore_errors=True)
+
+
+def test_cross_environment_import_allows_rules_grounding_to_degrade_without_crashing(
+    client: TestClient,
+) -> None:
+    character_source_id = "character-sheet-template-import-grounding"
+    rule_source_id = "cross-env-grounding-core"
+    _import_character_sheet_source(client, source_id=character_source_id)
+    _register_text_rule_source(
+        client,
+        source_id=rule_source_id,
+        source_title_zh="跨环境 grounding 核心规则",
+        content="# 图书馆使用\n图书馆使用用于在旧报纸、档案与馆藏中查阅资料。",
+    )
+    start_response = client.post(
+        "/sessions/start",
+        json={
+            "keeper_name": "KP",
+            "scenario": _snapshot_scenario(),
+            "participants": [
+                make_participant(
+                    "investigator-1",
+                    "占位调查员",
+                    imported_character_source_id=character_source_id,
+                )
+            ],
+        },
+    )
+    assert start_response.status_code == 201
+    original_session_id = start_response.json()["session_id"]
+    snapshot = _get_snapshot(client, original_session_id)
+
+    source_env_action = client.post(
+        f"/sessions/{original_session_id}/player-action",
+        json={
+            "actor_id": "investigator-1",
+            "action_text": "我去图书馆查阅旧报纸。",
+            "structured_action": {"type": "research"},
+            "deterministic_resolution_required": True,
+        },
+    )
+    assert source_env_action.status_code == 202
+    source_env_grounding = source_env_action.json()["authoritative_event"]["rules_grounding"]
+    assert source_env_grounding["query_text"] == "图书馆使用"
+    assert source_env_grounding["deterministic_handoff_topic"] == "term:library_use"
+    assert source_env_grounding["citations"]
+    assert source_env_grounding["matched_topics"] == ["term:library_use"]
+
+    import_env_client, run_dir = _make_cross_environment_client("grounding_missing_sources")
+    try:
+        with import_env_client:
+            import_response = import_env_client.post("/sessions/import", json=snapshot)
+            assert import_response.status_code == 201
+            import_payload = import_response.json()
+            assert import_payload["warnings"]
+
+            imported_session_id = import_payload["new_session_id"]
+            degraded_action = import_env_client.post(
+                f"/sessions/{imported_session_id}/player-action",
+                json={
+                    "actor_id": "investigator-1",
+                    "action_text": "我去图书馆查阅旧报纸。",
+                    "structured_action": {"type": "research"},
+                    "deterministic_resolution_required": True,
+                },
+            )
+            assert degraded_action.status_code == 202
+
+            degraded_payload = degraded_action.json()
+            degraded_event = degraded_payload["authoritative_event"]
+            degraded_grounding = degraded_event["rules_grounding"]
+            assert degraded_grounding["query_text"] == "图书馆使用"
+            assert degraded_grounding["deterministic_resolution_required"] is True
+            assert degraded_grounding["deterministic_handoff_topic"] is None
+            assert degraded_grounding["citations"] == []
+            assert degraded_grounding["matched_topics"] == []
+            assert degraded_grounding["review_summary"] == "未命中可用规则依据。"
+            assert (
+                degraded_event["structured_payload"]["rules_grounding"]["citations"] == []
+            )
+            assert (
+                degraded_payload["authoritative_action"]["rules_grounding"]["deterministic_handoff_topic"]
+                is None
+            )
+
+            keeper_state = _get_keeper_state(import_env_client, imported_session_id)
+            investigator_state = _get_investigator_state(
+                import_env_client,
+                imported_session_id,
+                "investigator-1",
+            )
+            imported_snapshot = _get_snapshot(import_env_client, imported_session_id)
+
+            assert any(
+                event["text"] == "我去图书馆查阅旧报纸。"
+                for event in keeper_state["visible_events"]
+            )
+            assert any(
+                event["text"] == "我去图书馆查阅旧报纸。"
+                for event in investigator_state["visible_events"]
+            )
+            assert imported_snapshot["reviewed_actions"] == []
+            assert imported_snapshot["timeline"][-1]["event_type"] == "player_action"
+            assert imported_snapshot["authoritative_actions"][-1]["text"] == "我去图书馆查阅旧报纸。"
+            assert imported_snapshot["authoritative_actions"][-1]["rules_grounding"]["citations"] == []
     finally:
         shutil.rmtree(run_dir, ignore_errors=True)
