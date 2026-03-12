@@ -6,6 +6,7 @@ from fastapi.testclient import TestClient
 from coc_runner.api.exception_handlers import build_request_validation_detail
 from coc_runner.error_details import (
     build_character_import_error_detail,
+    build_session_action_error_detail,
     build_structured_error_detail,
     extract_error_detail,
 )
@@ -27,6 +28,21 @@ def test_structured_error_helper_builds_expected_business_detail_shape() -> None
         "source_id": "missing-source",
         "session_id": "session-123",
         "actor_id": "investigator-1",
+    }
+    assert build_session_action_error_detail(
+        code="manual_action_state_conflict",
+        message="会话状态版本冲突，请重新加载后再试",
+        scope="manual_action_state",
+        session_id="session-123",
+        actor_id="keeper-1",
+        operator_id="keeper-1",
+    ) == {
+        "code": "manual_action_state_conflict",
+        "message": "会话状态版本冲突，请重新加载后再试",
+        "scope": "manual_action_state",
+        "session_id": "session-123",
+        "actor_id": "keeper-1",
+        "operator_id": "keeper-1",
     }
 
 

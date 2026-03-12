@@ -42,5 +42,26 @@ def build_character_import_error_detail(
     )
 
 
+def build_session_action_error_detail(
+    *,
+    code: str,
+    message: str,
+    scope: str,
+    session_id: str,
+    actor_id: str | None = None,
+    operator_id: str | None = None,
+    **extra_fields: Any,
+) -> dict[str, Any]:
+    return build_structured_error_detail(
+        code=code,
+        message=message,
+        scope=scope,
+        session_id=session_id,
+        actor_id=actor_id,
+        operator_id=operator_id,
+        **extra_fields,
+    )
+
+
 def extract_error_detail(exc: BaseException) -> Any:
     return exc.args[0] if exc.args and isinstance(exc.args[0], dict) else str(exc)

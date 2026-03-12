@@ -79,7 +79,10 @@ from coc_runner.domain.models import (
     ViewerRole,
     VisibilityScope,
 )
-from coc_runner.error_details import build_character_import_error_detail
+from coc_runner.error_details import (
+    build_character_import_error_detail,
+    build_session_action_error_detail,
+)
 from coc_runner.domain.secrets import filter_session_for_viewer, normalize_keeper_prompt_for_keeper
 from coc_runner.infrastructure.knowledge_repositories import KnowledgeRepository
 from coc_runner.infrastructure.repositories import SessionRepository
@@ -775,88 +778,140 @@ class SessionService:
         request: ManualActionRequest,
     ) -> PlayerActionResponse:
         error_language = self._resolve_language(request.language_preference)
-        session = self._load_session(session_id, language=error_language)
+        try:
+            session = self._load_session(session_id, language=error_language)
+        except LookupError as exc:
+            message = exc.args[0] if exc.args and isinstance(exc.args[0], str) else self._message(
+                "session_not_found",
+                error_language,
+                session_id=session_id,
+            )
+            raise LookupError(
+                build_session_action_error_detail(
+                    code="manual_action_session_not_found",
+                    message=message,
+                    scope="manual_action_session",
+                    session_id=session_id,
+                    actor_id=request.actor_id,
+                    operator_id=request.operator_id,
+                )
+            ) from exc
         effective_language = self._resolve_language(
             request.language_preference,
             session.language_preference,
         )
         actor_id = request.actor_id or session.keeper_id
+        error_context = {
+            "session_id": session.session_id,
+            "actor_id": actor_id,
+            "operator_id": request.operator_id,
+        }
         self._authorize_operator(
             session,
             operator_id=request.operator_id,
             language=effective_language,
-            error_detail={
-                "message": self._message("operator_not_authorized", effective_language),
-                "session_id": session.session_id,
-                "operator_id": request.operator_id,
-                "actor_id": actor_id,
-                "actor_type": request.actor_type.value,
-                "expected_keeper_actor_id": session.keeper_id,
-                "actual_session_keeper_name": session.keeper_name,
-                "permission_check_inputs": {
-                    "operator_id": request.operator_id,
-                    "actor_id": actor_id,
-                    "actor_type": request.actor_type.value,
-                    "expected_keeper_actor_id": session.keeper_id,
-                    "actual_session_keeper_name": session.keeper_name,
-                    "operator_matches_expected_keeper": request.operator_id == session.keeper_id,
-                },
-            },
-        )
-        current_time = datetime.now(timezone.utc)
-        visible_to = self._normalize_visible_to(
-            actor_id=actor_id,
-            visibility_scope=request.visibility_scope,
-            visible_to=request.visible_to,
-        )
-        expected_version = session.state_version
-        rules_grounding = self._ground_rules_for_action(
-            actor_id=actor_id,
-            actor_type=request.actor_type,
-            query_text=self._resolve_rules_query_text(
-                request.rules_query_text,
-                request.action_text,
-                request.structured_action,
+            error_detail=build_session_action_error_detail(
+                code="manual_action_operator_not_authorized",
+                message=self._message("operator_not_authorized", effective_language),
+                scope="manual_action_permission",
+                **error_context,
             ),
-            deterministic_resolution_required=request.deterministic_resolution_required,
         )
-        grounding_degraded = self._annotate_grounding_review_summary(
-            session=session,
-            rules_grounding=rules_grounding,
-        )
-        resolved_effects, effect_contract_origin = self._resolve_action_effect_contract(
-            explicit_effects=request.effects,
-            structured_action=request.structured_action,
-        )
-        authoritative_action = self._build_authoritative_action(
-            source_type=AuthoritativeActionSource.MANUAL_OPERATOR,
-            actor_id=actor_id,
-            actor_type=request.actor_type,
-            visibility_scope=request.visibility_scope,
-            visible_to=visible_to,
-            text=request.action_text,
-            structured_action=request.structured_action,
-            effects=resolved_effects,
-            effect_contract_origin=effect_contract_origin,
-            rules_grounding=rules_grounding,
-            language_preference=effective_language,
-            created_at=current_time,
-        )
-        authoritative_event = self._apply_authoritative_action(
-            session=session,
-            authoritative_action=authoritative_action,
-            event_type=EventType.MANUAL_ACTION,
-            language=effective_language,
-            current_time=current_time,
-        )
-        session.state_version += 1
-        session.updated_at = current_time
-        self._save_session(
-            session,
-            expected_version=expected_version,
-            reason="manual_action",
-            language=effective_language,
-        )
+        try:
+            current_time = datetime.now(timezone.utc)
+            visible_to = self._normalize_visible_to(
+                actor_id=actor_id,
+                visibility_scope=request.visibility_scope,
+                visible_to=request.visible_to,
+            )
+            expected_version = session.state_version
+            rules_grounding = self._ground_rules_for_action(
+                actor_id=actor_id,
+                actor_type=request.actor_type,
+                query_text=self._resolve_rules_query_text(
+                    request.rules_query_text,
+                    request.action_text,
+                    request.structured_action,
+                ),
+                deterministic_resolution_required=request.deterministic_resolution_required,
+            )
+            grounding_degraded = self._annotate_grounding_review_summary(
+                session=session,
+                rules_grounding=rules_grounding,
+            )
+            resolved_effects, effect_contract_origin = self._resolve_action_effect_contract(
+                explicit_effects=request.effects,
+                structured_action=request.structured_action,
+            )
+            authoritative_action = self._build_authoritative_action(
+                source_type=AuthoritativeActionSource.MANUAL_OPERATOR,
+                actor_id=actor_id,
+                actor_type=request.actor_type,
+                visibility_scope=request.visibility_scope,
+                visible_to=visible_to,
+                text=request.action_text,
+                structured_action=request.structured_action,
+                effects=resolved_effects,
+                effect_contract_origin=effect_contract_origin,
+                rules_grounding=rules_grounding,
+                language_preference=effective_language,
+                created_at=current_time,
+            )
+            authoritative_event = self._apply_authoritative_action(
+                session=session,
+                authoritative_action=authoritative_action,
+                event_type=EventType.MANUAL_ACTION,
+                language=effective_language,
+                current_time=current_time,
+            )
+            session.state_version += 1
+            session.updated_at = current_time
+            self._save_session(
+                session,
+                expected_version=expected_version,
+                reason="manual_action",
+                language=effective_language,
+            )
+        except LookupError as exc:
+            message = exc.args[0] if exc.args and isinstance(exc.args[0], str) else self._message(
+                "session_not_found",
+                effective_language,
+                session_id=session.session_id,
+            )
+            raise LookupError(
+                build_session_action_error_detail(
+                    code="manual_action_target_not_found",
+                    message=message,
+                    scope="manual_action_execution",
+                    **error_context,
+                )
+            ) from exc
+        except ConflictError as exc:
+            message = exc.args[0] if exc.args and isinstance(exc.args[0], str) else self._message(
+                "state_conflict",
+                effective_language,
+            )
+            raise ConflictError(
+                build_session_action_error_detail(
+                    code="manual_action_state_conflict",
+                    message=message,
+                    scope="manual_action_state",
+                    **error_context,
+                )
+            ) from exc
+        except ValueError as exc:
+            message = exc.args[0] if exc.args and isinstance(exc.args[0], str) else self._message(
+                "invalid_scene_transition",
+                effective_language,
+            )
+            raise ValueError(
+                build_session_action_error_detail(
+                    code="manual_action_invalid",
+                    message=message,
+                    scope="manual_action_execution",
+                    **error_context,
+                )
+            ) from exc
         return PlayerActionResponse(
             message=self._message("manual_action_recorded", effective_language),
             session_id=session.session_id,

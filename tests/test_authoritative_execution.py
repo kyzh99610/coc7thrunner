@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from fastapi.testclient import TestClient
 
+from coc_runner.domain.errors import ConflictError
 from tests.helpers import make_participant, make_scenario
 
 
@@ -27,6 +28,12 @@ def _register_spot_hidden_rule(client: TestClient, *, source_id: str = "authorit
         },
     )
     assert ingest_response.status_code == 200
+
+
+def _get_snapshot(client: TestClient, session_id: str) -> dict:
+    snapshot_response = client.get(f"/sessions/{session_id}/snapshot")
+    assert snapshot_response.status_code == 200
+    return snapshot_response.json()
 
 
 def test_human_authoritative_action_executes_structured_effects(
@@ -326,6 +333,7 @@ def test_manual_authoritative_action_executes_and_checks_scene_preconditions(
     ).json()
     assert investigator_two["current_scene"]["title"] == "祭坛密室"
     assert investigator_two["scenario"]["clues"][0]["title"] == "祭坛裂痕"
+    snapshot_before_failed_manual = _get_snapshot(client, session_id)
 
     failed_manual_response = client.post(
         f"/sessions/{session_id}/manual-action",
@@ -348,7 +356,132 @@ def test_manual_authoritative_action_executes_and_checks_scene_preconditions(
         },
     )
     assert failed_manual_response.status_code == 400
-    assert "场景切换前提不满足" in failed_manual_response.json()["detail"]
+    assert failed_manual_response.json()["detail"] == {
+        "code": "manual_action_invalid",
+        "message": "场景切换前提不满足，当前阶段 confrontation，需要阶段 setup",
+        "session_id": session_id,
+        "actor_id": "keeper-1",
+        "operator_id": "keeper-1",
+        "scope": "manual_action_execution",
+    }
+    snapshot_after_failed_manual = _get_snapshot(client, session_id)
+    assert snapshot_after_failed_manual == snapshot_before_failed_manual
+
+
+def test_manual_action_forbidden_returns_structured_403_without_mutating_session(
+    client: TestClient,
+) -> None:
+    start_response = client.post(
+        "/sessions/start",
+        json={
+            "keeper_name": "KP",
+            "scenario": make_scenario(),
+            "participants": [
+                make_participant("investigator-1", "林舟"),
+                make_participant("investigator-2", "周岚"),
+            ],
+        },
+    )
+    assert start_response.status_code == 201
+    session_id = start_response.json()["session_id"]
+    snapshot_before_manual = _get_snapshot(client, session_id)
+
+    forbidden_response = client.post(
+        f"/sessions/{session_id}/manual-action",
+        json={
+            "operator_id": "investigator-2",
+            "actor_id": "investigator-1",
+            "actor_type": "investigator",
+            "action_text": "非 KP 尝试提交手动权威行动。",
+            "effects": {
+                "character_stat_effects": [{"actor_id": "investigator-1", "hp_delta": -1}]
+            },
+        },
+    )
+
+    assert forbidden_response.status_code == 403
+    assert forbidden_response.json()["detail"] == {
+        "code": "manual_action_operator_not_authorized",
+        "message": "只有本局 KP 可以提交手动权威行动",
+        "session_id": session_id,
+        "actor_id": "investigator-1",
+        "operator_id": "investigator-2",
+        "scope": "manual_action_permission",
+    }
+    snapshot_after_manual = _get_snapshot(client, session_id)
+    assert snapshot_after_manual == snapshot_before_manual
+
+
+def test_manual_action_missing_session_returns_structured_404(
+    client: TestClient,
+) -> None:
+    missing_session_id = "session-missing-manual-action"
+
+    missing_response = client.post(
+        f"/sessions/{missing_session_id}/manual-action",
+        json={
+            "operator_id": "keeper-1",
+            "actor_id": "keeper-1",
+            "actor_type": "keeper",
+            "action_text": "尝试对不存在的会话提交手动权威行动。",
+        },
+    )
+
+    assert missing_response.status_code == 404
+    assert missing_response.json()["detail"] == {
+        "code": "manual_action_session_not_found",
+        "message": f"未找到会话 {missing_session_id}",
+        "session_id": missing_session_id,
+        "actor_id": "keeper-1",
+        "operator_id": "keeper-1",
+        "scope": "manual_action_session",
+    }
+
+
+def test_manual_action_state_conflict_returns_structured_409_without_mutating_session(
+    client: TestClient,
+) -> None:
+    start_response = client.post(
+        "/sessions/start",
+        json={
+            "keeper_name": "KP",
+            "scenario": make_scenario(),
+            "participants": [make_participant("investigator-1", "林舟")],
+        },
+    )
+    assert start_response.status_code == 201
+    session_id = start_response.json()["session_id"]
+    snapshot_before_manual = _get_snapshot(client, session_id)
+
+    def _conflicting_save_session(session, *, expected_version, reason, language):
+        raise ConflictError("会话状态版本冲突，请重新加载后再试")
+
+    client.app.state.session_service._save_session = _conflicting_save_session
+
+    conflict_response = client.post(
+        f"/sessions/{session_id}/manual-action",
+        json={
+            "operator_id": "keeper-1",
+            "actor_id": "keeper-1",
+            "actor_type": "keeper",
+            "action_text": "模拟保存冲突的手动权威行动。",
+            "effects": {
+                "character_stat_effects": [{"actor_id": "investigator-1", "hp_delta": -1}]
+            },
+        },
+    )
+
+    assert conflict_response.status_code == 409
+    assert conflict_response.json()["detail"] == {
+        "code": "manual_action_state_conflict",
+        "message": "会话状态版本冲突，请重新加载后再试",
+        "session_id": session_id,
+        "actor_id": "keeper-1",
+        "operator_id": "keeper-1",
+        "scope": "manual_action_state",
+    }
+    snapshot_after_manual = _get_snapshot(client, session_id)
+    assert snapshot_after_manual == snapshot_before_manual
 
 
 def test_investigator_still_sees_non_review_manual_authoritative_outcome_after_metadata_filtering(
