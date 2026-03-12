@@ -3,13 +3,16 @@ from __future__ import annotations
 from coc_runner.domain.models import (
     BehaviorPrecedent,
     CharacterSecrets,
+    EventType,
     InvestigatorView,
     KeeperPromptStatus,
     KeeperPromptPriority,
     KeeperWorkflowSummary,
     KeeperWorkflowState,
     QueuedKPPrompt,
+    RuleGroundingSummary,
     SessionCharacterState,
+    SessionEvent,
     SessionParticipantSummary,
     SessionState,
     ViewerRole,
@@ -211,6 +214,69 @@ def _build_keeper_summary_lines(
     return [*prompt_lines, *objective_lines, *completed_objective_lines, *progression_lines]
 
 
+def _sanitize_rules_grounding_for_investigator(
+    rules_grounding: RuleGroundingSummary | None,
+) -> RuleGroundingSummary | None:
+    if rules_grounding is None:
+        return None
+    return rules_grounding.model_copy(
+        deep=True,
+        update={
+            "review_summary": None,
+            "human_review_recommended": False,
+            "human_review_reason": None,
+        },
+    )
+
+
+def _sanitize_rules_grounding_payload_for_investigator(
+    payload: dict,
+) -> dict:
+    sanitized = dict(payload)
+    sanitized.pop("review_summary", None)
+    if "human_review_recommended" in sanitized:
+        sanitized["human_review_recommended"] = False
+    sanitized.pop("human_review_reason", None)
+    return sanitized
+
+
+def _sanitize_event_for_investigator(
+    event: SessionEvent,
+) -> SessionEvent:
+    sanitized_event = event.model_copy(deep=True)
+    if sanitized_event.event_type != EventType.REVIEWED_ACTION:
+        sanitized_event.rules_grounding = _sanitize_rules_grounding_for_investigator(
+            sanitized_event.rules_grounding
+        )
+        rules_grounding_payload = sanitized_event.structured_payload.get("rules_grounding")
+        if isinstance(rules_grounding_payload, dict):
+            sanitized_event.structured_payload["rules_grounding"] = (
+                _sanitize_rules_grounding_payload_for_investigator(rules_grounding_payload)
+            )
+        return sanitized_event
+
+    for key in (
+        "authoritative_action_id",
+        "source_type",
+        "review_id",
+        "draft_id",
+        "review_status",
+        "final_structured_action",
+        "learn_from_final",
+        "review_summary",
+    ):
+        sanitized_event.structured_payload.pop(key, None)
+    rules_grounding_payload = sanitized_event.structured_payload.get("rules_grounding")
+    if isinstance(rules_grounding_payload, dict):
+        sanitized_event.structured_payload["rules_grounding"] = (
+            _sanitize_rules_grounding_payload_for_investigator(rules_grounding_payload)
+        )
+    sanitized_event.rules_grounding = _sanitize_rules_grounding_for_investigator(
+        sanitized_event.rules_grounding
+    )
+    return sanitized_event
+
+
 def filter_session_for_viewer(
     session: SessionState,
     *,
@@ -230,36 +296,53 @@ def filter_session_for_viewer(
             viewer_role=viewer_role,
         )
     ]
-    visible_draft_actions = [
-        draft
-        for draft in session.draft_actions
-        if _is_visible_to_viewer(
-            visibility_scope=draft.visibility_scope,
-            visible_to=draft.visible_to,
-            viewer_id=viewer_id,
-            viewer_role=viewer_role,
-        )
-    ]
-    visible_reviewed_actions = [
-        reviewed
-        for reviewed in session.reviewed_actions
-        if _is_visible_to_viewer(
-            visibility_scope=reviewed.visibility_scope,
-            visible_to=reviewed.visible_to,
-            viewer_id=viewer_id,
-            viewer_role=viewer_role,
-        )
-    ]
-    visible_authoritative_actions = [
-        action
-        for action in session.authoritative_actions
-        if _is_visible_to_viewer(
-            visibility_scope=action.visibility_scope,
-            visible_to=action.visible_to,
-            viewer_id=viewer_id,
-            viewer_role=viewer_role,
-        )
-    ]
+    if viewer_role == ViewerRole.KEEPER:
+        visible_draft_actions = [
+            draft
+            for draft in session.draft_actions
+            if _is_visible_to_viewer(
+                visibility_scope=draft.visibility_scope,
+                visible_to=draft.visible_to,
+                viewer_id=viewer_id,
+                viewer_role=viewer_role,
+            )
+        ]
+        visible_reviewed_actions = [
+            reviewed
+            for reviewed in session.reviewed_actions
+            if _is_visible_to_viewer(
+                visibility_scope=reviewed.visibility_scope,
+                visible_to=reviewed.visible_to,
+                viewer_id=viewer_id,
+                viewer_role=viewer_role,
+            )
+        ]
+        visible_authoritative_actions = [
+            action
+            for action in session.authoritative_actions
+            if _is_visible_to_viewer(
+                visibility_scope=action.visibility_scope,
+                visible_to=action.visible_to,
+                viewer_id=viewer_id,
+                viewer_role=viewer_role,
+            )
+        ]
+    else:
+        visible_events = [_sanitize_event_for_investigator(event) for event in visible_events]
+        visible_draft_actions = []
+        visible_reviewed_actions = []
+        visible_authoritative_actions = [
+            action
+            for action in session.authoritative_actions
+            if action.review_id is None
+            and action.draft_id is None
+            and _is_visible_to_viewer(
+                visibility_scope=action.visibility_scope,
+                visible_to=action.visible_to,
+                viewer_id=viewer_id,
+                viewer_role=viewer_role,
+            )
+        ]
     visible_clues = [
         clue
         for clue in session.scenario.clues
