@@ -3,7 +3,9 @@ from __future__ import annotations
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
+from fastapi.exceptions import RequestValidationError
 
+from coc_runner.api.exception_handlers import request_validation_exception_handler
 from coc_runner.api.routes.health import router as health_router
 from coc_runner.api.routes.knowledge import router as knowledge_router
 from coc_runner.api.routes.rules import router as rules_router
@@ -39,6 +41,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         yield
 
     app = FastAPI(title=runtime_settings.app_name, lifespan=lifespan)
+    app.add_exception_handler(
+        RequestValidationError,
+        request_validation_exception_handler,
+    )
     app.include_router(health_router)
     app.include_router(sessions_router)
     app.include_router(knowledge_router)
