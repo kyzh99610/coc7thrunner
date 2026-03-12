@@ -6,6 +6,7 @@ from fastapi.testclient import TestClient
 from coc_runner.api.exception_handlers import build_request_validation_detail
 from coc_runner.error_details import (
     build_character_import_error_detail,
+    build_rules_query_error_detail,
     build_session_action_error_detail,
     shape_validation_error_items,
     build_structured_error_detail,
@@ -115,6 +116,21 @@ def test_structured_error_helper_builds_expected_business_detail_shape() -> None
         "scope": "session_state_request",
         "session_id": "session-987",
         "viewer_role": "investigator",
+    }
+    assert build_rules_query_error_detail(
+        code="rules_query_invalid",
+        message="viewer_role invalid",
+        scope="rules_query_request",
+        query_text="理智检定",
+        viewer_role="observer",
+        viewer_id="investigator-1",
+    ) == {
+        "code": "rules_query_invalid",
+        "message": "viewer_role invalid",
+        "scope": "rules_query_request",
+        "query_text": "理智检定",
+        "viewer_role": "observer",
+        "viewer_id": "investigator-1",
     }
 
 
@@ -290,6 +306,35 @@ def test_request_validation_query_errors_use_structured_422_detail_for_import_en
             "input": "bad-lang",
             "ctx": {"expected": "'zh-CN' or 'en-US'"},
         }
+    ]
+
+
+def test_request_validation_body_errors_use_structured_422_detail_for_rules_endpoint(
+    client: TestClient,
+) -> None:
+    response = client.post(
+        "/rules/query",
+        json={"minimum_priority": -1},
+    )
+
+    assert response.status_code == 422
+    detail = response.json()["detail"]
+    assert detail["code"] == "request_validation_failed"
+    assert detail["scope"] == "request_validation"
+    assert detail["errors"] == [
+        {
+            "loc": ["body", "query_text"],
+            "message": "Field required",
+            "type": "missing",
+            "input": {"minimum_priority": -1},
+        },
+        {
+            "loc": ["body", "minimum_priority"],
+            "message": "Input should be greater than or equal to 0",
+            "type": "greater_than_equal",
+            "input": -1,
+            "ctx": {"ge": 0},
+        },
     ]
 
 

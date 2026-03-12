@@ -91,5 +91,26 @@ def build_session_action_error_detail(
     )
 
 
+def build_rules_query_error_detail(
+    *,
+    code: str,
+    message: str,
+    scope: str,
+    query_text: str,
+    viewer_role: str | None = None,
+    viewer_id: str | None = None,
+    **extra_fields: Any,
+) -> dict[str, Any]:
+    return build_structured_error_detail(
+        code=code,
+        message=message,
+        scope=scope,
+        query_text=query_text,
+        viewer_role=viewer_role,
+        viewer_id=viewer_id,
+        **extra_fields,
+    )
+
+
 def extract_error_detail(exc: BaseException) -> Any:
     return exc.args[0] if exc.args and isinstance(exc.args[0], dict) else str(exc)

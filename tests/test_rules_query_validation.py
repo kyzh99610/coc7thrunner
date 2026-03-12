@@ -4,6 +4,8 @@ from pathlib import Path
 
 from fastapi.testclient import TestClient
 
+from coc_runner.api.dependencies import get_knowledge_service
+
 
 FIXTURE_DIR = Path(__file__).resolve().parent / "fixtures" / "knowledge"
 
@@ -56,6 +58,16 @@ def _seed_validation_sources(client: TestClient) -> None:
     )
     assert client.post("/knowledge/ingest-file", json={"source_id": "validation-core"}).status_code == 200
     assert client.post("/knowledge/ingest-file", json={"source_id": "validation-house"}).status_code == 200
+
+
+class _ValueErrorRulesService:
+    def query_rules(self, request):
+        raise ValueError(f"规则查询不支持 viewer_role={request.viewer_role}")
+
+
+class _LookupErrorRulesService:
+    def query_rules(self, request):
+        raise LookupError(f"未找到规则主题 {request.query_text}")
 
 
 def test_real_query_hard_and_extreme_success_validation(client: TestClient) -> None:
@@ -185,3 +197,65 @@ def test_persisted_visibility_constraints_hold_for_validation_queries(client: Te
     assert investigator.json()["matched_chunks"] == []
     assert shared_investigator.json()["matched_chunks"]
     assert keeper.json()["matched_chunks"]
+
+
+def test_rules_query_business_value_error_returns_structured_400_without_mutating_knowledge(
+    client: TestClient,
+) -> None:
+    _seed_validation_sources(client)
+    repository = client.app.state.knowledge_service.repository
+    before_chunk_ids = [chunk.chunk_id for chunk in repository.list_chunks()]
+
+    client.app.dependency_overrides[get_knowledge_service] = lambda: _ValueErrorRulesService()
+    try:
+        response = client.post(
+            "/rules/query",
+            json={
+                "query_text": "理智检定",
+                "viewer_role": "observer",
+                "viewer_id": "investigator-1",
+            },
+        )
+    finally:
+        client.app.dependency_overrides.pop(get_knowledge_service, None)
+
+    assert response.status_code == 400
+    assert response.json()["detail"] == {
+        "code": "rules_query_invalid",
+        "message": "规则查询不支持 viewer_role=observer",
+        "scope": "rules_query_request",
+        "query_text": "理智检定",
+        "viewer_role": "observer",
+        "viewer_id": "investigator-1",
+    }
+    assert [chunk.chunk_id for chunk in repository.list_chunks()] == before_chunk_ids
+
+
+def test_rules_query_business_lookup_error_returns_structured_404_without_mutating_knowledge(
+    client: TestClient,
+) -> None:
+    _seed_validation_sources(client)
+    repository = client.app.state.knowledge_service.repository
+    before_chunk_ids = [chunk.chunk_id for chunk in repository.list_chunks()]
+
+    client.app.dependency_overrides[get_knowledge_service] = lambda: _LookupErrorRulesService()
+    try:
+        response = client.post(
+            "/rules/query",
+            json={
+                "query_text": "不存在的隐藏主题",
+                "viewer_role": "keeper",
+            },
+        )
+    finally:
+        client.app.dependency_overrides.pop(get_knowledge_service, None)
+
+    assert response.status_code == 404
+    assert response.json()["detail"] == {
+        "code": "rules_query_not_found",
+        "message": "未找到规则主题 不存在的隐藏主题",
+        "scope": "rules_query_lookup",
+        "query_text": "不存在的隐藏主题",
+        "viewer_role": "keeper",
+    }
+    assert [chunk.chunk_id for chunk in repository.list_chunks()] == before_chunk_ids
