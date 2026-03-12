@@ -57,6 +57,23 @@ def test_structured_error_helper_builds_expected_business_detail_shape() -> None
         "session_id": "session-456",
         "actor_id": "investigator-missing",
     }
+    assert build_session_action_error_detail(
+        code="draft_review_conflict",
+        message="草稿 draft-123 已过期，当前版本 5 与草稿版本 1 差距过大",
+        scope="draft_review_state",
+        session_id="session-789",
+        actor_id="ai-1",
+        draft_id="draft-123",
+        reviewer_id="keeper-1",
+    ) == {
+        "code": "draft_review_conflict",
+        "message": "草稿 draft-123 已过期，当前版本 5 与草稿版本 1 差距过大",
+        "scope": "draft_review_state",
+        "session_id": "session-789",
+        "actor_id": "ai-1",
+        "draft_id": "draft-123",
+        "reviewer_id": "keeper-1",
+    }
 
 
 def test_extract_error_detail_returns_dict_for_structured_errors_and_string_otherwise() -> None:

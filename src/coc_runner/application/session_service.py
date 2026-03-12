@@ -776,77 +776,137 @@ class SessionService:
         request: KPDraftRequest,
     ) -> PlayerActionResponse:
         error_language = self._resolve_language(request.language_preference)
-        session = self._load_session(session_id, language=error_language)
-        current_time = datetime.now(timezone.utc)
+        try:
+            session = self._load_session(session_id, language=error_language)
+        except LookupError as exc:
+            message = exc.args[0] if exc.args and isinstance(exc.args[0], str) else self._message(
+                "session_not_found",
+                error_language,
+                session_id=session_id,
+            )
+            raise LookupError(
+                build_session_action_error_detail(
+                    code="kp_draft_session_not_found",
+                    message=message,
+                    scope="kp_draft_session",
+                    session_id=session_id,
+                )
+            ) from exc
         effective_language = self._resolve_language(
             request.language_preference, session.language_preference
         )
-        visible_to = self._normalize_visible_to(
-            actor_id=session.keeper_id,
-            visibility_scope=request.visibility_scope,
-            visible_to=request.visible_to,
-        )
-        expected_version = session.state_version
-        rules_grounding = self._ground_rules_for_action(
-            actor_id=session.keeper_id,
-            actor_type=ActorType.KEEPER,
-            query_text=self._resolve_rules_query_text(
-                request.rules_query_text,
-                request.draft_text,
-                request.structured_action,
-            ),
-            deterministic_resolution_required=request.deterministic_resolution_required,
-        )
-        grounding_degraded = self._annotate_grounding_review_summary(
-            session=session,
-            rules_grounding=rules_grounding,
-        )
-        resolved_effects, effect_contract_origin = self._resolve_action_effect_contract(
-            explicit_effects=request.effects,
-            structured_action=request.structured_action,
-        )
-        draft_action = self._build_draft_action(
-            session=session,
-            actor_id=session.keeper_id,
-            actor_type=ActorType.KEEPER,
-            visibility_scope=request.visibility_scope,
-            visible_to=visible_to,
-            draft_text=request.draft_text,
-            structured_action=request.structured_action,
-            effects=resolved_effects,
-            effect_contract_origin=effect_contract_origin,
-            rationale_summary=request.rationale_summary
-            or self._message("kp_draft_rationale", effective_language),
-            rules_grounding=rules_grounding,
-            language=effective_language,
-            behavior_context=[],
-            current_time=current_time,
-        )
-        session.draft_actions.append(draft_action)
-        session.state_version += 1
-        session.updated_at = current_time
-        self._append_audit_log(
-            session,
-            action=AuditActionType.DRAFT_CREATED,
-            actor_id=session.keeper_id,
-            subject_id=draft_action.draft_id,
-            current_time=current_time,
-            details={"origin": "kp_draft", "risk_level": draft_action.risk_level.value},
-        )
-        self._save_session(
-            session,
-            expected_version=expected_version,
-            reason="kp_draft_created",
-            language=effective_language,
-        )
-        return PlayerActionResponse(
-            message=self._message("kp_draft_recorded", effective_language),
-            session_id=session.session_id,
-            state_version=session.state_version,
-            language_preference=effective_language,
-            grounding_degraded=grounding_degraded,
-            draft_action=draft_action,
-        )
+        error_context = {
+            "session_id": session.session_id,
+            "actor_id": session.keeper_id,
+        }
+        try:
+            current_time = datetime.now(timezone.utc)
+            visible_to = self._normalize_visible_to(
+                actor_id=session.keeper_id,
+                visibility_scope=request.visibility_scope,
+                visible_to=request.visible_to,
+            )
+            expected_version = session.state_version
+            rules_grounding = self._ground_rules_for_action(
+                actor_id=session.keeper_id,
+                actor_type=ActorType.KEEPER,
+                query_text=self._resolve_rules_query_text(
+                    request.rules_query_text,
+                    request.draft_text,
+                    request.structured_action,
+                ),
+                deterministic_resolution_required=request.deterministic_resolution_required,
+            )
+            grounding_degraded = self._annotate_grounding_review_summary(
+                session=session,
+                rules_grounding=rules_grounding,
+            )
+            resolved_effects, effect_contract_origin = self._resolve_action_effect_contract(
+                explicit_effects=request.effects,
+                structured_action=request.structured_action,
+            )
+            draft_action = self._build_draft_action(
+                session=session,
+                actor_id=session.keeper_id,
+                actor_type=ActorType.KEEPER,
+                visibility_scope=request.visibility_scope,
+                visible_to=visible_to,
+                draft_text=request.draft_text,
+                structured_action=request.structured_action,
+                effects=resolved_effects,
+                effect_contract_origin=effect_contract_origin,
+                rationale_summary=request.rationale_summary
+                or self._message("kp_draft_rationale", effective_language),
+                rules_grounding=rules_grounding,
+                language=effective_language,
+                behavior_context=[],
+                current_time=current_time,
+            )
+            session.draft_actions.append(draft_action)
+            session.state_version += 1
+            session.updated_at = current_time
+            self._append_audit_log(
+                session,
+                action=AuditActionType.DRAFT_CREATED,
+                actor_id=session.keeper_id,
+                subject_id=draft_action.draft_id,
+                current_time=current_time,
+                details={"origin": "kp_draft", "risk_level": draft_action.risk_level.value},
+            )
+            self._save_session(
+                session,
+                expected_version=expected_version,
+                reason="kp_draft_created",
+                language=effective_language,
+            )
+            return PlayerActionResponse(
+                message=self._message("kp_draft_recorded", effective_language),
+                session_id=session.session_id,
+                state_version=session.state_version,
+                language_preference=effective_language,
+                grounding_degraded=grounding_degraded,
+                draft_action=draft_action,
+            )
+        except LookupError as exc:
+            message = exc.args[0] if exc.args and isinstance(exc.args[0], str) else self._message(
+                "draft_not_found",
+                effective_language,
+                draft_id="unknown",
+            )
+            raise LookupError(
+                build_session_action_error_detail(
+                    code="kp_draft_target_not_found",
+                    message=message,
+                    scope="kp_draft_execution",
+                    **error_context,
+                )
+            ) from exc
+        except ConflictError as exc:
+            message = exc.args[0] if exc.args and isinstance(exc.args[0], str) else self._message(
+                "state_conflict",
+                effective_language,
+            )
+            raise ConflictError(
+                build_session_action_error_detail(
+                    code="kp_draft_state_conflict",
+                    message=message,
+                    scope="kp_draft_state",
+                    **error_context,
+                )
+            ) from exc
+        except ValueError as exc:
+            message = exc.args[0] if exc.args and isinstance(exc.args[0], str) else self._message(
+                "invalid_scene_transition",
+                effective_language,
+            )
+            raise ValueError(
+                build_session_action_error_detail(
+                    code="kp_draft_invalid",
+                    message=message,
+                    scope="kp_draft_request",
+                    **error_context,
+                )
+            ) from exc
 
     def submit_manual_action(
         self,
@@ -1211,11 +1271,53 @@ class SessionService:
         request: ReviewDraftRequest,
     ) -> ReviewDraftResponse:
         error_language = self._resolve_language(request.language_preference)
-        session = self._load_session(session_id, language=error_language)
-        draft_action = self._get_draft_action(session, draft_id, language=error_language)
+        try:
+            session = self._load_session(session_id, language=error_language)
+        except LookupError as exc:
+            message = exc.args[0] if exc.args and isinstance(exc.args[0], str) else self._message(
+                "session_not_found",
+                error_language,
+                session_id=session_id,
+            )
+            raise LookupError(
+                build_session_action_error_detail(
+                    code="draft_review_session_not_found",
+                    message=message,
+                    scope="draft_review_session",
+                    session_id=session_id,
+                    draft_id=draft_id,
+                    reviewer_id=request.reviewer_id,
+                )
+            ) from exc
+        try:
+            draft_action = self._get_draft_action(session, draft_id, language=error_language)
+        except LookupError as exc:
+            message = exc.args[0] if exc.args and isinstance(exc.args[0], str) else self._message(
+                "draft_not_found",
+                error_language,
+                draft_id=draft_id,
+            )
+            raise LookupError(
+                build_session_action_error_detail(
+                    code="draft_review_not_found",
+                    message=message,
+                    scope="draft_review_draft",
+                    session_id=session.session_id,
+                    draft_id=draft_id,
+                    reviewer_id=request.reviewer_id,
+                )
+            ) from exc
         if draft_action.review_status != ReviewStatus.PENDING:
             raise ValueError(
-                self._message("draft_not_pending", error_language, draft_id=draft_id)
+                build_session_action_error_detail(
+                    code="draft_review_invalid",
+                    message=self._message("draft_not_pending", error_language, draft_id=draft_id),
+                    scope="draft_review_state",
+                    session_id=session.session_id,
+                    actor_id=draft_action.actor_id,
+                    draft_id=draft_id,
+                    reviewer_id=request.reviewer_id,
+                )
             )
 
         effective_language = self._resolve_language(
@@ -1223,238 +1325,288 @@ class SessionService:
             draft_action.language_preference,
             session.language_preference,
         )
-        self._authorize_reviewer(
-            session,
-            draft_action=draft_action,
-            reviewer_id=request.reviewer_id,
-            language=effective_language,
-        )
-        current_time = datetime.now(timezone.utc)
-        expected_version = session.state_version
+        error_context = {
+            "session_id": session.session_id,
+            "actor_id": draft_action.actor_id,
+            "draft_id": draft_id,
+            "reviewer_id": request.reviewer_id,
+        }
+        try:
+            self._authorize_reviewer(
+                session,
+                draft_action=draft_action,
+                reviewer_id=request.reviewer_id,
+                language=effective_language,
+            )
+            current_time = datetime.now(timezone.utc)
+            expected_version = session.state_version
 
-        if request.decision in {
-            ReviewDecisionType.APPROVE,
-            ReviewDecisionType.EDIT,
-            ReviewDecisionType.MANUAL_OVERRIDE,
-        }:
-            self._ensure_draft_reviewable(
-                session,
-                draft_action=draft_action,
-                decision=request.decision,
-                language=effective_language,
-            )
-            reviewed_action, authoritative_action = self._finalize_reviewed_action(
-                session=session,
-                draft_action=draft_action,
-                request=request,
-                effective_language=effective_language,
-                current_time=current_time,
-            )
-            session.state_version += 1
-            session.updated_at = current_time
-            self._append_audit_log(
-                session,
-                action=AuditActionType.REVIEW_DECISION,
-                actor_id=request.reviewer_id,
-                subject_id=reviewed_action.review_id,
-                current_time=current_time,
-                details={
-                    "draft_id": draft_action.draft_id,
-                    "decision": request.decision.value,
-                    "review_status": reviewed_action.review_status.value,
-                    "learn_from_final": reviewed_action.learn_from_final,
-                },
-            )
-            self._save_session(
-                session,
-                expected_version=expected_version,
-                reason=f"draft_review_{reviewed_action.review_status.value}",
-                language=effective_language,
-            )
-            return ReviewDraftResponse(
-                message=self._message(
-                    "draft_edited"
-                    if reviewed_action.review_status == ReviewStatus.EDITED
-                    else "draft_approved",
-                    effective_language,
-                ),
-                session_id=session.session_id,
-                state_version=session.state_version,
-                language_preference=effective_language,
-                grounding_degraded=self._is_grounding_degraded(
+            if request.decision in {
+                ReviewDecisionType.APPROVE,
+                ReviewDecisionType.EDIT,
+                ReviewDecisionType.MANUAL_OVERRIDE,
+            }:
+                self._ensure_draft_reviewable(
                     session,
-                    reviewed_action.rules_grounding,
-                ),
-                reviewed_action=reviewed_action,
-                authoritative_action=authoritative_action,
-            )
-
-        if request.decision == ReviewDecisionType.REJECT:
-            draft_action.review_status = ReviewStatus.REJECTED
-            session.state_version += 1
-            session.updated_at = current_time
-            self._append_audit_log(
-                session,
-                action=AuditActionType.REVIEW_DECISION,
-                actor_id=request.reviewer_id,
-                subject_id=draft_action.draft_id,
-                current_time=current_time,
-                details={"decision": request.decision.value, "review_status": ReviewStatus.REJECTED.value},
-            )
-            self._save_session(
-                session,
-                expected_version=expected_version,
-                reason="draft_review_rejected",
-                language=effective_language,
-            )
-            return ReviewDraftResponse(
-                message=self._message("draft_rejected", effective_language),
-                session_id=session.session_id,
-                state_version=session.state_version,
-                language_preference=effective_language,
-                grounding_degraded=self._is_grounding_degraded(
+                    draft_action=draft_action,
+                    decision=request.decision,
+                    language=effective_language,
+                )
+                reviewed_action, authoritative_action = self._finalize_reviewed_action(
+                    session=session,
+                    draft_action=draft_action,
+                    request=request,
+                    effective_language=effective_language,
+                    current_time=current_time,
+                )
+                session.state_version += 1
+                session.updated_at = current_time
+                self._append_audit_log(
                     session,
-                    draft_action.rules_grounding,
-                ),
-            )
-
-        if request.decision == ReviewDecisionType.REGENERATE:
-            self._ensure_draft_reviewable(
-                session,
-                draft_action=draft_action,
-                decision=request.decision,
-                language=effective_language,
-            )
-            draft_action.review_status = ReviewStatus.REGENERATED
-            regenerated_structured_action = (
-                request.regenerated_structured_action
-                if request.regenerated_structured_action is not None
-                else draft_action.structured_action
-            )
-            regenerated_effects, regenerated_effect_contract_origin = (
-                self._resolve_action_effect_contract(
-                    explicit_effects=request.regenerated_effects,
-                    structured_action=regenerated_structured_action,
-                    fallback_effects=(
-                        None
-                        if request.regenerated_structured_action is not None
-                        else draft_action.effects
+                    action=AuditActionType.REVIEW_DECISION,
+                    actor_id=request.reviewer_id,
+                    subject_id=reviewed_action.review_id,
+                    current_time=current_time,
+                    details={
+                        "draft_id": draft_action.draft_id,
+                        "decision": request.decision.value,
+                        "review_status": reviewed_action.review_status.value,
+                        "learn_from_final": reviewed_action.learn_from_final,
+                    },
+                )
+                self._save_session(
+                    session,
+                    expected_version=expected_version,
+                    reason=f"draft_review_{reviewed_action.review_status.value}",
+                    language=effective_language,
+                )
+                return ReviewDraftResponse(
+                    message=self._message(
+                        "draft_edited"
+                        if reviewed_action.review_status == ReviewStatus.EDITED
+                        else "draft_approved",
+                        effective_language,
                     ),
-                    fallback_effect_contract_origin=(
-                        EffectContractOrigin.EXPLICIT
-                        if request.regenerated_structured_action is not None
-                        else draft_action.effect_contract_origin
+                    session_id=session.session_id,
+                    state_version=session.state_version,
+                    language_preference=effective_language,
+                    grounding_degraded=self._is_grounding_degraded(
+                        session,
+                        reviewed_action.rules_grounding,
+                    ),
+                    reviewed_action=reviewed_action,
+                    authoritative_action=authoritative_action,
+                )
+
+            if request.decision == ReviewDecisionType.REJECT:
+                draft_action.review_status = ReviewStatus.REJECTED
+                session.state_version += 1
+                session.updated_at = current_time
+                self._append_audit_log(
+                    session,
+                    action=AuditActionType.REVIEW_DECISION,
+                    actor_id=request.reviewer_id,
+                    subject_id=draft_action.draft_id,
+                    current_time=current_time,
+                    details={"decision": request.decision.value, "review_status": ReviewStatus.REJECTED.value},
+                )
+                self._save_session(
+                    session,
+                    expected_version=expected_version,
+                    reason="draft_review_rejected",
+                    language=effective_language,
+                )
+                return ReviewDraftResponse(
+                    message=self._message("draft_rejected", effective_language),
+                    session_id=session.session_id,
+                    state_version=session.state_version,
+                    language_preference=effective_language,
+                    grounding_degraded=self._is_grounding_degraded(
+                        session,
+                        draft_action.rules_grounding,
                     ),
                 )
-            )
-            regenerated_rules_grounding = self._ground_rules_for_action(
-                actor_id=draft_action.actor_id,
-                actor_type=draft_action.actor_type,
-                query_text=self._resolve_rules_query_text(
-                    (
-                        request.regenerated_structured_action or {}
-                    ).get("rules_query_text")
-                    if request.regenerated_structured_action is not None
-                    else draft_action.rules_grounding.query_text
-                    if draft_action.rules_grounding is not None
-                    else None,
-                    request.regenerated_draft_text or draft_action.draft_text,
+
+            if request.decision == ReviewDecisionType.REGENERATE:
+                self._ensure_draft_reviewable(
+                    session,
+                    draft_action=draft_action,
+                    decision=request.decision,
+                    language=effective_language,
+                )
+                draft_action.review_status = ReviewStatus.REGENERATED
+                regenerated_structured_action = (
                     request.regenerated_structured_action
                     if request.regenerated_structured_action is not None
-                    else draft_action.structured_action,
-                ),
-                deterministic_resolution_required=(
-                    bool(
+                    else draft_action.structured_action
+                )
+                regenerated_effects, regenerated_effect_contract_origin = (
+                    self._resolve_action_effect_contract(
+                        explicit_effects=request.regenerated_effects,
+                        structured_action=regenerated_structured_action,
+                        fallback_effects=(
+                            None
+                            if request.regenerated_structured_action is not None
+                            else draft_action.effects
+                        ),
+                        fallback_effect_contract_origin=(
+                            EffectContractOrigin.EXPLICIT
+                            if request.regenerated_structured_action is not None
+                            else draft_action.effect_contract_origin
+                        ),
+                    )
+                )
+                regenerated_rules_grounding = self._ground_rules_for_action(
+                    actor_id=draft_action.actor_id,
+                    actor_type=draft_action.actor_type,
+                    query_text=self._resolve_rules_query_text(
                         (
                             request.regenerated_structured_action or {}
-                        ).get("deterministic_resolution_required")
-                    )
-                    if request.regenerated_structured_action is not None
-                    else (
-                        draft_action.rules_grounding.deterministic_resolution_required
+                        ).get("rules_query_text")
+                        if request.regenerated_structured_action is not None
+                        else draft_action.rules_grounding.query_text
                         if draft_action.rules_grounding is not None
-                        else False
-                    )
-                ),
-            )
-            self._annotate_grounding_review_summary(
-                session=session,
-                rules_grounding=regenerated_rules_grounding,
-            )
-            regenerated_draft = self._build_draft_action(
-                session=session,
-                actor_id=draft_action.actor_id,
-                actor_type=draft_action.actor_type,
-                visibility_scope=draft_action.visibility_scope,
-                visible_to=draft_action.visible_to,
-                draft_text=request.regenerated_draft_text or draft_action.draft_text,
-                structured_action=regenerated_structured_action,
-                effects=regenerated_effects,
-                effect_contract_origin=regenerated_effect_contract_origin,
-                rationale_summary=request.editor_notes
-                or self._message("draft_rationale", effective_language),
-                rules_grounding=regenerated_rules_grounding,
-                language=effective_language,
-                behavior_context=(
-                    self._get_behavior_context(session, draft_action.actor_id)
-                    if draft_action.actor_type == ActorType.INVESTIGATOR
-                    else []
-                ),
-                current_time=current_time,
-                supersedes_draft_id=draft_action.draft_id,
-            )
-            session.draft_actions.append(regenerated_draft)
-            session.state_version += 1
-            session.updated_at = current_time
-            self._append_audit_log(
-                session,
-                action=AuditActionType.REVIEW_DECISION,
-                actor_id=request.reviewer_id,
-                subject_id=draft_action.draft_id,
-                current_time=current_time,
-                details={
-                    "decision": request.decision.value,
-                    "review_status": ReviewStatus.REGENERATED.value,
-                    "replacement_draft_id": regenerated_draft.draft_id,
-                },
-            )
-            self._append_audit_log(
-                session,
-                action=AuditActionType.DRAFT_CREATED,
-                actor_id=regenerated_draft.actor_id,
-                subject_id=regenerated_draft.draft_id,
-                current_time=current_time,
-                details={
-                    "origin": "regenerate",
-                    "supersedes_draft_id": draft_action.draft_id,
-                    "risk_level": regenerated_draft.risk_level.value,
-                },
-            )
-            self._save_session(
-                session,
-                expected_version=expected_version,
-                reason="draft_review_regenerated",
-                language=effective_language,
-            )
-            return ReviewDraftResponse(
-                message=self._message("draft_regenerated", effective_language),
-                session_id=session.session_id,
-                state_version=session.state_version,
-                language_preference=effective_language,
-                grounding_degraded=self._is_grounding_degraded(
+                        else None,
+                        request.regenerated_draft_text or draft_action.draft_text,
+                        request.regenerated_structured_action
+                        if request.regenerated_structured_action is not None
+                        else draft_action.structured_action,
+                    ),
+                    deterministic_resolution_required=(
+                        bool(
+                            (
+                                request.regenerated_structured_action or {}
+                            ).get("deterministic_resolution_required")
+                        )
+                        if request.regenerated_structured_action is not None
+                        else (
+                            draft_action.rules_grounding.deterministic_resolution_required
+                            if draft_action.rules_grounding is not None
+                            else False
+                        )
+                    ),
+                )
+                self._annotate_grounding_review_summary(
+                    session=session,
+                    rules_grounding=regenerated_rules_grounding,
+                )
+                regenerated_draft = self._build_draft_action(
+                    session=session,
+                    actor_id=draft_action.actor_id,
+                    actor_type=draft_action.actor_type,
+                    visibility_scope=draft_action.visibility_scope,
+                    visible_to=draft_action.visible_to,
+                    draft_text=request.regenerated_draft_text or draft_action.draft_text,
+                    structured_action=regenerated_structured_action,
+                    effects=regenerated_effects,
+                    effect_contract_origin=regenerated_effect_contract_origin,
+                    rationale_summary=request.editor_notes
+                    or self._message("draft_rationale", effective_language),
+                    rules_grounding=regenerated_rules_grounding,
+                    language=effective_language,
+                    behavior_context=(
+                        self._get_behavior_context(session, draft_action.actor_id)
+                        if draft_action.actor_type == ActorType.INVESTIGATOR
+                        else []
+                    ),
+                    current_time=current_time,
+                    supersedes_draft_id=draft_action.draft_id,
+                )
+                session.draft_actions.append(regenerated_draft)
+                session.state_version += 1
+                session.updated_at = current_time
+                self._append_audit_log(
                     session,
-                    regenerated_draft.rules_grounding,
-                ),
-                regenerated_draft=regenerated_draft,
-            )
+                    action=AuditActionType.REVIEW_DECISION,
+                    actor_id=request.reviewer_id,
+                    subject_id=draft_action.draft_id,
+                    current_time=current_time,
+                    details={
+                        "decision": request.decision.value,
+                        "review_status": ReviewStatus.REGENERATED.value,
+                        "replacement_draft_id": regenerated_draft.draft_id,
+                    },
+                )
+                self._append_audit_log(
+                    session,
+                    action=AuditActionType.DRAFT_CREATED,
+                    actor_id=regenerated_draft.actor_id,
+                    subject_id=regenerated_draft.draft_id,
+                    current_time=current_time,
+                    details={
+                        "origin": "regenerate",
+                        "supersedes_draft_id": draft_action.draft_id,
+                        "risk_level": regenerated_draft.risk_level.value,
+                    },
+                )
+                self._save_session(
+                    session,
+                    expected_version=expected_version,
+                    reason="draft_review_regenerated",
+                    language=effective_language,
+                )
+                return ReviewDraftResponse(
+                    message=self._message("draft_regenerated", effective_language),
+                    session_id=session.session_id,
+                    state_version=session.state_version,
+                    language_preference=effective_language,
+                    grounding_degraded=self._is_grounding_degraded(
+                        session,
+                        regenerated_draft.rules_grounding,
+                    ),
+                    regenerated_draft=regenerated_draft,
+                )
 
-        raise ValueError(
-            self._message(
+            raise ValueError(
+                self._message(
+                    "unsupported_review_decision",
+                    effective_language,
+                    decision=request.decision.value,
+                )
+            )
+        except PermissionError as exc:
+            message = exc.args[0] if exc.args and isinstance(exc.args[0], str) else self._message(
+                "reviewer_not_authorized",
+                effective_language,
+            )
+            raise PermissionError(
+                build_session_action_error_detail(
+                    code="draft_review_reviewer_not_authorized",
+                    message=message,
+                    scope="draft_review_permission",
+                    **error_context,
+                )
+            ) from exc
+        except ConflictError as exc:
+            message = exc.args[0] if exc.args and isinstance(exc.args[0], str) else self._message(
+                "draft_stale",
+                effective_language,
+                draft_id=draft_id,
+                current_version=session.state_version,
+                created_at_version=draft_action.created_at_version,
+            )
+            raise ConflictError(
+                build_session_action_error_detail(
+                    code="draft_review_conflict",
+                    message=message,
+                    scope="draft_review_state",
+                    **error_context,
+                )
+            ) from exc
+        except ValueError as exc:
+            message = exc.args[0] if exc.args and isinstance(exc.args[0], str) else self._message(
                 "unsupported_review_decision",
                 effective_language,
                 decision=request.decision.value,
             )
-        )
+            raise ValueError(
+                build_session_action_error_detail(
+                    code="draft_review_invalid",
+                    message=message,
+                    scope="draft_review_execution",
+                    **error_context,
+                )
+            ) from exc
 
     def rollback_session(
         self,

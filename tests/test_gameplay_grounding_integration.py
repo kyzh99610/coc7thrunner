@@ -1626,7 +1626,15 @@ def test_execution_layer_rejects_mismatched_deterministic_handoff_topic(
         json={"reviewer_id": "keeper-1", "decision": "approve"},
     )
     assert review_response.status_code == 400
-    assert "确定性交接主题" in review_response.json()["detail"]
+    assert review_response.json()["detail"] == {
+        "code": "draft_review_invalid",
+        "message": "执行要求的确定性交接主题 term:spot_hidden 与当前规则主题 term:library_use 不一致",
+        "session_id": session_id,
+        "actor_id": "ai-1",
+        "draft_id": draft_id,
+        "reviewer_id": "keeper-1",
+        "scope": "draft_review_execution",
+    }
 
     keeper_state = client.get(
         f"/sessions/{session_id}/state",

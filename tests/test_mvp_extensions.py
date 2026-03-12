@@ -76,7 +76,15 @@ def test_only_keeper_can_review_by_default(client: TestClient) -> None:
         json={"reviewer_id": "ai-1", "decision": "approve"},
     )
     assert review_response.status_code == 403
-    assert "只有本局 KP 可以审核该草稿" in review_response.json()["detail"]
+    assert review_response.json()["detail"] == {
+        "code": "draft_review_reviewer_not_authorized",
+        "message": "只有本局 KP 可以审核该草稿",
+        "session_id": session_id,
+        "actor_id": "ai-1",
+        "draft_id": draft_id,
+        "reviewer_id": "ai-1",
+        "scope": "draft_review_permission",
+    }
 
     keeper_state = client.get(
         f"/sessions/{session_id}/state",
@@ -431,6 +439,120 @@ def test_kp_draft_path_creates_reviewable_keeper_draft(client: TestClient) -> No
     )
 
 
+def test_kp_draft_missing_session_returns_structured_404_with_language_override(
+    client: TestClient,
+) -> None:
+    zh_response = client.post(
+        "/sessions/missing-kp-draft/kp-draft",
+        json={
+            "draft_text": "KP 暂定切换到地下室场景。",
+            "structured_action": {"type": "scene_transition"},
+        },
+    )
+    assert zh_response.status_code == 404
+    assert zh_response.json()["detail"] == {
+        "code": "kp_draft_session_not_found",
+        "message": "未找到会话 missing-kp-draft",
+        "session_id": "missing-kp-draft",
+        "scope": "kp_draft_session",
+    }
+
+    en_response = client.post(
+        "/sessions/missing-kp-draft/kp-draft",
+        json={
+            "draft_text": "KP temporarily transitions to the basement.",
+            "structured_action": {"type": "scene_transition"},
+            "language_preference": "en-US",
+        },
+    )
+    assert en_response.status_code == 404
+    assert en_response.json()["detail"] == {
+        "code": "kp_draft_session_not_found",
+        "message": "Session missing-kp-draft was not found",
+        "session_id": "missing-kp-draft",
+        "scope": "kp_draft_session",
+    }
+
+
+def test_kp_draft_conflict_returns_structured_409_without_mutating_session(
+    client: TestClient,
+) -> None:
+    session_id = _start_session(
+        client,
+        participants=[make_participant("investigator-1", "林舟")],
+    )
+    snapshot_before_conflict = client.get(f"/sessions/{session_id}/snapshot").json()
+    service = client.app.state.session_service
+    original_repository = service.repository
+
+    class ConflictRepository:
+        def __init__(self, wrapped) -> None:
+            self._wrapped = wrapped
+
+        def create(self, session, *, reason: str) -> None:
+            self._wrapped.create(session, reason=reason)
+
+        def get(self, session_id: str):
+            return self._wrapped.get(session_id)
+
+        def save(self, session, *, reason: str, expected_version: int) -> None:
+            raise ConflictError("会话状态版本冲突，请重新加载后再试")
+
+        def rollback(self, session_id: str, *, target_version: int, event_text: str):
+            return self._wrapped.rollback(
+                session_id,
+                target_version=target_version,
+                event_text=event_text,
+            )
+
+    service.repository = ConflictRepository(original_repository)
+    try:
+        response = client.post(
+            f"/sessions/{session_id}/kp-draft",
+            json={
+                "draft_text": "KP 暂定切换到地下室场景。",
+                "structured_action": {"type": "scene_transition"},
+            },
+        )
+    finally:
+        service.repository = original_repository
+
+    assert response.status_code == 409
+    assert response.json()["detail"] == {
+        "code": "kp_draft_state_conflict",
+        "message": "会话状态版本冲突，请重新加载后再试",
+        "session_id": session_id,
+        "actor_id": "keeper-1",
+        "scope": "kp_draft_state",
+    }
+    snapshot_after_conflict = client.get(f"/sessions/{session_id}/snapshot").json()
+    assert snapshot_after_conflict == snapshot_before_conflict
+
+
+def test_review_missing_draft_returns_structured_404_without_mutating_session(
+    client: TestClient,
+) -> None:
+    session_id = _start_session(client)
+    snapshot_before_review = client.get(f"/sessions/{session_id}/snapshot").json()
+
+    review_response = client.post(
+        f"/sessions/{session_id}/draft-actions/draft-missing/review",
+        json={"reviewer_id": "keeper-1", "decision": "approve"},
+    )
+
+    assert review_response.status_code == 404
+    assert review_response.json()["detail"] == {
+        "code": "draft_review_not_found",
+        "message": "未找到草稿 draft-missing",
+        "session_id": session_id,
+        "draft_id": "draft-missing",
+        "reviewer_id": "keeper-1",
+        "scope": "draft_review_draft",
+    }
+    snapshot_after_review = client.get(f"/sessions/{session_id}/snapshot").json()
+    assert snapshot_after_review == snapshot_before_review
+
+
 def test_stale_draft_review_returns_conflict_after_state_advances(client: TestClient) -> None:
     session_id = _start_session(client)
     draft_id = _create_ai_draft(
@@ -450,13 +572,24 @@ def test_stale_draft_review_returns_conflict_after_state_advances(client: TestCl
             },
         )
         assert response.status_code == 202
+    snapshot_before_review = client.get(f"/sessions/{session_id}/snapshot").json()
 
     review_response = client.post(
         f"/sessions/{session_id}/draft-actions/{draft_id}/review",
         json={"reviewer_id": "keeper-1", "decision": "approve"},
     )
     assert review_response.status_code == 409
-    assert "已过期" in review_response.json()["detail"]
+    assert review_response.json()["detail"] == {
+        "code": "draft_review_conflict",
+        "message": f"草稿 {draft_id} 已过期，当前版本 5 与草稿版本 2 差距过大",
+        "session_id": session_id,
+        "actor_id": "ai-1",
+        "draft_id": draft_id,
+        "reviewer_id": "keeper-1",
+        "scope": "draft_review_state",
+    }
+    snapshot_after_review = client.get(f"/sessions/{session_id}/snapshot").json()
+    assert snapshot_after_review == snapshot_before_review
 
 
 def test_regenerated_draft_supersedes_original_canonical_outcome(client: TestClient) -> None:
@@ -485,6 +618,15 @@ def test_regenerated_draft_supersedes_original_canonical_outcome(client: TestCli
         json={"reviewer_id": "keeper-1", "decision": "approve"},
     )
     assert original_review_response.status_code == 400
+    assert original_review_response.json()["detail"] == {
+        "code": "draft_review_invalid",
+        "message": f"草稿 {original_draft_id} 当前不是待审核状态",
+        "session_id": session_id,
+        "actor_id": "ai-1",
+        "draft_id": original_draft_id,
+        "reviewer_id": "keeper-1",
+        "scope": "draft_review_state",
+    }
 
     replacement_review_response = client.post(
         f"/sessions/{session_id}/draft-actions/{replacement_draft_id}/review",
