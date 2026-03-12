@@ -219,7 +219,14 @@ def test_force_replace_requires_explicit_manual_review_override(
         },
     )
     assert blocked_response.status_code == 400
-    assert "人工复核" in blocked_response.json()["detail"]
+    assert blocked_response.json()["detail"] == {
+        "code": "character_import_force_review_required",
+        "message": "该导入仍需人工复核；如需强制覆盖会话状态，请显式启用 force_apply_manual_review",
+        "source_id": "character-sheet-template-force-review",
+        "session_id": session_id,
+        "actor_id": "investigator-1",
+        "scope": "character_import_review",
+    }
 
     forced_response = client.post(
         f"/sessions/{session_id}/apply-character-import",

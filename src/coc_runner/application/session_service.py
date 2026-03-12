@@ -923,18 +923,37 @@ class SessionService:
             raise
         current_time = datetime.now(timezone.utc)
         expected_version = session.state_version
-        character_state, sync_report = self._apply_character_sheet_extraction_to_session(
-            session,
-            actor_id=request.actor_id,
-            source=source,
-            sync_policy=self._resolve_character_import_sync_policy(
-                request.sync_policy,
-                refresh_existing=request.refresh_existing,
-            ),
-            force_apply_manual_review=request.force_apply_manual_review,
-            current_time=current_time,
-            language=effective_language,
+        sync_policy = self._resolve_character_import_sync_policy(
+            request.sync_policy,
+            refresh_existing=request.refresh_existing,
         )
+        try:
+            character_state, sync_report = self._apply_character_sheet_extraction_to_session(
+                session,
+                actor_id=request.actor_id,
+                source=source,
+                sync_policy=sync_policy,
+                force_apply_manual_review=request.force_apply_manual_review,
+                current_time=current_time,
+                language=effective_language,
+            )
+        except ValueError as exc:
+            force_review_required_message = self._message(
+                "character_import_force_review_required",
+                effective_language,
+            )
+            if exc.args and exc.args[0] == force_review_required_message:
+                raise ValueError(
+                    {
+                        "code": "character_import_force_review_required",
+                        "message": force_review_required_message,
+                        "source_id": request.source_id,
+                        "session_id": session.session_id,
+                        "actor_id": request.actor_id,
+                        "scope": "character_import_review",
+                    }
+                ) from exc
+            raise
         session.state_version += 1
         session.updated_at = current_time
         self._save_session(

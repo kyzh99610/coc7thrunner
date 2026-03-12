@@ -1005,3 +1005,55 @@ def test_apply_character_import_missing_extraction_returns_structured_400_withou
 
     snapshot_after_apply_failure = _get_snapshot(client, session_id)
     assert snapshot_after_apply_failure == snapshot_before_apply
+
+
+def test_apply_character_import_force_review_required_returns_structured_400_without_mutating_session(
+    client: TestClient,
+) -> None:
+    source_id = "character-sheet-template-force-review-structured"
+    _import_character_sheet_source(client, source_id=source_id)
+    start_response = client.post(
+        "/sessions/start",
+        json={
+            "keeper_name": "KP",
+            "scenario": _snapshot_scenario(),
+            "participants": [make_participant("investigator-1", "占位调查员")],
+        },
+    )
+    assert start_response.status_code == 201
+    session_id = start_response.json()["session_id"]
+    snapshot_before_apply = _get_snapshot(client, session_id)
+
+    blocked_response = client.post(
+        f"/sessions/{session_id}/apply-character-import",
+        json={
+            "operator_id": "keeper-1",
+            "actor_id": "investigator-1",
+            "source_id": source_id,
+            "sync_policy": "force_replace",
+        },
+    )
+    assert blocked_response.status_code == 400
+    assert blocked_response.json()["detail"] == {
+        "code": "character_import_force_review_required",
+        "message": "该导入仍需人工复核；如需强制覆盖会话状态，请显式启用 force_apply_manual_review",
+        "source_id": source_id,
+        "session_id": session_id,
+        "actor_id": "investigator-1",
+        "scope": "character_import_review",
+    }
+
+    snapshot_after_apply_failure = _get_snapshot(client, session_id)
+    assert snapshot_after_apply_failure == snapshot_before_apply
+
+    forced_response = client.post(
+        f"/sessions/{session_id}/apply-character-import",
+        json={
+            "operator_id": "keeper-1",
+            "actor_id": "investigator-1",
+            "source_id": source_id,
+            "sync_policy": "force_replace",
+            "force_apply_manual_review": True,
+        },
+    )
+    assert forced_response.status_code == 200
