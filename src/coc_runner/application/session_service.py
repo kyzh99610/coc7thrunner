@@ -497,6 +497,45 @@ class SessionService:
                 )
         return warnings
 
+    def _session_has_missing_external_sources(self, session: SessionState) -> bool:
+        source_exists_cache: dict[str, bool] = {}
+
+        def source_exists(source_id: str) -> bool:
+            if source_id not in source_exists_cache:
+                source_exists_cache[source_id] = self._knowledge_source_exists(source_id)
+            return source_exists_cache[source_id]
+
+        for participant in session.participants:
+            source_id = participant.imported_character_source_id
+            if source_id is not None and not source_exists(source_id):
+                return True
+
+        for character_state in session.character_states.values():
+            source_id = character_state.import_source_id
+            if source_id is not None and not source_exists(source_id):
+                return True
+            for ref in dict.fromkeys(character_state.secret_state_refs):
+                ref_source_id = self._extract_knowledge_source_id_from_secret_ref(ref)
+                if ref_source_id is not None and not source_exists(ref_source_id):
+                    return True
+        return False
+
+    def _is_grounding_degraded(
+        self,
+        session: SessionState,
+        rules_grounding: RuleGroundingSummary | None,
+    ) -> bool:
+        if rules_grounding is None:
+            return False
+        if (
+            rules_grounding.matched_topics
+            or rules_grounding.citations
+            or rules_grounding.deterministic_handoff_topic is not None
+            or rules_grounding.chinese_answer_draft is not None
+        ):
+            return False
+        return self._session_has_missing_external_sources(session)
+
     def _knowledge_source_exists(self, source_id: str) -> bool:
         if self.knowledge_repository is None:
             return False
@@ -540,6 +579,7 @@ class SessionService:
             ),
             deterministic_resolution_required=request.deterministic_resolution_required,
             )
+        grounding_degraded = self._is_grounding_degraded(session, rules_grounding)
 
         resolved_effects, effect_contract_origin = self._resolve_action_effect_contract(
             explicit_effects=request.effects,
@@ -589,6 +629,7 @@ class SessionService:
                 session_id=session.session_id,
                 state_version=session.state_version,
                 language_preference=effective_language,
+                grounding_degraded=grounding_degraded,
                 draft_action=draft_action,
             )
 
@@ -626,6 +667,7 @@ class SessionService:
             session_id=session.session_id,
             state_version=session.state_version,
             language_preference=effective_language,
+            grounding_degraded=grounding_degraded,
             authoritative_event=authoritative_event,
             authoritative_action=authoritative_action,
         )
@@ -657,6 +699,7 @@ class SessionService:
             ),
             deterministic_resolution_required=request.deterministic_resolution_required,
         )
+        grounding_degraded = self._is_grounding_degraded(session, rules_grounding)
         resolved_effects, effect_contract_origin = self._resolve_action_effect_contract(
             explicit_effects=request.effects,
             structured_action=request.structured_action,
@@ -700,6 +743,7 @@ class SessionService:
             session_id=session.session_id,
             state_version=session.state_version,
             language_preference=effective_language,
+            grounding_degraded=grounding_degraded,
             draft_action=draft_action,
         )
 
@@ -754,6 +798,7 @@ class SessionService:
             ),
             deterministic_resolution_required=request.deterministic_resolution_required,
         )
+        grounding_degraded = self._is_grounding_degraded(session, rules_grounding)
         resolved_effects, effect_contract_origin = self._resolve_action_effect_contract(
             explicit_effects=request.effects,
             structured_action=request.structured_action,
@@ -792,6 +837,7 @@ class SessionService:
             session_id=session.session_id,
             state_version=session.state_version,
             language_preference=effective_language,
+            grounding_degraded=grounding_degraded,
             authoritative_event=authoritative_event,
             authoritative_action=authoritative_action,
         )
@@ -989,6 +1035,10 @@ class SessionService:
                 session_id=session.session_id,
                 state_version=session.state_version,
                 language_preference=effective_language,
+                grounding_degraded=self._is_grounding_degraded(
+                    session,
+                    reviewed_action.rules_grounding,
+                ),
                 reviewed_action=reviewed_action,
                 authoritative_action=authoritative_action,
             )
@@ -1016,6 +1066,10 @@ class SessionService:
                 session_id=session.session_id,
                 state_version=session.state_version,
                 language_preference=effective_language,
+                grounding_degraded=self._is_grounding_degraded(
+                    session,
+                    draft_action.rules_grounding,
+                ),
             )
 
         if request.decision == ReviewDecisionType.REGENERATE:
@@ -1136,6 +1190,10 @@ class SessionService:
                 session_id=session.session_id,
                 state_version=session.state_version,
                 language_preference=effective_language,
+                grounding_degraded=self._is_grounding_degraded(
+                    session,
+                    regenerated_draft.rules_grounding,
+                ),
                 regenerated_draft=regenerated_draft,
             )
 

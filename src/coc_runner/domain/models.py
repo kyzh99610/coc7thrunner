@@ -1556,6 +1556,7 @@ class PlayerActionResponse(BaseModel):
     session_id: str
     state_version: int
     language_preference: LanguagePreference
+    grounding_degraded: bool = False
     authoritative_event: SessionEvent | None = None
     authoritative_action: AuthoritativeAction | None = None
     draft_action: DraftAction | None = None
@@ -1592,6 +1593,7 @@ class ReviewDraftResponse(BaseModel):
     session_id: str
     state_version: int
     language_preference: LanguagePreference
+    grounding_degraded: bool = False
     reviewed_action: ReviewedAction | None = None
     authoritative_action: AuthoritativeAction | None = None
     regenerated_draft: DraftAction | None = None

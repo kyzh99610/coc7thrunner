@@ -617,6 +617,7 @@ def test_cross_environment_import_allows_rules_grounding_to_degrade_without_cras
             assert degraded_action.status_code == 202
 
             degraded_payload = degraded_action.json()
+            assert degraded_payload["grounding_degraded"] is True
             degraded_event = degraded_payload["authoritative_event"]
             degraded_grounding = degraded_event["rules_grounding"]
             assert degraded_grounding["query_text"] == "图书馆使用"

@@ -106,10 +106,45 @@ def test_player_action_auto_grounding_uses_action_text_when_query_missing(
     )
     assert action_response.status_code == 202
 
+    assert action_response.json()["grounding_degraded"] is False
     grounding = action_response.json()["authoritative_event"]["rules_grounding"]
     assert grounding["query_text"] == "图书馆使用"
     assert grounding["deterministic_handoff_topic"] == "term:library_use"
     assert grounding["citations"]
+
+
+def test_empty_grounding_without_missing_external_sources_is_not_flagged_degraded(
+    client: TestClient,
+) -> None:
+    start_response = client.post(
+        "/sessions/start",
+        json={
+            "keeper_name": "KP",
+            "scenario": make_scenario(),
+            "participants": [make_participant("investigator-1", "林舟")],
+        },
+    )
+    assert start_response.status_code == 201
+    session_id = start_response.json()["session_id"]
+
+    action_response = client.post(
+        f"/sessions/{session_id}/player-action",
+        json={
+            "actor_id": "investigator-1",
+            "action_text": "我查阅旧报纸寻找矿镇失踪案线索。",
+            "structured_action": {"type": "research"},
+            "rules_query_text": "查阅旧报纸该用什么技能",
+            "deterministic_resolution_required": True,
+        },
+    )
+    assert action_response.status_code == 202
+    payload = action_response.json()
+
+    assert payload["grounding_degraded"] is False
+    assert payload["authoritative_event"]["rules_grounding"]["matched_topics"] == []
+    assert payload["authoritative_event"]["rules_grounding"]["citations"] == []
+    assert payload["authoritative_event"]["rules_grounding"]["deterministic_handoff_topic"] is None
+    assert payload["authoritative_event"]["rules_grounding"]["review_summary"] == "未命中可用规则依据。"
 
 
 def _register_text_source(
@@ -353,6 +388,7 @@ def test_gameplay_smoke_flow_uses_grounded_rules_and_review_gate(client: TestCli
     assert player_action.status_code == 202
     player_payload = player_action.json()
 
+    assert player_payload["grounding_degraded"] is False
     assert player_payload["authoritative_event"]["rules_grounding"]["deterministic_resolution_required"] is True
     assert player_payload["authoritative_event"]["rules_grounding"]["deterministic_handoff_topic"] == "term:library_use"
     assert player_payload["authoritative_event"]["rules_grounding"]["citations"]
@@ -369,6 +405,7 @@ def test_gameplay_smoke_flow_uses_grounded_rules_and_review_gate(client: TestCli
         },
     )
     assert ai_draft.status_code == 202
+    assert ai_draft.json()["grounding_degraded"] is False
     ai_payload = ai_draft.json()["draft_action"]
 
     assert ai_payload["review_status"] == "pending"
@@ -390,6 +427,7 @@ def test_gameplay_smoke_flow_uses_grounded_rules_and_review_gate(client: TestCli
         json={"reviewer_id": "keeper-1", "decision": "approve"},
     )
     assert review_response.status_code == 200
+    assert review_response.json()["grounding_degraded"] is False
     reviewed = review_response.json()["reviewed_action"]
 
     assert reviewed["rules_grounding"]["deterministic_handoff_topic"] == "term:spot_hidden"
