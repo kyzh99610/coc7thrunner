@@ -173,6 +173,84 @@ def _build_participant_from_extraction(
     }
 
 
+def _minimal_high_risk_review_sanity_scenario() -> dict:
+    return make_scenario(
+        start_scene_id="scene.cellar",
+        scenes=[
+            {
+                "scene_id": "scene.cellar",
+                "title": "旅店地窖门前",
+                "summary": "锁链封住的地窖门后传来断续低语，潮气沿门缝往外渗。",
+                "phase": "investigation",
+                "revealed": True,
+                "linked_clue_ids": ["clue.cellar_whisper_note"],
+                "scene_objectives": [
+                    {
+                        "objective_id": "objective.cellar.assess_whisper",
+                        "text": "确认地窖门后的低语是否与异常真相有关",
+                        "beat_id": "beat.cellar_entry",
+                    }
+                ],
+                "keeper_notes": ["一旦确认门后低语来源，应立即进入理智相关人工审阅。"],
+            }
+        ],
+        clues=[
+            {
+                "clue_id": "clue.cellar_whisper_note",
+                "title": "门槛刻痕",
+                "text": "门槛上的刻痕与潮湿指印说明有人曾从地窖内侧反复抓挠门板。",
+                "visibility_scope": "kp_only",
+            }
+        ],
+        beats=[
+            {
+                "beat_id": "beat.cellar_entry",
+                "title": "确认地窖低语来源",
+                "start_unlocked": True,
+                "complete_conditions": {
+                    "clue_discovered": {"clue_id": "clue.cellar_whisper_note"}
+                },
+                "next_beats": ["beat.sanity_review"],
+                "consequences": [
+                    {
+                        "apply_statuses": [
+                            {
+                                "actor_id": "investigator-1",
+                                "add_temporary_conditions": ["心神不宁"],
+                            }
+                        ],
+                        "grant_private_notes": [
+                            {
+                                "actor_id": "investigator-1",
+                                "note": "门后的低语似乎在重复调查员自己的名字。",
+                            }
+                        ],
+                        "queue_kp_prompts": [
+                            {
+                                "prompt_text": "KP：地窖低语可能触发理智检定，请人工确认是否需要立即审阅。",
+                                "category": "sanity_review",
+                                "scene_id": "scene.cellar",
+                                "reason": "明显的精神冲击需要人工裁定",
+                            }
+                        ],
+                        "mark_scene_objectives_complete": [
+                            {
+                                "objective_id": "objective.cellar.assess_whisper",
+                                "scene_id": "scene.cellar",
+                            }
+                        ],
+                    }
+                ],
+            },
+            {
+                "beat_id": "beat.sanity_review",
+                "title": "裁定地窖低语的理智影响",
+                "scene_objective": "决定是否需要立即进行理智相关人工审阅",
+            },
+        ],
+    )
+
+
 def test_gameplay_smoke_flow_uses_grounded_rules_and_review_gate(client: TestClient) -> None:
     _register_text_source(
         client,
@@ -331,6 +409,172 @@ def test_gameplay_smoke_flow_uses_grounded_rules_and_review_gate(client: TestCli
     assert any(event["text"] == "我建议继续侦查，即使失败也接受房规代价。" for event in reviewed_events)
     assert reviewed_events[-1]["rules_grounding"]["citations"]
     assert reviewed_events[-1]["structured_payload"]["rules_grounding"]["citations"]
+
+
+def test_high_risk_review_gate_approval_produces_authoritative_result_and_sanity_review_prompt(
+    client: TestClient,
+) -> None:
+    start_response = client.post(
+        "/sessions/start",
+        json={
+            "keeper_name": "KP",
+            "scenario": _minimal_high_risk_review_sanity_scenario(),
+            "participants": [
+                make_participant("investigator-1", "林舟"),
+                make_participant("investigator-2", "周岚"),
+                make_participant("ai-1", "测试调查员", kind="ai"),
+            ],
+        },
+    )
+    assert start_response.status_code == 201
+    session_id = start_response.json()["session_id"]
+
+    draft_response = client.post(
+        f"/sessions/{session_id}/player-action",
+        json={
+            "actor_id": "ai-1",
+            "action_text": "我建议沿门槛和锁链继续侦查低语来源，并把发现先交给林舟确认。",
+            "structured_action": {
+                "type": "investigate_search",
+                "risk_level": "high",
+                "requires_explicit_approval": True,
+            },
+            "effects": {
+                "clue_state_effects": [
+                    {
+                        "clue_id": "clue.cellar_whisper_note",
+                        "status": "private_to_actor",
+                        "private_to_actor_ids": ["investigator-1"],
+                        "add_owner_actor_ids": ["investigator-1"],
+                        "add_discovered_by": ["investigator-1"],
+                        "discovered_via": "investigate_cellar_whisper",
+                    }
+                ]
+            },
+        },
+    )
+    assert draft_response.status_code == 202
+    draft_payload = draft_response.json()["draft_action"]
+    assert draft_payload["review_status"] == "pending"
+    assert draft_payload["risk_level"] == "high"
+    assert draft_payload["requires_explicit_approval"] is True
+
+    keeper_before_review = client.get(
+        f"/sessions/{session_id}/state",
+        params={"viewer_role": "keeper"},
+    ).json()
+    snapshot_before_review = client.get(f"/sessions/{session_id}/snapshot").json()
+
+    assert keeper_before_review["progress_state"]["current_beat"] == "beat.cellar_entry"
+    assert keeper_before_review["visible_reviewed_actions"] == []
+    assert keeper_before_review["visible_authoritative_actions"] == []
+    assert all(
+        prompt["category"] != "sanity_review"
+        for prompt in keeper_before_review["keeper_workflow"]["active_prompts"]
+    )
+    assert all(
+        event["text"] != "我建议沿门槛和锁链继续侦查低语来源，并把发现先交给林舟确认。"
+        for event in keeper_before_review["visible_events"]
+    )
+    assert snapshot_before_review["reviewed_actions"] == []
+    assert snapshot_before_review["authoritative_actions"] == []
+
+    review_response = client.post(
+        f"/sessions/{session_id}/draft-actions/{draft_payload['draft_id']}/review",
+        json={"reviewer_id": "keeper-1", "decision": "approve"},
+    )
+    assert review_response.status_code == 200
+    reviewed_payload = review_response.json()["reviewed_action"]
+    authoritative_payload = review_response.json()["authoritative_action"]
+
+    assert reviewed_payload["review_status"] == "approved"
+    assert reviewed_payload["decision"]["decision"] == "approve"
+    assert reviewed_payload["authoritative_action_id"] == authoritative_payload["action_id"]
+    assert reviewed_payload["canonical_event_id"] == authoritative_payload["canonical_event_id"]
+    assert any(
+        transition["beat_id"] == "beat.cellar_entry"
+        and transition["transition"] == "completed"
+        for transition in authoritative_payload["applied_beat_transitions"]
+    )
+    assert any(
+        transition["beat_id"] == "beat.sanity_review"
+        and transition["transition"] == "current"
+        for transition in authoritative_payload["applied_beat_transitions"]
+    )
+
+    keeper_after_review = client.get(
+        f"/sessions/{session_id}/state",
+        params={"viewer_role": "keeper"},
+    ).json()
+    investigator_one = client.get(
+        f"/sessions/{session_id}/state",
+        params={"viewer_id": "investigator-1", "viewer_role": "investigator"},
+    ).json()
+    investigator_two = client.get(
+        f"/sessions/{session_id}/state",
+        params={"viewer_id": "investigator-2", "viewer_role": "investigator"},
+    ).json()
+    snapshot_after_review = client.get(f"/sessions/{session_id}/snapshot").json()
+
+    keeper_reviewed = {
+        reviewed["review_id"]: reviewed for reviewed in keeper_after_review["visible_reviewed_actions"]
+    }
+    keeper_authoritative = {
+        action["action_id"]: action for action in keeper_after_review["visible_authoritative_actions"]
+    }
+    keeper_prompt = next(
+        prompt
+        for prompt in keeper_after_review["keeper_workflow"]["active_prompts"]
+        if prompt["category"] == "sanity_review"
+    )
+    investigator_one_clues = {
+        clue["clue_id"]: clue for clue in investigator_one["scenario"]["clues"]
+    }
+    investigator_two_clue_ids = {
+        clue["clue_id"] for clue in investigator_two["scenario"]["clues"]
+    }
+    reviewed_event = next(
+        event
+        for event in keeper_after_review["visible_events"]
+        if event["event_id"] == reviewed_payload["canonical_event_id"]
+    )
+
+    assert keeper_after_review["progress_state"]["current_beat"] == "beat.sanity_review"
+    assert keeper_reviewed[reviewed_payload["review_id"]]["authoritative_action_id"] == authoritative_payload["action_id"]
+    assert keeper_authoritative[authoritative_payload["action_id"]]["review_id"] == reviewed_payload["review_id"]
+    assert reviewed_event["event_type"] == "reviewed_action"
+    assert reviewed_event["text"] == reviewed_payload["final_text"]
+    assert reviewed_event["structured_payload"]["review_id"] == reviewed_payload["review_id"]
+    assert keeper_prompt["status"] == "pending"
+    assert keeper_prompt["source_action_id"] == authoritative_payload["action_id"]
+    assert any(
+        objective["objective_id"] == "beat:beat.sanity_review"
+        and objective["source_action_id"] == authoritative_payload["action_id"]
+        for objective in keeper_after_review["keeper_workflow"]["unresolved_objectives"]
+    )
+
+    assert investigator_one["keeper_workflow"] is None
+    assert any(
+        event["event_id"] == reviewed_payload["canonical_event_id"]
+        for event in investigator_one["visible_events"]
+    )
+    assert any(
+        event["event_id"] == reviewed_payload["canonical_event_id"]
+        for event in investigator_two["visible_events"]
+    )
+    assert investigator_one_clues["clue.cellar_whisper_note"]["status"] == "private_to_actor"
+    assert "clue.cellar_whisper_note" not in investigator_two_clue_ids
+    assert "心神不宁" in investigator_one["own_character_state"]["temporary_conditions"]
+    assert "心神不宁" not in investigator_two["own_character_state"]["temporary_conditions"]
+    assert any(
+        "门后的低语似乎在重复调查员自己的名字。" in note
+        for note in investigator_one["own_character_state"]["private_notes"]
+    )
+
+    assert snapshot_after_review["reviewed_actions"][-1]["review_id"] == reviewed_payload["review_id"]
+    assert snapshot_after_review["authoritative_actions"][-1]["action_id"] == authoritative_payload["action_id"]
+    assert snapshot_after_review["timeline"][-1]["event_id"] == reviewed_payload["canonical_event_id"]
+    assert snapshot_after_review["timeline"][-1]["event_type"] == "reviewed_action"
 
 
 def test_core_clue_contract_requires_fail_forward_support(client: TestClient) -> None:
