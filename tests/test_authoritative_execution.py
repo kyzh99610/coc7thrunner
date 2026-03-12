@@ -122,6 +122,135 @@ def test_human_authoritative_action_executes_structured_effects(
     assert keeper_state["visible_authoritative_actions"][0]["applied_effects"]
 
 
+def test_investigator_still_sees_non_review_human_authoritative_outcome_after_metadata_filtering(
+    client: TestClient,
+) -> None:
+    _register_spot_hidden_rule(client, source_id="human-visibility-rule")
+    start_response = client.post(
+        "/sessions/start",
+        json={
+            "keeper_name": "KP",
+            "scenario": make_scenario(
+                clues=[
+                    {
+                        "clue_id": "clue.floor_trace",
+                        "title": "地板灰痕",
+                        "text": "地板上的灰痕指向旅店走廊深处。",
+                        "visibility_scope": "kp_only",
+                    }
+                ]
+            ),
+            "participants": [
+                make_participant("investigator-1", "林舟"),
+                make_participant("investigator-2", "周岚"),
+            ],
+        },
+    )
+    assert start_response.status_code == 201
+    session_id = start_response.json()["session_id"]
+
+    action_response = client.post(
+        f"/sessions/{session_id}/player-action",
+        json={
+            "actor_id": "investigator-1",
+            "action_text": "我检查地板灰痕并收起一枚破损徽章。",
+            "structured_action": {
+                "type": "investigate_floor",
+                "required_handoff_topic": "term:spot_hidden",
+            },
+            "effects": {
+                "scene_transitions": [
+                    {
+                        "title": "旅店走廊",
+                        "summary": "调查员沿着灰痕推进到旅店走廊。",
+                        "phase": "investigation",
+                        "required_current_phase": "setup",
+                        "consequence_tags": ["警觉提升"],
+                    }
+                ],
+                "clue_state_effects": [
+                    {
+                        "clue_id": "clue.floor_trace",
+                        "status": "private_to_actor",
+                        "private_to_actor_ids": ["investigator-1"],
+                        "add_discovered_by": ["investigator-1"],
+                        "add_owner_actor_ids": ["investigator-1"],
+                        "discovered_via": "investigate_floor",
+                    }
+                ],
+                "character_stat_effects": [{"actor_id": "investigator-1", "san_delta": -1}],
+                "inventory_effects": [
+                    {"actor_id": "investigator-1", "add_items": ["破损徽章"]}
+                ],
+                "status_effects": [
+                    {"actor_id": "investigator-1", "add_status_effects": ["紧张"]}
+                ],
+            },
+            "rules_query_text": "侦察能发现隐藏线索吗",
+            "deterministic_resolution_required": True,
+        },
+    )
+    assert action_response.status_code == 202
+    action_payload = action_response.json()
+    authoritative_payload = action_payload["authoritative_action"]
+    event_payload = action_payload["authoritative_event"]
+
+    keeper_state = client.get(
+        f"/sessions/{session_id}/state",
+        params={"viewer_role": "keeper"},
+    ).json()
+    investigator_state = client.get(
+        f"/sessions/{session_id}/state",
+        params={"viewer_id": "investigator-1", "viewer_role": "investigator"},
+    ).json()
+    snapshot_state = client.get(f"/sessions/{session_id}/snapshot").json()
+
+    keeper_action = next(
+        action
+        for action in keeper_state["visible_authoritative_actions"]
+        if action["action_id"] == authoritative_payload["action_id"]
+    )
+    investigator_action = next(
+        action
+        for action in investigator_state["visible_authoritative_actions"]
+        if action["action_id"] == authoritative_payload["action_id"]
+    )
+    investigator_event = next(
+        event
+        for event in investigator_state["visible_events"]
+        if event["event_id"] == event_payload["event_id"]
+    )
+
+    assert keeper_action["source_type"] == "human_player"
+    assert keeper_action["review_id"] is None
+    assert keeper_action["draft_id"] is None
+
+    assert investigator_state["visible_draft_actions"] == []
+    assert investigator_state["visible_reviewed_actions"] == []
+    assert investigator_action["action_id"] == authoritative_payload["action_id"]
+    assert investigator_action["source_type"] == "human_player"
+    assert investigator_action["text"] == "我检查地板灰痕并收起一枚破损徽章。"
+    assert investigator_action["review_id"] is None
+    assert investigator_action["draft_id"] is None
+    assert investigator_action["execution_summary"] is not None
+    assert investigator_event["text"] == "我检查地板灰痕并收起一枚破损徽章。"
+    assert investigator_event["structured_payload"]["authoritative_action_id"] == authoritative_payload["action_id"]
+    assert investigator_event["structured_payload"]["source_type"] == "human_player"
+    assert investigator_event["structured_payload"]["effects"]["inventory_effects"][0]["add_items"] == ["破损徽章"]
+    assert investigator_state["current_scene"]["title"] == "旅店走廊"
+    assert investigator_state["own_character_state"]["inventory"] == ["破损徽章"]
+    assert investigator_state["scenario"]["clues"][0]["clue_id"] == "clue.floor_trace"
+    assert investigator_state["scenario"]["clues"][0]["status"] == "private_to_actor"
+
+    assert snapshot_state["authoritative_actions"][-1]["action_id"] == authoritative_payload["action_id"]
+    assert snapshot_state["authoritative_actions"][-1]["source_type"] == "human_player"
+    assert snapshot_state["authoritative_actions"][-1]["review_id"] is None
+    assert snapshot_state["authoritative_actions"][-1]["draft_id"] is None
+    assert snapshot_state["timeline"][-1]["event_id"] == event_payload["event_id"]
+    assert snapshot_state["timeline"][-1]["structured_payload"]["authoritative_action_id"] == authoritative_payload["action_id"]
+    assert snapshot_state["timeline"][-1]["structured_payload"]["source_type"] == "human_player"
+
+
 def test_manual_authoritative_action_executes_and_checks_scene_preconditions(
     client: TestClient,
 ) -> None:
