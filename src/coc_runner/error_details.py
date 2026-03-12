@@ -21,6 +21,24 @@ def build_structured_error_detail(
     return detail
 
 
+def shape_validation_error_items(
+    errors: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    shaped_errors: list[dict[str, Any]] = []
+    for error in errors:
+        shaped_error: dict[str, Any] = {
+            "loc": list(error.get("loc", ())),
+            "message": error.get("msg", error.get("message", "")),
+            "type": error.get("type", ""),
+        }
+        if "input" in error:
+            shaped_error["input"] = error["input"]
+        if "ctx" in error:
+            shaped_error["ctx"] = error["ctx"]
+        shaped_errors.append(shaped_error)
+    return shaped_errors
+
+
 def build_character_import_error_detail(
     *,
     code: str,

@@ -5,9 +5,11 @@ from pathlib import Path
 from uuid import uuid4
 
 from fastapi.testclient import TestClient
+from sqlalchemy import func, select
 
 from coc_runner.config import Settings
 from coc_runner.domain.errors import ConflictError
+from coc_runner.infrastructure.models import SessionRecord
 from coc_runner.main import create_app
 from tests.helpers import make_participant, make_scenario
 
@@ -145,6 +147,12 @@ def _get_snapshot(client: TestClient, session_id: str) -> dict:
     response = client.get(f"/sessions/{session_id}/snapshot")
     assert response.status_code == 200
     return response.json()
+
+
+def _count_session_records(client: TestClient) -> int:
+    repository = client.app.state.session_service.repository
+    with repository.session_factory() as db:
+        return db.execute(select(func.count()).select_from(SessionRecord)).scalar_one()
 
 
 def _import_snapshot(client: TestClient, snapshot: dict) -> dict:
@@ -339,6 +347,62 @@ def test_import_from_snapshot_creates_new_session(client: TestClient) -> None:
     }
     assert imported_snapshot["audit_log"][-1]["action"] == "import"
     assert imported_snapshot["audit_log"][-1]["session_version"] == 1
+
+
+def test_import_invalid_snapshot_returns_structured_400_without_creating_session(
+    client: TestClient,
+) -> None:
+    original_session_id = _start_snapshot_session(client)
+    snapshot = _get_snapshot(client, original_session_id)
+    session_count_before_import = _count_session_records(client)
+    invalid_snapshot = dict(snapshot)
+    invalid_snapshot["participants"] = "oops"
+
+    import_response = client.post("/sessions/import", json=invalid_snapshot)
+
+    assert import_response.status_code == 400
+    detail = import_response.json()["detail"]
+    assert detail["code"] == "session_import_invalid_snapshot"
+    assert detail["message"] == "导入快照校验失败"
+    assert detail["scope"] == "session_import_payload"
+    assert detail["original_session_id"] == original_session_id
+    assert any(
+        error["loc"] == ["participants"]
+        and error["message"] == "Input should be a valid list"
+        and error["type"] == "list_type"
+        and error["input"] == "oops"
+        for error in detail["errors"]
+    )
+    session_count_after_import = _count_session_records(client)
+    assert session_count_after_import == session_count_before_import
+
+
+def test_import_state_conflict_returns_structured_409_without_creating_session(
+    client: TestClient,
+    monkeypatch,
+) -> None:
+    original_session_id = _start_snapshot_session(client)
+    snapshot = _get_snapshot(client, original_session_id)
+    session_count_before_import = _count_session_records(client)
+    repository = client.app.state.session_service.repository
+
+    def _conflicting_create(session, *, reason: str) -> None:
+        raise ConflictError("会话状态版本冲突，请重新加载后再试")
+
+    monkeypatch.setattr(repository, "create", _conflicting_create, raising=False)
+
+    import_response = client.post("/sessions/import", json=snapshot)
+
+    assert import_response.status_code == 409
+    assert import_response.json()["detail"] == {
+        "code": "session_import_state_conflict",
+        "message": "会话状态版本冲突，请重新加载后再试",
+        "scope": "session_import_state",
+        "original_session_id": original_session_id,
+        "original_version": snapshot["state_version"],
+    }
+    session_count_after_import = _count_session_records(client)
+    assert session_count_after_import == session_count_before_import
 
 
 def test_imported_session_supports_continued_play(client: TestClient) -> None:

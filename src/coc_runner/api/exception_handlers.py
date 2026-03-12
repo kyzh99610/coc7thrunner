@@ -7,29 +7,17 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from starlette.requests import Request
 
-from coc_runner.error_details import build_structured_error_detail
+from coc_runner.error_details import build_structured_error_detail, shape_validation_error_items
 
 
 def build_request_validation_detail(
     exc: RequestValidationError,
 ) -> dict[str, Any]:
-    errors: list[dict[str, Any]] = []
-    for error in exc.errors():
-        shaped_error: dict[str, Any] = {
-            "loc": list(error.get("loc", ())),
-            "message": error.get("msg", ""),
-            "type": error.get("type", ""),
-        }
-        if "input" in error:
-            shaped_error["input"] = error["input"]
-        if "ctx" in error:
-            shaped_error["ctx"] = error["ctx"]
-        errors.append(shaped_error)
     return build_structured_error_detail(
         code="request_validation_failed",
         message="请求参数校验失败",
         scope="request_validation",
-        errors=errors,
+        errors=shape_validation_error_items(exc.errors()),
     )
 
 

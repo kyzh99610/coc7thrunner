@@ -5,6 +5,8 @@ from datetime import datetime, timezone
 from typing import Any
 from uuid import uuid4
 
+from pydantic import ValidationError
+
 from coc_runner.domain.errors import ConflictError
 from coc_runner.domain.models import (
     ActiveSceneObjective,
@@ -82,6 +84,8 @@ from coc_runner.domain.models import (
 from coc_runner.error_details import (
     build_character_import_error_detail,
     build_session_action_error_detail,
+    build_structured_error_detail,
+    shape_validation_error_items,
 )
 from coc_runner.domain.secrets import filter_session_for_viewer, normalize_keeper_prompt_for_keeper
 from coc_runner.infrastructure.knowledge_repositories import KnowledgeRepository
@@ -440,7 +444,21 @@ class SessionService:
         language_preference: LanguagePreference | None = None,
     ) -> SessionImportResponse:
         requested_language = self._resolve_language(language_preference)
-        imported_session = SessionState.model_validate(payload)
+        original_session_id_hint = (
+            payload.get("session_id") if isinstance(payload.get("session_id"), str) else None
+        )
+        try:
+            imported_session = SessionState.model_validate(payload)
+        except ValidationError as exc:
+            raise ValueError(
+                build_structured_error_detail(
+                    code="session_import_invalid_snapshot",
+                    message=self._message("session_import_invalid_snapshot", requested_language),
+                    scope="session_import_payload",
+                    original_session_id=original_session_id_hint,
+                    errors=shape_validation_error_items(exc.errors()),
+                )
+            ) from exc
         original_session_id = imported_session.session_id
         original_version = imported_session.state_version
         current_time = datetime.now(timezone.utc)
@@ -484,10 +502,25 @@ class SessionService:
                 created_at=current_time,
             )
         )
-        self.repository.create(
-            restored_session,
-            reason=f"imported_from_{original_session_id}",
-        )
+        try:
+            self.repository.create(
+                restored_session,
+                reason=f"imported_from_{original_session_id}",
+            )
+        except ConflictError as exc:
+            message = exc.args[0] if exc.args and isinstance(exc.args[0], str) else self._message(
+                "state_conflict",
+                diagnostics_language,
+            )
+            raise ConflictError(
+                build_structured_error_detail(
+                    code="session_import_state_conflict",
+                    message=message,
+                    scope="session_import_state",
+                    original_session_id=original_session_id,
+                    original_version=original_version,
+                )
+            ) from exc
         return SessionImportResponse(
             original_session_id=original_session_id,
             new_session_id=restored_session.session_id,
@@ -5149,6 +5182,7 @@ class SessionService:
             "character_import_not_supported": "当前会话服务未启用角色导入知识仓库",
             "character_import_force_review_required": "该导入仍需人工复核；如需强制覆盖会话状态，请显式启用 force_apply_manual_review",
             "character_import_operator_not_authorized": "只有本局 KP 可以应用角色导入结果",
+            "session_import_invalid_snapshot": "导入快照校验失败",
             "session_import_missing_participant_source_warning": "导入已保留调查员 {actor_id} 的角色来源 {source_id}，但当前环境未找到该知识源；后续角色再同步可能降级。",
             "session_import_missing_character_state_source_warning": "导入已保留角色状态 {actor_id} 的 import_source_id={source_id}，但当前环境未找到该知识源；导入来源追溯与刷新可能降级。",
             "session_import_missing_secret_source_warning": "导入已保留角色状态 {actor_id} 的秘密来源引用 {ref}，但当前环境未找到知识源 {source_id}；相关来源说明可能不可用。",
@@ -5231,6 +5265,7 @@ class SessionService:
             "character_import_not_supported": "Character import support is not configured for this session service",
             "character_import_force_review_required": "This import still requires manual review; set force_apply_manual_review explicitly before force replacing session state",
             "character_import_operator_not_authorized": "Only the session keeper may apply character import results",
+            "session_import_invalid_snapshot": "Imported snapshot validation failed",
             "session_import_missing_participant_source_warning": "Import kept participant {actor_id} source {source_id}, but that knowledge source is missing in the current environment; future character resync may degrade.",
             "session_import_missing_character_state_source_warning": "Import kept character state {actor_id} import_source_id={source_id}, but that knowledge source is missing in the current environment; source tracing and refresh may degrade.",
             "session_import_missing_secret_source_warning": "Import kept character state {actor_id} secret source ref {ref}, but knowledge source {source_id} is missing in the current environment; related provenance details may be unavailable.",

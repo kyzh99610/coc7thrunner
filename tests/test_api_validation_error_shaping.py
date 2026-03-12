@@ -7,6 +7,7 @@ from coc_runner.api.exception_handlers import build_request_validation_detail
 from coc_runner.error_details import (
     build_character_import_error_detail,
     build_session_action_error_detail,
+    shape_validation_error_items,
     build_structured_error_detail,
     extract_error_detail,
 )
@@ -135,6 +136,40 @@ def test_extract_error_detail_returns_dict_for_structured_errors_and_string_othe
     assert extract_error_detail(plain) == "plain error"
 
 
+def test_shape_validation_error_items_preserves_loc_message_type_and_optional_fields() -> None:
+    assert shape_validation_error_items(
+        [
+            {
+                "loc": ("participants", 0, "actor_id"),
+                "msg": "Field required",
+                "type": "missing",
+                "input": {"name": "林舟"},
+            },
+            {
+                "loc": ("query", "language_preference"),
+                "msg": "Input should be 'zh-CN' or 'en-US'",
+                "type": "enum",
+                "input": "bad-lang",
+                "ctx": {"expected": "'zh-CN' or 'en-US'"},
+            },
+        ]
+    ) == [
+        {
+            "loc": ["participants", 0, "actor_id"],
+            "message": "Field required",
+            "type": "missing",
+            "input": {"name": "林舟"},
+        },
+        {
+            "loc": ["query", "language_preference"],
+            "message": "Input should be 'zh-CN' or 'en-US'",
+            "type": "enum",
+            "input": "bad-lang",
+            "ctx": {"expected": "'zh-CN' or 'en-US'"},
+        },
+    ]
+
+
 def test_request_validation_body_missing_uses_structured_422_detail(
     client: TestClient,
 ) -> None:
@@ -213,6 +248,30 @@ def test_request_validation_query_errors_use_structured_422_detail(
             "type": "enum",
             "input": "bad-role",
             "ctx": {"expected": "'keeper' or 'investigator'"},
+        }
+    ]
+
+
+def test_request_validation_query_errors_use_structured_422_detail_for_import_endpoint(
+    client: TestClient,
+) -> None:
+    response = client.post(
+        "/sessions/import",
+        params={"language_preference": "bad-lang"},
+        json={},
+    )
+
+    assert response.status_code == 422
+    detail = response.json()["detail"]
+    assert detail["code"] == "request_validation_failed"
+    assert detail["scope"] == "request_validation"
+    assert detail["errors"] == [
+        {
+            "loc": ["query", "language_preference"],
+            "message": "Input should be 'zh-CN' or 'en-US'",
+            "type": "enum",
+            "input": "bad-lang",
+            "ctx": {"expected": "'zh-CN' or 'en-US'"},
         }
     ]
 
