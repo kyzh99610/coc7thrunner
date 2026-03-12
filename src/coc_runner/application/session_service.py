@@ -903,6 +903,24 @@ class SessionService:
                     "scope": "character_import_source",
                 }
             ) from exc
+        except ValueError as exc:
+            missing_extraction_message = self._message(
+                "character_import_missing_extraction",
+                effective_language,
+                source_id=request.source_id,
+            )
+            if exc.args and exc.args[0] == missing_extraction_message:
+                raise ValueError(
+                    {
+                        "code": "character_import_missing_extraction",
+                        "message": missing_extraction_message,
+                        "source_id": request.source_id,
+                        "session_id": session.session_id,
+                        "actor_id": request.actor_id,
+                        "scope": "character_import_source",
+                    }
+                ) from exc
+            raise
         current_time = datetime.now(timezone.utc)
         expected_version = session.state_version
         character_state, sync_report = self._apply_character_sheet_extraction_to_session(
