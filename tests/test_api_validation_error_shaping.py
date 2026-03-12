@@ -6,6 +6,7 @@ from fastapi.testclient import TestClient
 from coc_runner.api.exception_handlers import build_request_validation_detail
 from coc_runner.error_details import (
     build_character_import_error_detail,
+    build_knowledge_error_detail,
     build_rules_query_error_detail,
     build_session_action_error_detail,
     shape_validation_error_items,
@@ -131,6 +132,17 @@ def test_structured_error_helper_builds_expected_business_detail_shape() -> None
         "query_text": "理智检定",
         "viewer_role": "observer",
         "viewer_id": "investigator-1",
+    }
+    assert build_knowledge_error_detail(
+        code="knowledge_ingest_file_invalid",
+        message="knowledge source sample-source does not have a source_path",
+        scope="knowledge_ingest_file",
+        source_id="sample-source",
+    ) == {
+        "code": "knowledge_ingest_file_invalid",
+        "message": "knowledge source sample-source does not have a source_path",
+        "scope": "knowledge_ingest_file",
+        "source_id": "sample-source",
     }
 
 
@@ -336,6 +348,37 @@ def test_request_validation_body_errors_use_structured_422_detail_for_rules_endp
             "ctx": {"ge": 0},
         },
     ]
+
+
+def test_request_validation_body_errors_use_structured_422_detail_for_knowledge_endpoint(
+    client: TestClient,
+) -> None:
+    response = client.post(
+        "/knowledge/register-source",
+        json={
+            "document_identity": "missing-source-id",
+            "default_priority": -1,
+        },
+    )
+
+    assert response.status_code == 422
+    detail = response.json()["detail"]
+    assert detail["code"] == "request_validation_failed"
+    assert detail["scope"] == "request_validation"
+    assert any(
+        error["loc"] == ["body", "source_id"]
+        and error["message"] == "Field required"
+        and error["type"] == "missing"
+        for error in detail["errors"]
+    )
+    assert any(
+        error["loc"] == ["body", "default_priority"]
+        and error["message"] == "Input should be greater than or equal to 0"
+        and error["type"] == "greater_than_equal"
+        and error["input"] == -1
+        and error["ctx"] == {"ge": 0}
+        for error in detail["errors"]
+    )
 
 
 def test_request_validation_detail_builder_preserves_path_loc_entries() -> None:

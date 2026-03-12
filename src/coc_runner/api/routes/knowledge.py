@@ -16,9 +16,28 @@ from knowledge.schemas import (
 
 from coc_runner.api.dependencies import get_knowledge_service
 from coc_runner.application.knowledge_service import KnowledgeService
+from coc_runner.error_details import build_knowledge_error_detail, extract_error_detail
 
 
 router = APIRouter(prefix="/knowledge", tags=["knowledge"])
+
+
+def _knowledge_detail(
+    exc: BaseException,
+    *,
+    code: str,
+    scope: str,
+    source_id: str,
+) -> dict[str, object] | str:
+    detail = extract_error_detail(exc)
+    if isinstance(detail, dict):
+        return detail
+    return build_knowledge_error_detail(
+        code=code,
+        message=str(detail),
+        scope=scope,
+        source_id=source_id,
+    )
 
 
 @router.post(
@@ -33,9 +52,25 @@ def register_source(
     try:
         return service.register_source(request)
     except LookupError as exc:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=_knowledge_detail(
+                exc,
+                code="knowledge_source_not_found",
+                scope="knowledge_source_lookup",
+                source_id=request.source_id,
+            ),
+        ) from exc
     except ValueError as exc:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=_knowledge_detail(
+                exc,
+                code="knowledge_source_registration_invalid",
+                scope="knowledge_source_registration",
+                source_id=request.source_id,
+            ),
+        ) from exc
 
 
 @router.post(
@@ -50,9 +85,25 @@ def ingest_text(
     try:
         return service.ingest_text(request)
     except LookupError as exc:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=_knowledge_detail(
+                exc,
+                code="knowledge_source_not_found",
+                scope="knowledge_source_lookup",
+                source_id=request.source_id,
+            ),
+        ) from exc
     except ValueError as exc:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=_knowledge_detail(
+                exc,
+                code="knowledge_ingest_text_invalid",
+                scope="knowledge_ingest_text",
+                source_id=request.source_id,
+            ),
+        ) from exc
 
 
 @router.post(
@@ -67,9 +118,25 @@ def ingest_file(
     try:
         return service.ingest_file(request)
     except LookupError as exc:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=_knowledge_detail(
+                exc,
+                code="knowledge_source_not_found",
+                scope="knowledge_source_lookup",
+                source_id=request.source_id,
+            ),
+        ) from exc
     except ValueError as exc:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=_knowledge_detail(
+                exc,
+                code="knowledge_ingest_file_invalid",
+                scope="knowledge_ingest_file",
+                source_id=request.source_id,
+            ),
+        ) from exc
 
 
 @router.post(
@@ -84,9 +151,25 @@ def import_character_sheet(
     try:
         return service.import_character_sheet(request)
     except LookupError as exc:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=_knowledge_detail(
+                exc,
+                code="knowledge_source_not_found",
+                scope="knowledge_source_lookup",
+                source_id=request.source_id,
+            ),
+        ) from exc
     except ValueError as exc:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=_knowledge_detail(
+                exc,
+                code="knowledge_character_import_invalid",
+                scope="knowledge_character_import",
+                source_id=request.source_id,
+            ),
+        ) from exc
 
 
 @router.get("/sources/{source_id}", response_model=KnowledgeSourceState)
@@ -97,6 +180,22 @@ def get_source(
     try:
         return service.get_source(source_id)
     except LookupError as exc:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=_knowledge_detail(
+                exc,
+                code="knowledge_source_not_found",
+                scope="knowledge_source_lookup",
+                source_id=source_id,
+            ),
+        ) from exc
     except ValueError as exc:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=_knowledge_detail(
+                exc,
+                code="knowledge_source_invalid",
+                scope="knowledge_source_request",
+                source_id=source_id,
+            ),
+        ) from exc

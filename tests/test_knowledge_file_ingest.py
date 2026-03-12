@@ -45,6 +45,13 @@ def _register_source(
     return response.json()["source"]
 
 
+def _get_source_state(client: TestClient, source_id: str) -> dict:
+    repository = client.app.state.knowledge_service.repository
+    source = repository.get_source(source_id)
+    assert source is not None
+    return source.model_dump(mode="json")
+
+
 def test_ingest_pdf_rule_content_and_query_it(client: TestClient) -> None:
     _register_source(
         client,
@@ -269,13 +276,19 @@ def test_invalid_character_sheet_xlsx_returns_400(client: TestClient) -> None:
         default_priority=0,
         is_authoritative=False,
     )
+    before_source_state = _get_source_state(client, "character-sheet-xlsx-invalid")
 
     import_response = client.post(
         "/knowledge/import-character-sheet",
         json={"source_id": "character-sheet-xlsx-invalid"},
     )
     assert import_response.status_code == 400
-    assert "required" in import_response.json()["detail"] or "confidence" in import_response.json()["detail"]
+    detail = import_response.json()["detail"]
+    assert detail["code"] == "knowledge_character_import_invalid"
+    assert detail["scope"] == "knowledge_character_import"
+    assert detail["source_id"] == "character-sheet-xlsx-invalid"
+    assert "required" in detail["message"] or "confidence" in detail["message"]
+    assert _get_source_state(client, "character-sheet-xlsx-invalid") == before_source_state
 
 
 def test_import_integrated_character_workbook_template_successfully(client: TestClient) -> None:
@@ -438,13 +451,19 @@ def test_blank_integrated_character_workbook_fails_clearly(client: TestClient) -
         default_priority=0,
         is_authoritative=False,
     )
+    before_source_state = _get_source_state(client, "character-sheet-template-blank")
 
     import_response = client.post(
         "/knowledge/import-character-sheet",
         json={"source_id": "character-sheet-template-blank"},
     )
     assert import_response.status_code == 400
-    assert "integrated workbook field investigator_name is missing" in import_response.json()["detail"]
+    detail = import_response.json()["detail"]
+    assert detail["code"] == "knowledge_character_import_invalid"
+    assert detail["scope"] == "knowledge_character_import"
+    assert detail["source_id"] == "character-sheet-template-blank"
+    assert detail["message"].startswith("integrated workbook field investigator_name is missing")
+    assert _get_source_state(client, "character-sheet-template-blank") == before_source_state
 
 
 def test_invalid_character_sheet_import_returns_400(client: TestClient) -> None:
@@ -459,13 +478,19 @@ def test_invalid_character_sheet_import_returns_400(client: TestClient) -> None:
         default_priority=0,
         is_authoritative=False,
     )
+    before_source_state = _get_source_state(client, "character-sheet-invalid")
 
     import_response = client.post(
         "/knowledge/import-character-sheet",
         json={"source_id": "character-sheet-invalid"},
     )
     assert import_response.status_code == 400
-    assert "core_stats" in import_response.json()["detail"] or "investigator_name" in import_response.json()["detail"]
+    detail = import_response.json()["detail"]
+    assert detail["code"] == "knowledge_character_import_invalid"
+    assert detail["scope"] == "knowledge_character_import"
+    assert detail["source_id"] == "character-sheet-invalid"
+    assert "core_stats" in detail["message"] or "investigator_name" in detail["message"]
+    assert _get_source_state(client, "character-sheet-invalid") == before_source_state
 
 
 def test_rules_query_returns_correct_shape_using_persisted_file_data(client: TestClient) -> None:

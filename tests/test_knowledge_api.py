@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+from sqlalchemy import func, select
 from fastapi.testclient import TestClient
 
 from knowledge.schemas import RuleQueryResult
+
+from coc_runner.infrastructure.models import KnowledgeSourceRecord, RuleChunkRecord
 
 
 def _register_source(
@@ -45,6 +48,22 @@ def _ingest_text(client: TestClient, *, source_id: str, content: str) -> dict:
     return response.json()
 
 
+def _count_sources(client: TestClient) -> int:
+    repository = client.app.state.knowledge_service.repository
+    with repository.session_factory() as db:
+        return int(
+            db.execute(select(func.count()).select_from(KnowledgeSourceRecord)).scalar_one()
+        )
+
+
+def _count_chunks(client: TestClient) -> int:
+    repository = client.app.state.knowledge_service.repository
+    with repository.session_factory() as db:
+        return int(
+            db.execute(select(func.count()).select_from(RuleChunkRecord)).scalar_one()
+        )
+
+
 def test_ingest_text_source_persists_chunks(client: TestClient) -> None:
     _register_source(
         client,
@@ -78,6 +97,75 @@ def test_ingest_text_source_persists_chunks(client: TestClient) -> None:
     persisted_chunks = repository.list_chunks(source_id="core-md")
     assert len(persisted_chunks) == 2
     assert persisted_chunks[0].topic_key.startswith("term:")
+
+
+def test_register_source_duplicate_returns_structured_400_without_mutating_sources(
+    client: TestClient,
+) -> None:
+    _register_source(
+        client,
+        source_id="duplicate-source",
+        source_title_zh="重复知识源",
+        document_identity="duplicate-source",
+        default_priority=20,
+    )
+    before_source_count = _count_sources(client)
+
+    duplicate_response = client.post(
+        "/knowledge/register-source",
+        json={
+            "source_id": "duplicate-source",
+            "source_kind": "rulebook",
+            "source_format": "plain_text",
+            "source_title_zh": "重复知识源",
+            "document_identity": "duplicate-source",
+            "default_priority": 20,
+            "default_visibility": "public",
+            "allowed_player_ids": [],
+            "is_authoritative": True,
+        },
+    )
+
+    assert duplicate_response.status_code == 400
+    assert duplicate_response.json()["detail"] == {
+        "code": "knowledge_source_registration_invalid",
+        "message": "knowledge source duplicate-source already exists",
+        "scope": "knowledge_source_registration",
+        "source_id": "duplicate-source",
+    }
+    assert _count_sources(client) == before_source_count
+
+
+def test_ingest_text_missing_source_returns_structured_404_without_mutating_chunks(
+    client: TestClient,
+) -> None:
+    before_chunk_count = _count_chunks(client)
+
+    response = client.post(
+        "/knowledge/ingest-text",
+        json={"source_id": "missing-source", "content": "聆听判定用于察觉远处声音。"},
+    )
+
+    assert response.status_code == 404
+    assert response.json()["detail"] == {
+        "code": "knowledge_source_not_found",
+        "message": "未找到知识源 missing-source",
+        "scope": "knowledge_source_lookup",
+        "source_id": "missing-source",
+    }
+    assert _count_chunks(client) == before_chunk_count
+
+
+def test_get_source_missing_source_returns_structured_404(client: TestClient) -> None:
+    response = client.get("/knowledge/sources/missing-source")
+
+    assert response.status_code == 404
+    assert response.json()["detail"] == {
+        "code": "knowledge_source_not_found",
+        "message": "未找到知识源 missing-source",
+        "scope": "knowledge_source_lookup",
+        "source_id": "missing-source",
+    }
 
 
 def test_retrieve_only_visible_chunks(client: TestClient) -> None:

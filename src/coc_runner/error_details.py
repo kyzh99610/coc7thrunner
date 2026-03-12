@@ -112,5 +112,22 @@ def build_rules_query_error_detail(
     )
 
 
+def build_knowledge_error_detail(
+    *,
+    code: str,
+    message: str,
+    scope: str,
+    source_id: str,
+    **extra_fields: Any,
+) -> dict[str, Any]:
+    return build_structured_error_detail(
+        code=code,
+        message=message,
+        scope=scope,
+        source_id=source_id,
+        **extra_fields,
+    )
+
+
 def extract_error_detail(exc: BaseException) -> Any:
     return exc.args[0] if exc.args and isinstance(exc.args[0], dict) else str(exc)
