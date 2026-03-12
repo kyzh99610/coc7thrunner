@@ -904,11 +904,26 @@ class SessionService:
                 }
             ) from exc
         except ValueError as exc:
+            not_supported_message = self._message(
+                "character_import_not_supported",
+                effective_language,
+            )
             missing_extraction_message = self._message(
                 "character_import_missing_extraction",
                 effective_language,
                 source_id=request.source_id,
             )
+            if exc.args and exc.args[0] == not_supported_message:
+                raise ValueError(
+                    {
+                        "code": "character_import_not_supported",
+                        "message": not_supported_message,
+                        "source_id": request.source_id,
+                        "session_id": session.session_id,
+                        "actor_id": request.actor_id,
+                        "scope": "character_import_support",
+                    }
+                ) from exc
             if exc.args and exc.args[0] == missing_extraction_message:
                 raise ValueError(
                     {
