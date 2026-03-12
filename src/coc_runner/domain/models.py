@@ -817,6 +817,129 @@ class ScenarioScaffold(BaseModel):
                 refs.add(condition.beat_status_is.beat_id)
             return refs
 
+        def collect_condition_status_refs(
+            condition: BeatCondition | None,
+            *,
+            status: ScenarioBeatStatus,
+        ) -> set[str]:
+            if condition is None:
+                return set()
+            refs: set[str] = set()
+            for nested in condition.all_of:
+                refs.update(collect_condition_status_refs(nested, status=status))
+            for nested in condition.any_of:
+                refs.update(collect_condition_status_refs(nested, status=status))
+            if (
+                condition.beat_status_is is not None
+                and condition.beat_status_is.status == status
+            ):
+                refs.add(condition.beat_status_is.beat_id)
+            return refs
+
+        def expand_condition_branches(condition: BeatCondition | None) -> list[list[BeatCondition]]:
+            if condition is None:
+                return []
+            if condition.all_of:
+                branches: list[list[BeatCondition]] = [[]]
+                for nested in condition.all_of:
+                    nested_branches = expand_condition_branches(nested)
+                    expanded: list[list[BeatCondition]] = []
+                    for branch in branches:
+                        for nested_branch in nested_branches:
+                            expanded.append([*branch, *nested_branch])
+                    branches = expanded
+                return branches
+            if condition.any_of:
+                branches: list[list[BeatCondition]] = []
+                for nested in condition.any_of:
+                    branches.extend(expand_condition_branches(nested))
+                return branches
+            return [[condition]]
+
+        def normalize_condition_payload(condition: BeatCondition) -> dict[str, Any]:
+            return condition.model_dump(mode="python", exclude_none=True)
+
+        def analyze_unsatisfiable_complete_branch(
+            branch: list[BeatCondition],
+            *,
+            beat_id: str,
+        ) -> str | None:
+            beat_statuses: dict[str, set[ScenarioBeatStatus]] = {}
+            scene_is_ids: set[str] = set()
+            current_scene_id_refs: list[str] = []
+            current_scene_id_intersection: set[str] | None = None
+
+            for leaf in branch:
+                if leaf.beat_status_is is not None:
+                    beat_statuses.setdefault(leaf.beat_status_is.beat_id, set()).add(
+                        leaf.beat_status_is.status
+                    )
+                if leaf.scene_is is not None and leaf.scene_is.scene_id is not None:
+                    scene_is_ids.add(leaf.scene_is.scene_id)
+                if leaf.current_scene_in is not None and leaf.current_scene_in.scene_ids:
+                    scene_ids = set(leaf.current_scene_in.scene_ids)
+                    current_scene_id_refs.extend(leaf.current_scene_in.scene_ids)
+                    if current_scene_id_intersection is None:
+                        current_scene_id_intersection = scene_ids
+                    else:
+                        current_scene_id_intersection &= scene_ids
+
+            for target_beat_id, statuses in beat_statuses.items():
+                if len(statuses) > 1:
+                    status_list = ", ".join(sorted(status.value for status in statuses))
+                    return (
+                        f"conflicting beat_status_is requirements for beat {target_beat_id}: "
+                        f"{status_list}"
+                    )
+
+            impossible_self_statuses = beat_statuses.get(beat_id, set()) & {
+                ScenarioBeatStatus.LOCKED,
+                ScenarioBeatStatus.BLOCKED,
+                ScenarioBeatStatus.COMPLETED,
+            }
+            if impossible_self_statuses:
+                status_list = ", ".join(sorted(status.value for status in impossible_self_statuses))
+                return f"it requires its own status to already be {status_list}"
+
+            if len(scene_is_ids) > 1:
+                return f"conflicting scene_is requirements: {', '.join(sorted(scene_is_ids))}"
+
+            if current_scene_id_intersection is not None and not current_scene_id_intersection:
+                return (
+                    "current_scene_in requirements have no overlapping scene_ids: "
+                    + ", ".join(sorted(set(current_scene_id_refs)))
+                )
+
+            if scene_is_ids and current_scene_id_refs:
+                allowed_scene_ids = set(current_scene_id_refs)
+                incompatible_scene_ids = sorted(
+                    scene_id for scene_id in scene_is_ids if scene_id not in allowed_scene_ids
+                )
+                if incompatible_scene_ids:
+                    return (
+                        f"scene_is {incompatible_scene_ids[0]} is incompatible with current_scene_in "
+                        f"{', '.join(sorted(allowed_scene_ids))}"
+                    )
+            return None
+
+        def analyze_unsatisfiable_complete_condition(
+            condition: BeatCondition | None,
+            *,
+            beat_id: str,
+        ) -> str | None:
+            if condition is None:
+                return None
+            branches = expand_condition_branches(condition)
+            if not branches:
+                return None
+            branch_reasons: list[str] = []
+            for branch in branches:
+                reason = analyze_unsatisfiable_complete_branch(branch, beat_id=beat_id)
+                if reason is None:
+                    return None
+                branch_reasons.append(reason)
+            return branch_reasons[0] if branch_reasons else None
+
         def find_cycle(graph: dict[str, set[str]]) -> list[str] | None:
             state: dict[str, int] = {}
             path: list[str] = []
@@ -867,6 +990,7 @@ class ScenarioScaffold(BaseModel):
         }
         beat_id_set = set(beat_ids)
         objective_ids: set[str] = set()
+        completed_status_consumers: dict[str, set[str]] = {beat_id: set() for beat_id in beat_id_set}
 
         def validate_condition_refs(condition: BeatCondition | None, *, beat_id: str) -> None:
             def validate_condition_clue_ref(*refs: str | None) -> None:
@@ -941,9 +1065,20 @@ class ScenarioScaffold(BaseModel):
                         f"scenario scene objective {objective.objective_id} references unknown beat {objective.beat_id}"
                     )
         for beat in self.beats:
-            validate_condition_refs(beat.unlock_conditions or beat.unlock_when, beat_id=beat.beat_id)
-            validate_condition_refs(beat.block_conditions or beat.block_when, beat_id=beat.beat_id)
-            validate_condition_refs(beat.complete_conditions or beat.complete_when, beat_id=beat.beat_id)
+            unlock_condition = beat.unlock_conditions or beat.unlock_when
+            for source_beat_id in collect_condition_status_refs(
+                unlock_condition,
+                status=ScenarioBeatStatus.COMPLETED,
+            ):
+                completed_status_consumers[source_beat_id].add(beat.beat_id)
+        for beat in self.beats:
+            unlock_condition = beat.unlock_conditions or beat.unlock_when
+            block_condition = beat.block_conditions or beat.block_when
+            complete_condition = beat.complete_conditions or beat.complete_when
+
+            validate_condition_refs(unlock_condition, beat_id=beat.beat_id)
+            validate_condition_refs(block_condition, beat_id=beat.beat_id)
+            validate_condition_refs(complete_condition, beat_id=beat.beat_id)
             for clue_ref in (*beat.required_clues, *beat.optional_clues):
                 if clue_ref not in clue_refs:
                     raise ValueError(
@@ -988,6 +1123,37 @@ class ScenarioScaffold(BaseModel):
                         raise ValueError(
                             f"scenario beat {beat.beat_id} consequence references unknown objective {objective_mark.objective_id}"
                         )
+
+            downstream_completion_dependents = set(beat.next_beats)
+            downstream_completion_dependents.update(completed_status_consumers[beat.beat_id])
+            for consequence in beat.consequences:
+                downstream_completion_dependents.update(consequence.unlock_beat_ids)
+
+            if complete_condition is None and downstream_completion_dependents:
+                raise ValueError(
+                    f"scenario beat {beat.beat_id} can never complete because downstream beat flow depends on it: "
+                    + ", ".join(sorted(downstream_completion_dependents))
+                )
+
+            if (
+                block_condition is not None
+                and complete_condition is not None
+                and normalize_condition_payload(block_condition)
+                == normalize_condition_payload(complete_condition)
+            ):
+                raise ValueError(
+                    f"scenario beat {beat.beat_id} block_conditions contradict complete_conditions"
+                )
+
+            impossible_complete_reason = analyze_unsatisfiable_complete_condition(
+                complete_condition,
+                beat_id=beat.beat_id,
+            )
+            if impossible_complete_reason is not None:
+                raise ValueError(
+                    f"scenario beat {beat.beat_id} complete_conditions can never be satisfied: "
+                    f"{impossible_complete_reason}"
+                )
 
         if not self.beats:
             return self

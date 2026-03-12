@@ -294,11 +294,17 @@ def test_scenario_validation_rejects_simple_cycle_in_beat_flow_graph() -> None:
             "beat_id": "beat.alpha",
             "title": "起始节点",
             "start_unlocked": True,
+            "complete_conditions": {
+                "clue_discovered": {"clue_id": "clue.ledger"}
+            },
             "next_beats": ["beat.beta"],
         },
         {
             "beat_id": "beat.beta",
             "title": "回环节点",
+            "complete_conditions": {
+                "clue_discovered": {"clue_id": "clue.ledger"}
+            },
             "next_beats": ["beat.alpha"],
         },
     ]
@@ -321,6 +327,9 @@ def test_scenario_validation_allows_entry_beat_without_start_unlocked_when_no_be
             "unlock_conditions": {
                 "scene_is": {"scene_id": "scene.study"}
             },
+            "complete_conditions": {
+                "clue_discovered": {"clue_id": "clue.ledger"}
+            },
         },
         {
             "beat_id": "beat.followup",
@@ -340,3 +349,144 @@ def test_scenario_validation_allows_entry_beat_without_start_unlocked_when_no_be
         "beat.entry_from_scene",
         "beat.followup",
     ]
+
+
+def test_scenario_validation_rejects_non_terminal_beat_without_completion_path() -> None:
+    payload = _base_scenario_payload()
+    payload["beats"][0].pop("complete_conditions")
+    payload["beats"][0]["next_beats"] = ["beat.followup"]
+    payload["beats"].append(
+        {
+            "beat_id": "beat.followup",
+            "title": "后续节点",
+        }
+    )
+
+    _assert_validation_error(
+        payload,
+        "scenario beat beat.review_ledger can never complete",
+        "beat.followup",
+    )
+
+
+def test_scenario_validation_rejects_complete_conditions_with_conflicting_beat_statuses() -> None:
+    payload = _base_scenario_payload()
+    payload["beats"] = [
+        {
+            "beat_id": "beat.alpha",
+            "title": "前置节点",
+            "start_unlocked": True,
+            "complete_conditions": {
+                "clue_discovered": {"clue_id": "clue.ledger"}
+            },
+        },
+        {
+            "beat_id": "beat.beta",
+            "title": "矛盾完成节点",
+            "start_unlocked": True,
+            "complete_conditions": {
+                "all_of": [
+                    {
+                        "beat_status_is": {
+                            "beat_id": "beat.alpha",
+                            "status": "current",
+                        }
+                    },
+                    {
+                        "beat_status_is": {
+                            "beat_id": "beat.alpha",
+                            "status": "completed",
+                        }
+                    },
+                ]
+            },
+        },
+    ]
+    payload["scenes"][0]["scene_objectives"][0]["beat_id"] = "beat.alpha"
+
+    _assert_validation_error(
+        payload,
+        "scenario beat beat.beta complete_conditions can never be satisfied",
+        "beat.alpha",
+        "current",
+        "completed",
+    )
+
+
+def test_scenario_validation_rejects_complete_conditions_with_conflicting_scene_requirements() -> None:
+    payload = _base_scenario_payload()
+    payload["scenes"].append(
+        {
+            "scene_id": "scene.cellar",
+            "title": "地窖",
+            "summary": "这里和书房不是同一个 scene。",
+        }
+    )
+    payload["beats"][0]["complete_conditions"] = {
+        "all_of": [
+            {"scene_is": {"scene_id": "scene.study"}},
+            {"current_scene_in": {"scene_ids": ["scene.cellar"]}},
+        ]
+    }
+
+    _assert_validation_error(
+        payload,
+        "scenario beat beat.review_ledger complete_conditions can never be satisfied",
+        "scene.study",
+        "scene.cellar",
+    )
+
+
+def test_scenario_validation_rejects_complete_conditions_requiring_own_completed_status() -> None:
+    payload = _base_scenario_payload()
+    payload["beats"][0]["complete_conditions"] = {
+        "beat_status_is": {
+            "beat_id": "beat.review_ledger",
+            "status": "completed",
+        }
+    }
+
+    _assert_validation_error(
+        payload,
+        "scenario beat beat.review_ledger complete_conditions can never be satisfied",
+        "beat.review_ledger",
+        "completed",
+    )
+
+
+def test_scenario_validation_rejects_block_conditions_that_shadow_completion() -> None:
+    payload = _base_scenario_payload()
+    payload["beats"][0]["block_conditions"] = {
+        "clue_discovered": {"clue_id": "clue.ledger"}
+    }
+
+    _assert_validation_error(
+        payload,
+        "scenario beat beat.review_ledger block_conditions contradict complete_conditions",
+    )
+
+
+def test_scenario_validation_allows_completion_any_of_with_one_impossible_branch() -> None:
+    payload = _base_scenario_payload()
+    payload["scenes"].append(
+        {
+            "scene_id": "scene.cellar",
+            "title": "地窖",
+            "summary": "这里只用于构造一条不可能分支。",
+        }
+    )
+    payload["beats"][0]["complete_conditions"] = {
+        "any_of": [
+            {
+                "all_of": [
+                    {"scene_is": {"scene_id": "scene.study"}},
+                    {"current_scene_in": {"scene_ids": ["scene.cellar"]}},
+                ]
+            },
+            {"clue_discovered": {"clue_id": "clue.ledger"}},
+        ]
+    }
+
+    scenario = ScenarioScaffold.model_validate(payload)
+    assert scenario.beats[0].beat_id == "beat.review_ledger"
+    assert len(scenario.beats[0].complete_conditions.any_of) == 2
