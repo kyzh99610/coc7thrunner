@@ -232,3 +232,111 @@ def test_scenario_validation_rejects_invalid_consequence_targets(
     mutator(payload)
 
     _assert_validation_error(payload, *expected_fragments)
+
+
+def test_scenario_validation_rejects_beat_graph_without_entry_beat() -> None:
+    payload = _base_scenario_payload()
+    payload["beats"][0]["start_unlocked"] = False
+
+    _assert_validation_error(
+        payload,
+        "scenario beat graph has no entry beat",
+        "start_unlocked",
+    )
+
+
+def test_scenario_validation_rejects_unreachable_orphan_beat() -> None:
+    payload = _base_scenario_payload()
+    payload["beats"].append(
+        {
+            "beat_id": "beat.orphan",
+            "title": "孤立节点",
+        }
+    )
+
+    _assert_validation_error(
+        payload,
+        "scenario beat graph has unreachable beat(s): beat.orphan",
+    )
+
+
+@pytest.mark.parametrize(
+    ("mutator", "expected_fragments"),
+    [
+        pytest.param(
+            lambda payload: payload["beats"][0].update({"next_beats": ["beat.review_ledger"]}),
+            ("scenario beat beat.review_ledger cannot reference itself via next_beats",),
+            id="self-loop-next-beat",
+        ),
+        pytest.param(
+            lambda payload: payload["beats"][0].update(
+                {"consequences": [{"unlock_beat_ids": ["beat.review_ledger"]}]}
+            ),
+            ("scenario beat beat.review_ledger consequence cannot unlock itself",),
+            id="self-loop-consequence-unlock",
+        ),
+    ],
+)
+def test_scenario_validation_rejects_direct_self_loops_in_beat_flow(
+    mutator,
+    expected_fragments: tuple[str, ...],
+) -> None:
+    payload = _base_scenario_payload()
+    mutator(payload)
+
+    _assert_validation_error(payload, *expected_fragments)
+
+
+def test_scenario_validation_rejects_simple_cycle_in_beat_flow_graph() -> None:
+    payload = _base_scenario_payload()
+    payload["beats"] = [
+        {
+            "beat_id": "beat.alpha",
+            "title": "起始节点",
+            "start_unlocked": True,
+            "next_beats": ["beat.beta"],
+        },
+        {
+            "beat_id": "beat.beta",
+            "title": "回环节点",
+            "next_beats": ["beat.alpha"],
+        },
+    ]
+    payload["scenes"][0]["scene_objectives"][0]["beat_id"] = "beat.alpha"
+
+    _assert_validation_error(
+        payload,
+        "scenario beat graph contains cycle",
+        "beat.alpha",
+        "beat.beta",
+    )
+
+
+def test_scenario_validation_allows_entry_beat_without_start_unlocked_when_no_beat_dependency() -> None:
+    payload = _base_scenario_payload()
+    payload["beats"] = [
+        {
+            "beat_id": "beat.entry_from_scene",
+            "title": "场景直接入口节点",
+            "unlock_conditions": {
+                "scene_is": {"scene_id": "scene.study"}
+            },
+        },
+        {
+            "beat_id": "beat.followup",
+            "title": "后续节点",
+            "unlock_conditions": {
+                "beat_status_is": {
+                    "beat_id": "beat.entry_from_scene",
+                    "status": "completed",
+                }
+            },
+        },
+    ]
+    payload["scenes"][0]["scene_objectives"][0]["beat_id"] = "beat.entry_from_scene"
+
+    scenario = ScenarioScaffold.model_validate(payload)
+    assert [beat.beat_id for beat in scenario.beats] == [
+        "beat.entry_from_scene",
+        "beat.followup",
+    ]

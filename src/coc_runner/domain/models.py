@@ -805,6 +805,45 @@ class ScenarioScaffold(BaseModel):
                 seen.add(value)
             return None
 
+        def collect_condition_beat_refs(condition: BeatCondition | None) -> set[str]:
+            if condition is None:
+                return set()
+            refs: set[str] = set()
+            for nested in condition.all_of:
+                refs.update(collect_condition_beat_refs(nested))
+            for nested in condition.any_of:
+                refs.update(collect_condition_beat_refs(nested))
+            if condition.beat_status_is is not None:
+                refs.add(condition.beat_status_is.beat_id)
+            return refs
+
+        def find_cycle(graph: dict[str, set[str]]) -> list[str] | None:
+            state: dict[str, int] = {}
+            path: list[str] = []
+
+            def visit(node: str) -> list[str] | None:
+                state[node] = 1
+                path.append(node)
+                for neighbor in graph[node]:
+                    neighbor_state = state.get(neighbor, 0)
+                    if neighbor_state == 0:
+                        cycle = visit(neighbor)
+                        if cycle is not None:
+                            return cycle
+                    elif neighbor_state == 1:
+                        start_index = path.index(neighbor)
+                        return [*path[start_index:], neighbor]
+                path.pop()
+                state[node] = 2
+                return None
+
+            for node in graph:
+                if state.get(node, 0) == 0:
+                    cycle = visit(node)
+                    if cycle is not None:
+                        return cycle
+            return None
+
         scene_ids = [scene.scene_id for scene in self.scenes]
         duplicate_scene_id = find_duplicate(scene_ids)
         if duplicate_scene_id is not None:
@@ -949,6 +988,61 @@ class ScenarioScaffold(BaseModel):
                         raise ValueError(
                             f"scenario beat {beat.beat_id} consequence references unknown objective {objective_mark.objective_id}"
                         )
+
+        if not self.beats:
+            return self
+
+        beat_graph: dict[str, set[str]] = {beat_id: set() for beat_id in beat_id_set}
+        entry_beats: set[str] = set()
+        for beat in self.beats:
+            if beat.start_unlocked:
+                entry_beats.add(beat.beat_id)
+
+            unlock_condition = beat.unlock_conditions or beat.unlock_when
+            unlock_refs = collect_condition_beat_refs(unlock_condition)
+            if unlock_condition is not None and not unlock_refs:
+                entry_beats.add(beat.beat_id)
+            for source_beat_id in unlock_refs:
+                beat_graph[source_beat_id].add(beat.beat_id)
+
+            for next_beat_id in beat.next_beats:
+                if next_beat_id == beat.beat_id:
+                    raise ValueError(
+                        f"scenario beat {beat.beat_id} cannot reference itself via next_beats"
+                    )
+                beat_graph[beat.beat_id].add(next_beat_id)
+
+            for consequence in beat.consequences:
+                for target_beat_id in consequence.unlock_beat_ids:
+                    if target_beat_id == beat.beat_id:
+                        raise ValueError(
+                            f"scenario beat {beat.beat_id} consequence cannot unlock itself"
+                        )
+                    beat_graph[beat.beat_id].add(target_beat_id)
+
+        if not entry_beats:
+            raise ValueError(
+                "scenario beat graph has no entry beat; add start_unlocked or an unlock condition without beat dependencies"
+            )
+
+        cycle = find_cycle(beat_graph)
+        if cycle is not None:
+            raise ValueError(f"scenario beat graph contains cycle: {' -> '.join(cycle)}")
+
+        reachable_beats: set[str] = set()
+        pending = list(entry_beats)
+        while pending:
+            beat_id = pending.pop()
+            if beat_id in reachable_beats:
+                continue
+            reachable_beats.add(beat_id)
+            pending.extend(sorted(beat_graph[beat_id] - reachable_beats))
+        unreachable_beats = [beat.beat_id for beat in self.beats if beat.beat_id not in reachable_beats]
+        if unreachable_beats:
+            raise ValueError(
+                "scenario beat graph has unreachable beat(s): "
+                + ", ".join(unreachable_beats)
+            )
         return self
 
 
