@@ -79,6 +79,7 @@ from coc_runner.domain.models import (
     ViewerRole,
     VisibilityScope,
 )
+from coc_runner.error_details import build_character_import_error_detail
 from coc_runner.domain.secrets import filter_session_for_viewer, normalize_keeper_prompt_for_keeper
 from coc_runner.infrastructure.knowledge_repositories import KnowledgeRepository
 from coc_runner.infrastructure.repositories import SessionRepository
@@ -877,22 +878,25 @@ class SessionService:
             request.language_preference,
             session.language_preference,
         )
+        error_context = {
+            "source_id": request.source_id,
+            "session_id": session.session_id,
+            "actor_id": request.actor_id,
+        }
         self._authorize_operator(
             session,
             operator_id=request.operator_id,
             language=effective_language,
-            error_detail={
-                "code": "character_import_operator_not_authorized",
-                "message": self._message(
+            error_detail=build_character_import_error_detail(
+                code="character_import_operator_not_authorized",
+                message=self._message(
                     "character_import_operator_not_authorized",
                     effective_language,
                 ),
-                "source_id": request.source_id,
-                "session_id": session.session_id,
-                "actor_id": request.actor_id,
-                "operator_id": request.operator_id,
-                "scope": "character_import_permission",
-            },
+                **error_context,
+                operator_id=request.operator_id,
+                scope="character_import_permission",
+            ),
         )
         try:
             source = self._load_character_import_source(
@@ -906,14 +910,12 @@ class SessionService:
                 source_id=request.source_id,
             )
             raise LookupError(
-                {
-                    "code": "character_import_source_not_found",
-                    "message": message,
-                    "source_id": request.source_id,
-                    "session_id": session.session_id,
-                    "actor_id": request.actor_id,
-                    "scope": "character_import_source",
-                }
+                build_character_import_error_detail(
+                    code="character_import_source_not_found",
+                    message=message,
+                    scope="character_import_source",
+                    **error_context,
+                )
             ) from exc
         except ValueError as exc:
             not_supported_message = self._message(
@@ -927,25 +929,21 @@ class SessionService:
             )
             if exc.args and exc.args[0] == not_supported_message:
                 raise ValueError(
-                    {
-                        "code": "character_import_not_supported",
-                        "message": not_supported_message,
-                        "source_id": request.source_id,
-                        "session_id": session.session_id,
-                        "actor_id": request.actor_id,
-                        "scope": "character_import_support",
-                    }
+                    build_character_import_error_detail(
+                        code="character_import_not_supported",
+                        message=not_supported_message,
+                        scope="character_import_support",
+                        **error_context,
+                    )
                 ) from exc
             if exc.args and exc.args[0] == missing_extraction_message:
                 raise ValueError(
-                    {
-                        "code": "character_import_missing_extraction",
-                        "message": missing_extraction_message,
-                        "source_id": request.source_id,
-                        "session_id": session.session_id,
-                        "actor_id": request.actor_id,
-                        "scope": "character_import_source",
-                    }
+                    build_character_import_error_detail(
+                        code="character_import_missing_extraction",
+                        message=missing_extraction_message,
+                        scope="character_import_source",
+                        **error_context,
+                    )
                 ) from exc
             raise
         current_time = datetime.now(timezone.utc)
@@ -971,14 +969,12 @@ class SessionService:
             )
             if exc.args and exc.args[0] == force_review_required_message:
                 raise ValueError(
-                    {
-                        "code": "character_import_force_review_required",
-                        "message": force_review_required_message,
-                        "source_id": request.source_id,
-                        "session_id": session.session_id,
-                        "actor_id": request.actor_id,
-                        "scope": "character_import_review",
-                    }
+                    build_character_import_error_detail(
+                        code="character_import_force_review_required",
+                        message=force_review_required_message,
+                        scope="character_import_review",
+                        **error_context,
+                    )
                 ) from exc
             raise
         session.state_version += 1
@@ -996,14 +992,12 @@ class SessionService:
                 effective_language,
             )
             raise ConflictError(
-                {
-                    "code": "character_import_state_conflict",
-                    "message": message,
-                    "source_id": request.source_id,
-                    "session_id": session.session_id,
-                    "actor_id": request.actor_id,
-                    "scope": "character_import_state",
-                }
+                build_character_import_error_detail(
+                    code="character_import_state_conflict",
+                    message=message,
+                    scope="character_import_state",
+                    **error_context,
+                )
             ) from exc
         return ApplyCharacterImportResponse(
             message=self._message("character_import_applied", effective_language),

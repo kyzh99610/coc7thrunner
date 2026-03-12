@@ -28,6 +28,7 @@ from coc_runner.domain.models import (
     UpdateKeeperPromptResponse,
     ViewerRole,
 )
+from coc_runner.error_details import extract_error_detail
 
 
 router = APIRouter(prefix="/sessions", tags=["sessions"])
@@ -103,8 +104,10 @@ def submit_manual_action(
     except LookupError as exc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
     except PermissionError as exc:
-        detail = exc.args[0] if exc.args and isinstance(exc.args[0], dict) else str(exc)
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=detail) from exc
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=extract_error_detail(exc),
+        ) from exc
     except ConflictError as exc:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
     except ValueError as exc:
@@ -124,17 +127,25 @@ def apply_character_import(
     try:
         return service.apply_character_import(session_id, request)
     except LookupError as exc:
-        detail = exc.args[0] if exc.args and isinstance(exc.args[0], dict) else str(exc)
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=detail) from exc
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=extract_error_detail(exc),
+        ) from exc
     except PermissionError as exc:
-        detail = exc.args[0] if exc.args and isinstance(exc.args[0], dict) else str(exc)
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=detail) from exc
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=extract_error_detail(exc),
+        ) from exc
     except ConflictError as exc:
-        detail = exc.args[0] if exc.args and isinstance(exc.args[0], dict) else str(exc)
-        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=detail) from exc
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=extract_error_detail(exc),
+        ) from exc
     except ValueError as exc:
-        detail = exc.args[0] if exc.args and isinstance(exc.args[0], dict) else str(exc)
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=detail) from exc
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=extract_error_detail(exc),
+        ) from exc
 
 
 @router.post(

@@ -7,6 +7,8 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from starlette.requests import Request
 
+from coc_runner.error_details import build_structured_error_detail
+
 
 def build_request_validation_detail(
     exc: RequestValidationError,
@@ -23,12 +25,12 @@ def build_request_validation_detail(
         if "ctx" in error:
             shaped_error["ctx"] = error["ctx"]
         errors.append(shaped_error)
-    return {
-        "code": "request_validation_failed",
-        "message": "请求参数校验失败",
-        "scope": "request_validation",
-        "errors": errors,
-    }
+    return build_structured_error_detail(
+        code="request_validation_failed",
+        message="请求参数校验失败",
+        scope="request_validation",
+        errors=errors,
+    )
 
 
 async def request_validation_exception_handler(

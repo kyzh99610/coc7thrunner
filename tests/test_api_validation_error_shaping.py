@@ -4,7 +4,48 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.testclient import TestClient
 
 from coc_runner.api.exception_handlers import build_request_validation_detail
+from coc_runner.error_details import (
+    build_character_import_error_detail,
+    build_structured_error_detail,
+    extract_error_detail,
+)
 from tests.helpers import make_participant, make_scenario
+
+
+def test_structured_error_helper_builds_expected_business_detail_shape() -> None:
+    assert build_character_import_error_detail(
+        code="character_import_source_not_found",
+        message="未找到角色导入源 missing-source",
+        scope="character_import_source",
+        source_id="missing-source",
+        session_id="session-123",
+        actor_id="investigator-1",
+    ) == {
+        "code": "character_import_source_not_found",
+        "message": "未找到角色导入源 missing-source",
+        "scope": "character_import_source",
+        "source_id": "missing-source",
+        "session_id": "session-123",
+        "actor_id": "investigator-1",
+    }
+
+
+def test_extract_error_detail_returns_dict_for_structured_errors_and_string_otherwise() -> None:
+    structured = ValueError(
+        build_structured_error_detail(
+            code="sample_error",
+            message="示例错误",
+            scope="sample_scope",
+        )
+    )
+    plain = ValueError("plain error")
+
+    assert extract_error_detail(structured) == {
+        "code": "sample_error",
+        "message": "示例错误",
+        "scope": "sample_scope",
+    }
+    assert extract_error_detail(plain) == "plain error"
 
 
 def test_request_validation_body_missing_uses_structured_422_detail(
