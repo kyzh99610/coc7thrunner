@@ -576,123 +576,199 @@ class SessionService:
         request: PlayerActionRequest,
     ) -> PlayerActionResponse:
         error_language = self._resolve_language(request.language_preference)
-        session = self._load_session(session_id, language=error_language)
-        participant = self._get_participant(session, request.actor_id, language=error_language)
-        current_time = datetime.now(timezone.utc)
+        try:
+            session = self._load_session(session_id, language=error_language)
+        except LookupError as exc:
+            message = exc.args[0] if exc.args and isinstance(exc.args[0], str) else self._message(
+                "session_not_found",
+                error_language,
+                session_id=session_id,
+            )
+            raise LookupError(
+                build_session_action_error_detail(
+                    code="player_action_session_not_found",
+                    message=message,
+                    scope="player_action_session",
+                    session_id=session_id,
+                    actor_id=request.actor_id,
+                )
+            ) from exc
+        error_context = {
+            "session_id": session.session_id,
+            "actor_id": request.actor_id,
+        }
+        try:
+            participant = self._get_participant(session, request.actor_id, language=error_language)
+        except ValueError as exc:
+            message = exc.args[0] if exc.args and isinstance(exc.args[0], str) else self._message(
+                "actor_not_participant",
+                error_language,
+                actor_id=request.actor_id,
+            )
+            raise ValueError(
+                build_session_action_error_detail(
+                    code="player_action_invalid",
+                    message=message,
+                    scope="player_action_request",
+                    **error_context,
+                )
+            ) from exc
         effective_language = self._resolve_language(
             request.language_preference, session.language_preference
         )
-        visible_to = self._normalize_visible_to(
-            actor_id=request.actor_id,
-            visibility_scope=request.visibility_scope,
-            visible_to=request.visible_to,
-        )
-        expected_version = session.state_version
-        rules_grounding = self._ground_rules_for_action(
-            actor_id=request.actor_id,
-            actor_type=ActorType.INVESTIGATOR,
-            query_text=self._resolve_rules_query_text(
-                request.rules_query_text,
-                request.action_text,
-                request.structured_action,
-            ),
-            deterministic_resolution_required=request.deterministic_resolution_required,
+        try:
+            current_time = datetime.now(timezone.utc)
+            visible_to = self._normalize_visible_to(
+                actor_id=request.actor_id,
+                visibility_scope=request.visibility_scope,
+                visible_to=request.visible_to,
             )
-        grounding_degraded = self._annotate_grounding_review_summary(
-            session=session,
-            rules_grounding=rules_grounding,
-        )
-
-        resolved_effects, effect_contract_origin = self._resolve_action_effect_contract(
-            explicit_effects=request.effects,
-            structured_action=request.structured_action,
-        )
-        if participant.kind == ParticipantKind.AI:
-            draft_action = self._build_draft_action(
+            expected_version = session.state_version
+            rules_grounding = self._ground_rules_for_action(
+                actor_id=request.actor_id,
+                actor_type=ActorType.INVESTIGATOR,
+                query_text=self._resolve_rules_query_text(
+                    request.rules_query_text,
+                    request.action_text,
+                    request.structured_action,
+                ),
+                deterministic_resolution_required=request.deterministic_resolution_required,
+            )
+            grounding_degraded = self._annotate_grounding_review_summary(
                 session=session,
+                rules_grounding=rules_grounding,
+            )
+
+            resolved_effects, effect_contract_origin = self._resolve_action_effect_contract(
+                explicit_effects=request.effects,
+                structured_action=request.structured_action,
+            )
+            if participant.kind == ParticipantKind.AI:
+                draft_action = self._build_draft_action(
+                    session=session,
+                    actor_id=request.actor_id,
+                    actor_type=ActorType.INVESTIGATOR,
+                    visibility_scope=request.visibility_scope,
+                    visible_to=visible_to,
+                    draft_text=request.action_text,
+                    structured_action=request.structured_action,
+                    effects=resolved_effects,
+                    effect_contract_origin=effect_contract_origin,
+                    rationale_summary=request.rationale_summary
+                    or self._message("draft_rationale", effective_language),
+                    rules_grounding=rules_grounding,
+                    language=effective_language,
+                    behavior_context=self._get_behavior_context(session, request.actor_id),
+                    current_time=current_time,
+                )
+                session.draft_actions.append(draft_action)
+                session.state_version += 1
+                session.updated_at = current_time
+                self._append_audit_log(
+                    session,
+                    action=AuditActionType.DRAFT_CREATED,
+                    actor_id=request.actor_id,
+                    subject_id=draft_action.draft_id,
+                    current_time=current_time,
+                    details={
+                        "origin": "player_action",
+                        "risk_level": draft_action.risk_level.value,
+                        "requires_explicit_approval": draft_action.requires_explicit_approval,
+                    },
+                )
+                self._save_session(
+                    session,
+                    expected_version=expected_version,
+                    reason="player_action_draft",
+                    language=effective_language,
+                )
+                return PlayerActionResponse(
+                    message=self._message("draft_recorded", effective_language),
+                    session_id=session.session_id,
+                    state_version=session.state_version,
+                    language_preference=effective_language,
+                    grounding_degraded=grounding_degraded,
+                    draft_action=draft_action,
+                )
+
+            authoritative_action = self._build_authoritative_action(
+                source_type=AuthoritativeActionSource.HUMAN_PLAYER,
                 actor_id=request.actor_id,
                 actor_type=ActorType.INVESTIGATOR,
                 visibility_scope=request.visibility_scope,
                 visible_to=visible_to,
-                draft_text=request.action_text,
+                text=request.action_text,
                 structured_action=request.structured_action,
                 effects=resolved_effects,
                 effect_contract_origin=effect_contract_origin,
-                rationale_summary=request.rationale_summary
-                or self._message("draft_rationale", effective_language),
                 rules_grounding=rules_grounding,
+                language_preference=effective_language,
+                created_at=current_time,
+            )
+            authoritative_event = self._apply_authoritative_action(
+                session=session,
+                authoritative_action=authoritative_action,
+                event_type=EventType.PLAYER_ACTION,
                 language=effective_language,
-                behavior_context=self._get_behavior_context(session, request.actor_id),
                 current_time=current_time,
             )
-            session.draft_actions.append(draft_action)
             session.state_version += 1
             session.updated_at = current_time
-            self._append_audit_log(
-                session,
-                action=AuditActionType.DRAFT_CREATED,
-                actor_id=request.actor_id,
-                subject_id=draft_action.draft_id,
-                current_time=current_time,
-                details={
-                    "origin": "player_action",
-                    "risk_level": draft_action.risk_level.value,
-                    "requires_explicit_approval": draft_action.requires_explicit_approval,
-                },
-            )
             self._save_session(
                 session,
                 expected_version=expected_version,
-                reason="player_action_draft",
+                reason="player_action",
                 language=effective_language,
             )
             return PlayerActionResponse(
-                message=self._message("draft_recorded", effective_language),
+                message=self._message("player_action_recorded", effective_language),
                 session_id=session.session_id,
                 state_version=session.state_version,
                 language_preference=effective_language,
                 grounding_degraded=grounding_degraded,
-                draft_action=draft_action,
+                authoritative_event=authoritative_event,
+                authoritative_action=authoritative_action,
             )
-
-        authoritative_action = self._build_authoritative_action(
-            source_type=AuthoritativeActionSource.HUMAN_PLAYER,
-            actor_id=request.actor_id,
-            actor_type=ActorType.INVESTIGATOR,
-            visibility_scope=request.visibility_scope,
-            visible_to=visible_to,
-            text=request.action_text,
-            structured_action=request.structured_action,
-            effects=resolved_effects,
-            effect_contract_origin=effect_contract_origin,
-            rules_grounding=rules_grounding,
-            language_preference=effective_language,
-            created_at=current_time,
-        )
-        authoritative_event = self._apply_authoritative_action(
-            session=session,
-            authoritative_action=authoritative_action,
-            event_type=EventType.PLAYER_ACTION,
-            language=effective_language,
-            current_time=current_time,
-        )
-        session.state_version += 1
-        session.updated_at = current_time
-        self._save_session(
-            session,
-            expected_version=expected_version,
-            reason="player_action",
-            language=effective_language,
-        )
-        return PlayerActionResponse(
-            message=self._message("player_action_recorded", effective_language),
-            session_id=session.session_id,
-            state_version=session.state_version,
-            language_preference=effective_language,
-            grounding_degraded=grounding_degraded,
-            authoritative_event=authoritative_event,
-            authoritative_action=authoritative_action,
-        )
+        except LookupError as exc:
+            message = exc.args[0] if exc.args and isinstance(exc.args[0], str) else self._message(
+                "session_not_found",
+                effective_language,
+                session_id=session.session_id,
+            )
+            raise LookupError(
+                build_session_action_error_detail(
+                    code="player_action_target_not_found",
+                    message=message,
+                    scope="player_action_execution",
+                    **error_context,
+                )
+            ) from exc
+        except ConflictError as exc:
+            message = exc.args[0] if exc.args and isinstance(exc.args[0], str) else self._message(
+                "state_conflict",
+                effective_language,
+            )
+            raise ConflictError(
+                build_session_action_error_detail(
+                    code="player_action_state_conflict",
+                    message=message,
+                    scope="player_action_state",
+                    **error_context,
+                )
+            ) from exc
+        except ValueError as exc:
+            message = exc.args[0] if exc.args and isinstance(exc.args[0], str) else self._message(
+                "invalid_scene_transition",
+                effective_language,
+            )
+            raise ValueError(
+                build_session_action_error_detail(
+                    code="player_action_invalid",
+                    message=message,
+                    scope="player_action_execution",
+                    **error_context,
+                )
+            ) from exc
 
     def submit_kp_draft(
         self,

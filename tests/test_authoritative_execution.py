@@ -258,6 +258,42 @@ def test_investigator_still_sees_non_review_human_authoritative_outcome_after_me
     assert snapshot_state["timeline"][-1]["structured_payload"]["source_type"] == "human_player"
 
 
+def test_player_action_invalid_actor_returns_structured_400_without_mutating_session(
+    client: TestClient,
+) -> None:
+    start_response = client.post(
+        "/sessions/start",
+        json={
+            "keeper_name": "KP",
+            "scenario": make_scenario(),
+            "participants": [make_participant("investigator-1", "林舟")],
+        },
+    )
+    assert start_response.status_code == 201
+    session_id = start_response.json()["session_id"]
+    snapshot_before_action = _get_snapshot(client, session_id)
+
+    invalid_response = client.post(
+        f"/sessions/{session_id}/player-action",
+        json={
+            "actor_id": "ghost-investigator",
+            "action_text": "我检查现场。",
+            "structured_action": {"type": "investigate_scene"},
+        },
+    )
+
+    assert invalid_response.status_code == 400
+    assert invalid_response.json()["detail"] == {
+        "code": "player_action_invalid",
+        "message": "actor_id ghost-investigator 不属于当前会话",
+        "session_id": session_id,
+        "actor_id": "ghost-investigator",
+        "scope": "player_action_request",
+    }
+    snapshot_after_action = _get_snapshot(client, session_id)
+    assert snapshot_after_action == snapshot_before_action
+
+
 def test_manual_authoritative_action_executes_and_checks_scene_preconditions(
     client: TestClient,
 ) -> None:

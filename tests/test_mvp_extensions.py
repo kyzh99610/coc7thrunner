@@ -232,6 +232,7 @@ def test_repository_conflict_is_returned_as_http_409(client: TestClient) -> None
         client,
         participants=[make_participant("investigator-1", "林舟")],
     )
+    snapshot_before_conflict = client.get(f"/sessions/{session_id}/snapshot").json()
     service = client.app.state.session_service
     original_repository = service.repository
 
@@ -269,7 +270,15 @@ def test_repository_conflict_is_returned_as_http_409(client: TestClient) -> None
         service.repository = original_repository
 
     assert response.status_code == 409
-    assert response.json()["detail"] == "会话状态版本冲突，请重新加载后再试"
+    assert response.json()["detail"] == {
+        "code": "player_action_state_conflict",
+        "message": "会话状态版本冲突，请重新加载后再试",
+        "session_id": session_id,
+        "actor_id": "investigator-1",
+        "scope": "player_action_state",
+    }
+    snapshot_after_conflict = client.get(f"/sessions/{session_id}/snapshot").json()
+    assert snapshot_after_conflict == snapshot_before_conflict
 
 
 def test_shared_subset_visibility_only_reaches_selected_viewers(client: TestClient) -> None:
@@ -501,7 +510,13 @@ def test_session_not_found_uses_request_language_or_default(client: TestClient) 
         },
     )
     assert zh_response.status_code == 404
-    assert zh_response.json()["detail"] == "未找到会话 missing-session"
+    assert zh_response.json()["detail"] == {
+        "code": "player_action_session_not_found",
+        "message": "未找到会话 missing-session",
+        "session_id": "missing-session",
+        "actor_id": "investigator-1",
+        "scope": "player_action_session",
+    }
 
     en_response = client.post(
         "/sessions/missing-session/player-action",
@@ -513,7 +528,13 @@ def test_session_not_found_uses_request_language_or_default(client: TestClient) 
         },
     )
     assert en_response.status_code == 404
-    assert en_response.json()["detail"] == "Session missing-session was not found"
+    assert en_response.json()["detail"] == {
+        "code": "player_action_session_not_found",
+        "message": "Session missing-session was not found",
+        "session_id": "missing-session",
+        "actor_id": "investigator-1",
+        "scope": "player_action_session",
+    }
 
     state_response = client.get(
         "/sessions/missing-session/state",

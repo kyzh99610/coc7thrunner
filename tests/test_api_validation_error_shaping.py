@@ -44,6 +44,19 @@ def test_structured_error_helper_builds_expected_business_detail_shape() -> None
         "actor_id": "keeper-1",
         "operator_id": "keeper-1",
     }
+    assert build_session_action_error_detail(
+        code="player_action_invalid",
+        message="actor_id investigator-missing 不属于当前会话",
+        scope="player_action_request",
+        session_id="session-456",
+        actor_id="investigator-missing",
+    ) == {
+        "code": "player_action_invalid",
+        "message": "actor_id investigator-missing 不属于当前会话",
+        "scope": "player_action_request",
+        "session_id": "session-456",
+        "actor_id": "investigator-missing",
+    }
 
 
 def test_extract_error_detail_returns_dict_for_structured_errors_and_string_otherwise() -> None:
