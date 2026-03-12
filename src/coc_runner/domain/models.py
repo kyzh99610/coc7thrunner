@@ -797,14 +797,28 @@ class ScenarioScaffold(BaseModel):
 
     @model_validator(mode="after")
     def validate_beats(self) -> "ScenarioScaffold":
+        def find_duplicate(values: list[str]) -> str | None:
+            seen: set[str] = set()
+            for value in values:
+                if value in seen:
+                    return value
+                seen.add(value)
+            return None
+
         scene_ids = [scene.scene_id for scene in self.scenes]
-        if len(scene_ids) != len(set(scene_ids)):
-            raise ValueError("scenario scene_ids must be unique")
+        duplicate_scene_id = find_duplicate(scene_ids)
+        if duplicate_scene_id is not None:
+            raise ValueError(f"scenario scene_id {duplicate_scene_id} must be unique")
         if self.start_scene_id is not None and self.start_scene_id not in set(scene_ids):
             raise ValueError(f"scenario start_scene_id {self.start_scene_id} was not found")
+        clue_ids = [clue.clue_id for clue in self.clues]
+        duplicate_clue_id = find_duplicate(clue_ids)
+        if duplicate_clue_id is not None:
+            raise ValueError(f"scenario clue_id {duplicate_clue_id} must be unique")
         beat_ids = [beat.beat_id for beat in self.beats]
-        if len(beat_ids) != len(set(beat_ids)):
-            raise ValueError("scenario beat_ids must be unique")
+        duplicate_beat_id = find_duplicate(beat_ids)
+        if duplicate_beat_id is not None:
+            raise ValueError(f"scenario beat_id {duplicate_beat_id} must be unique")
         scene_id_set = set(scene_ids)
         clue_refs = {
             clue_ref
@@ -816,12 +830,29 @@ class ScenarioScaffold(BaseModel):
         objective_ids: set[str] = set()
 
         def validate_condition_refs(condition: BeatCondition | None, *, beat_id: str) -> None:
+            def validate_condition_clue_ref(*refs: str | None) -> None:
+                for clue_ref in refs:
+                    if clue_ref is not None and clue_ref not in clue_refs:
+                        raise ValueError(
+                            f"scenario beat {beat_id} condition references unknown clue {clue_ref}"
+                        )
+
             if condition is None:
                 return
             for nested in condition.all_of:
                 validate_condition_refs(nested, beat_id=beat_id)
             for nested in condition.any_of:
                 validate_condition_refs(nested, beat_id=beat_id)
+            if condition.clue_discovered is not None:
+                validate_condition_clue_ref(
+                    condition.clue_discovered.clue_id,
+                    condition.clue_discovered.clue_title,
+                )
+            if condition.clue_state is not None:
+                validate_condition_clue_ref(
+                    condition.clue_state.clue_id,
+                    condition.clue_state.clue_title,
+                )
             if (
                 condition.scene_is is not None
                 and condition.scene_is.scene_id is not None
@@ -842,6 +873,16 @@ class ScenarioScaffold(BaseModel):
             ):
                 raise ValueError(
                     f"scenario beat {beat_id} condition references unknown beat {condition.beat_status_is.beat_id}"
+                )
+            if condition.clue_visible_to_actor is not None:
+                validate_condition_clue_ref(
+                    condition.clue_visible_to_actor.clue_id,
+                    condition.clue_visible_to_actor.clue_title,
+                )
+            if condition.actor_owns_clue is not None:
+                validate_condition_clue_ref(
+                    condition.actor_owns_clue.clue_id,
+                    condition.actor_owns_clue.clue_title,
                 )
 
         for scene in self.scenes:
