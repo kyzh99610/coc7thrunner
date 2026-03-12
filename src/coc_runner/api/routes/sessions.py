@@ -124,7 +124,8 @@ def apply_character_import(
     try:
         return service.apply_character_import(session_id, request)
     except LookupError as exc:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+        detail = exc.args[0] if exc.args and isinstance(exc.args[0], dict) else str(exc)
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=detail) from exc
     except PermissionError as exc:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)) from exc
     except ConflictError as exc:

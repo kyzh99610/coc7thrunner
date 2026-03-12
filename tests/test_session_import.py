@@ -895,7 +895,15 @@ def test_cross_environment_missing_character_import_source_refresh_fails_without
                 },
             )
             assert refresh_response.status_code == 404
-            assert source_id in refresh_response.json()["detail"]
+            refresh_detail = refresh_response.json()["detail"]
+            assert refresh_detail == {
+                "code": "character_import_source_not_found",
+                "message": f"未找到角色导入源 {source_id}",
+                "source_id": source_id,
+                "session_id": imported_session_id,
+                "actor_id": "investigator-1",
+                "scope": "character_import_source",
+            }
 
             imported_snapshot_after_refresh_failure = _get_snapshot(import_env_client, imported_session_id)
             assert imported_snapshot_after_refresh_failure == imported_snapshot_before_refresh

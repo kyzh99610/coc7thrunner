@@ -882,10 +882,27 @@ class SessionService:
             operator_id=request.operator_id,
             language=effective_language,
         )
-        source = self._load_character_import_source(
-            request.source_id,
-            language=effective_language,
-        )
+        try:
+            source = self._load_character_import_source(
+                request.source_id,
+                language=effective_language,
+            )
+        except LookupError as exc:
+            message = exc.args[0] if exc.args and isinstance(exc.args[0], str) else self._message(
+                "character_import_source_not_found",
+                effective_language,
+                source_id=request.source_id,
+            )
+            raise LookupError(
+                {
+                    "code": "character_import_source_not_found",
+                    "message": message,
+                    "source_id": request.source_id,
+                    "session_id": session.session_id,
+                    "actor_id": request.actor_id,
+                    "scope": "character_import_source",
+                }
+            ) from exc
         current_time = datetime.now(timezone.utc)
         expected_version = session.state_version
         character_state, sync_report = self._apply_character_sheet_extraction_to_session(
