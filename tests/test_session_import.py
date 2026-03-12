@@ -811,3 +811,149 @@ def test_cross_environment_review_summary_surfaces_grounding_degraded_for_keeper
             )
     finally:
         shutil.rmtree(run_dir, ignore_errors=True)
+
+
+def test_cross_environment_missing_character_import_source_refresh_fails_without_mutating_session(
+    client: TestClient,
+) -> None:
+    source_id = "character-sheet-template-import-refresh-missing-cross-env"
+    _import_character_sheet_source(client, source_id=source_id)
+    start_response = client.post(
+        "/sessions/start",
+        json={
+            "keeper_name": "KP",
+            "scenario": _snapshot_scenario(),
+            "participants": [
+                make_participant(
+                    "investigator-1",
+                    "占位调查员",
+                    imported_character_source_id=source_id,
+                )
+            ],
+        },
+    )
+    assert start_response.status_code == 201
+    original_session_id = start_response.json()["session_id"]
+
+    manual_response = client.post(
+        f"/sessions/{original_session_id}/manual-action",
+        json={
+            "operator_id": "keeper-1",
+            "actor_id": "investigator-1",
+            "actor_type": "investigator",
+            "action_text": "手动记录调查中的体力消耗与随身物品变化。",
+            "effects": {
+                "character_stat_effects": [{"actor_id": "investigator-1", "hp_delta": -3}],
+                "inventory_effects": [{"actor_id": "investigator-1", "add_items": ["现场证物"]}],
+                "status_effects": [
+                    {
+                        "actor_id": "investigator-1",
+                        "add_status_effects": ["受惊"],
+                        "add_temporary_conditions": ["需要休整"],
+                        "add_private_notes": ["手动确认：先保留当前会话状态。"],
+                    }
+                ],
+            },
+        },
+    )
+    assert manual_response.status_code == 202
+    snapshot = _get_snapshot(client, original_session_id)
+    original_character_state = snapshot["character_states"]["investigator-1"]
+    expected_current_hit_points = original_character_state["current_hit_points"]
+
+    assert snapshot["participants"][0]["imported_character_source_id"] == source_id
+    assert original_character_state["import_source_id"] == source_id
+    assert expected_current_hit_points >= 1
+    assert "现场证物" in original_character_state["inventory"]
+    assert "受惊" in original_character_state["status_effects"]
+    assert "需要休整" in original_character_state["temporary_conditions"]
+    assert "手动确认：先保留当前会话状态。" in original_character_state["private_notes"]
+    assert any(ref.startswith(f"knowledge_source:{source_id}") for ref in original_character_state["secret_state_refs"])
+
+    import_env_client, run_dir = _make_cross_environment_client("missing_character_refresh_source")
+    try:
+        with import_env_client:
+            import_response = import_env_client.post("/sessions/import", json=snapshot)
+            assert import_response.status_code == 201
+            import_payload = import_response.json()
+            assert import_payload["warnings"]
+            assert {
+                "participant.imported_character_source_id",
+                "character_state.import_source_id",
+            }.issubset({warning["scope"] for warning in import_payload["warnings"]})
+
+            imported_session_id = import_payload["new_session_id"]
+            imported_snapshot_before_refresh = _get_snapshot(import_env_client, imported_session_id)
+
+            refresh_response = import_env_client.post(
+                f"/sessions/{imported_session_id}/apply-character-import",
+                json={
+                    "operator_id": "keeper-1",
+                    "actor_id": "investigator-1",
+                    "source_id": source_id,
+                    "sync_policy": "refresh_with_merge",
+                },
+            )
+            assert refresh_response.status_code == 404
+            assert source_id in refresh_response.json()["detail"]
+
+            imported_snapshot_after_refresh_failure = _get_snapshot(import_env_client, imported_session_id)
+            assert imported_snapshot_after_refresh_failure == imported_snapshot_before_refresh
+
+            imported_character_state = imported_snapshot_after_refresh_failure["character_states"]["investigator-1"]
+            assert imported_snapshot_after_refresh_failure["participants"][0]["imported_character_source_id"] == source_id
+            assert imported_character_state["import_source_id"] == source_id
+            assert imported_character_state["secret_state_refs"] == original_character_state["secret_state_refs"]
+            assert imported_character_state["current_hit_points"] == expected_current_hit_points
+            assert "现场证物" in imported_character_state["inventory"]
+            assert "受惊" in imported_character_state["status_effects"]
+            assert "需要休整" in imported_character_state["temporary_conditions"]
+            assert "手动确认：先保留当前会话状态。" in imported_character_state["private_notes"]
+
+            keeper_state = _get_keeper_state(import_env_client, imported_session_id)
+            investigator_state = _get_investigator_state(
+                import_env_client,
+                imported_session_id,
+                "investigator-1",
+            )
+
+            assert (
+                keeper_state["visible_character_states_by_actor"]["investigator-1"]["import_source_id"]
+                == source_id
+            )
+            assert (
+                investigator_state["own_character_state"]["import_source_id"]
+                == source_id
+            )
+            assert (
+                investigator_state["own_character_state"]["current_hit_points"]
+                == expected_current_hit_points
+            )
+            assert "现场证物" in investigator_state["own_character_state"]["inventory"]
+            assert investigator_state["visible_reviewed_actions"] == []
+
+            continue_response = import_env_client.post(
+                f"/sessions/{imported_session_id}/player-action",
+                json={
+                    "actor_id": "investigator-1",
+                    "action_text": "我先核对现有角色状态，再继续调查前厅。",
+                    "structured_action": {"type": "resume_investigation"},
+                },
+            )
+            assert continue_response.status_code == 202
+
+            continued_snapshot = _get_snapshot(import_env_client, imported_session_id)
+            assert (
+                continued_snapshot["character_states"]["investigator-1"]["current_hit_points"]
+                == expected_current_hit_points
+            )
+            assert "现场证物" in continued_snapshot["character_states"]["investigator-1"]["inventory"]
+            assert len(continued_snapshot["reviewed_actions"]) == len(
+                imported_snapshot_after_refresh_failure["reviewed_actions"]
+            )
+            assert len(continued_snapshot["authoritative_actions"]) == (
+                len(imported_snapshot_after_refresh_failure["authoritative_actions"]) + 1
+            )
+            assert continued_snapshot["timeline"][-1]["text"] == "我先核对现有角色状态，再继续调查前厅。"
+    finally:
+        shutil.rmtree(run_dir, ignore_errors=True)
