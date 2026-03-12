@@ -222,6 +222,123 @@ def test_manual_authoritative_action_executes_and_checks_scene_preconditions(
     assert "场景切换前提不满足" in failed_manual_response.json()["detail"]
 
 
+def test_investigator_still_sees_non_review_manual_authoritative_outcome_after_metadata_filtering(
+    client: TestClient,
+) -> None:
+    start_response = client.post(
+        "/sessions/start",
+        json={
+            "keeper_name": "KP",
+            "scenario": make_scenario(
+                clues=[
+                    {
+                        "clue_id": "clue.altar_crack",
+                        "title": "祭坛裂痕",
+                        "text": "祭坛上的裂痕像是被某种钝器反复敲击留下的。",
+                        "visibility_scope": "kp_only",
+                    }
+                ]
+            ),
+            "participants": [
+                make_participant("investigator-1", "林舟"),
+                make_participant("investigator-2", "周岚"),
+            ],
+        },
+    )
+    assert start_response.status_code == 201
+    session_id = start_response.json()["session_id"]
+
+    manual_response = client.post(
+        f"/sessions/{session_id}/manual-action",
+        json={
+            "operator_id": "keeper-1",
+            "actor_id": "keeper-1",
+            "actor_type": "keeper",
+            "action_text": "KP 手动推进到祭坛密室，并公开裂痕线索。",
+            "structured_action": {"type": "manual_scene_push"},
+            "effects": {
+                "scene_transitions": [
+                    {
+                        "title": "祭坛密室",
+                        "summary": "调查员被引导进入祭坛密室。",
+                        "phase": "confrontation",
+                        "required_current_phase": "setup",
+                        "consequence_tags": ["警觉升级"],
+                    }
+                ],
+                "clue_state_effects": [
+                    {
+                        "clue_id": "clue.altar_crack",
+                        "status": "shared_with_party",
+                        "share_with_party": True,
+                        "add_discovered_by": ["investigator-1"],
+                        "discovered_via": "keeper_reveal",
+                    }
+                ],
+            },
+        },
+    )
+    assert manual_response.status_code == 202
+    manual_payload = manual_response.json()
+    authoritative_payload = manual_payload["authoritative_action"]
+    event_payload = manual_payload["authoritative_event"]
+
+    keeper_state = client.get(
+        f"/sessions/{session_id}/state",
+        params={"viewer_role": "keeper"},
+    ).json()
+    investigator_state = client.get(
+        f"/sessions/{session_id}/state",
+        params={"viewer_id": "investigator-2", "viewer_role": "investigator"},
+    ).json()
+    snapshot_state = client.get(f"/sessions/{session_id}/snapshot").json()
+
+    keeper_action = next(
+        action
+        for action in keeper_state["visible_authoritative_actions"]
+        if action["action_id"] == authoritative_payload["action_id"]
+    )
+    investigator_action = next(
+        action
+        for action in investigator_state["visible_authoritative_actions"]
+        if action["action_id"] == authoritative_payload["action_id"]
+    )
+    investigator_event = next(
+        event
+        for event in investigator_state["visible_events"]
+        if event["event_id"] == event_payload["event_id"]
+    )
+
+    assert keeper_action["source_type"] == "manual_operator"
+    assert keeper_action["review_id"] is None
+    assert keeper_action["draft_id"] is None
+
+    assert investigator_state["visible_draft_actions"] == []
+    assert investigator_state["visible_reviewed_actions"] == []
+    assert investigator_action["action_id"] == authoritative_payload["action_id"]
+    assert investigator_action["source_type"] == "manual_operator"
+    assert investigator_action["text"] == "KP 手动推进到祭坛密室，并公开裂痕线索。"
+    assert investigator_action["review_id"] is None
+    assert investigator_action["draft_id"] is None
+    assert investigator_action["execution_summary"] is not None
+    assert investigator_event["text"] == "KP 手动推进到祭坛密室，并公开裂痕线索。"
+    assert investigator_event["structured_payload"]["authoritative_action_id"] == authoritative_payload["action_id"]
+    assert investigator_event["structured_payload"]["source_type"] == "manual_operator"
+    assert investigator_event["structured_payload"]["effects"]["clue_state_effects"][0]["status"] == "shared_with_party"
+    assert investigator_event["structured_payload"]["effects"]["clue_state_effects"][0]["discovered_via"] == "keeper_reveal"
+    assert investigator_state["current_scene"]["title"] == "祭坛密室"
+    assert investigator_state["scenario"]["clues"][0]["clue_id"] == "clue.altar_crack"
+    assert investigator_state["scenario"]["clues"][0]["status"] == "shared_with_party"
+
+    assert snapshot_state["authoritative_actions"][-1]["action_id"] == authoritative_payload["action_id"]
+    assert snapshot_state["authoritative_actions"][-1]["source_type"] == "manual_operator"
+    assert snapshot_state["authoritative_actions"][-1]["review_id"] is None
+    assert snapshot_state["authoritative_actions"][-1]["draft_id"] is None
+    assert snapshot_state["timeline"][-1]["event_id"] == event_payload["event_id"]
+    assert snapshot_state["timeline"][-1]["structured_payload"]["authoritative_action_id"] == authoritative_payload["action_id"]
+    assert snapshot_state["timeline"][-1]["structured_payload"]["source_type"] == "manual_operator"
+
+
 def test_rollback_after_applied_authoritative_execution_restores_prior_state(
     client: TestClient,
 ) -> None:
