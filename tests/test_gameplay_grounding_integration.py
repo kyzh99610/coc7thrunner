@@ -577,6 +577,189 @@ def test_high_risk_review_gate_approval_produces_authoritative_result_and_sanity
     assert snapshot_after_review["timeline"][-1]["event_type"] == "reviewed_action"
 
 
+def test_high_risk_review_gate_reject_keeps_draft_non_authoritative_and_preserves_progress(
+    client: TestClient,
+) -> None:
+    start_response = client.post(
+        "/sessions/start",
+        json={
+            "keeper_name": "KP",
+            "scenario": _minimal_high_risk_review_sanity_scenario(),
+            "participants": [
+                make_participant("investigator-1", "林舟"),
+                make_participant("investigator-2", "周岚"),
+                make_participant("ai-1", "测试调查员", kind="ai"),
+            ],
+        },
+    )
+    assert start_response.status_code == 201
+    session_id = start_response.json()["session_id"]
+
+    draft_response = client.post(
+        f"/sessions/{session_id}/player-action",
+        json={
+            "actor_id": "ai-1",
+            "action_text": "我建议沿门槛和锁链继续侦查低语来源，并把发现先交给林舟确认。",
+            "structured_action": {
+                "type": "investigate_search",
+                "risk_level": "high",
+                "requires_explicit_approval": True,
+            },
+            "effects": {
+                "clue_state_effects": [
+                    {
+                        "clue_id": "clue.cellar_whisper_note",
+                        "status": "private_to_actor",
+                        "private_to_actor_ids": ["investigator-1"],
+                        "add_owner_actor_ids": ["investigator-1"],
+                        "add_discovered_by": ["investigator-1"],
+                        "discovered_via": "investigate_cellar_whisper",
+                    }
+                ]
+            },
+        },
+    )
+    assert draft_response.status_code == 202
+    draft_response_payload = draft_response.json()
+    draft_payload = draft_response_payload["draft_action"]
+    assert draft_payload["review_status"] == "pending"
+    assert draft_payload["risk_level"] == "high"
+    assert draft_payload["requires_explicit_approval"] is True
+
+    keeper_before_review = client.get(
+        f"/sessions/{session_id}/state",
+        params={"viewer_role": "keeper"},
+    ).json()
+    snapshot_before_review = client.get(f"/sessions/{session_id}/snapshot").json()
+    timeline_before = [
+        (event["event_id"], event["event_type"], event["text"])
+        for event in snapshot_before_review["timeline"]
+    ]
+
+    assert keeper_before_review["progress_state"]["current_beat"] == "beat.cellar_entry"
+    assert keeper_before_review["visible_reviewed_actions"] == []
+    assert keeper_before_review["visible_authoritative_actions"] == []
+    assert all(
+        prompt["category"] != "sanity_review"
+        for prompt in keeper_before_review["keeper_workflow"]["active_prompts"]
+    )
+    assert any(
+        objective["objective_id"] == "objective.cellar.assess_whisper"
+        for objective in keeper_before_review["keeper_workflow"]["unresolved_objectives"]
+    )
+    assert snapshot_before_review["reviewed_actions"] == []
+    assert snapshot_before_review["authoritative_actions"] == []
+
+    review_response = client.post(
+        f"/sessions/{session_id}/draft-actions/{draft_payload['draft_id']}/review",
+        json={
+            "reviewer_id": "keeper-1",
+            "decision": "reject",
+            "editor_notes": "先不要把这次高风险建议写入权威历史。",
+        },
+    )
+    assert review_response.status_code == 200
+    review_payload = review_response.json()
+
+    assert review_payload["message"] == "已拒绝草稿行动，未写入权威历史"
+    assert review_payload["reviewed_action"] is None
+    assert review_payload["authoritative_action"] is None
+    assert review_payload["state_version"] == draft_response_payload["state_version"] + 1
+
+    keeper_after_review = client.get(
+        f"/sessions/{session_id}/state",
+        params={"viewer_role": "keeper"},
+    ).json()
+    investigator_one = client.get(
+        f"/sessions/{session_id}/state",
+        params={"viewer_id": "investigator-1", "viewer_role": "investigator"},
+    ).json()
+    investigator_two = client.get(
+        f"/sessions/{session_id}/state",
+        params={"viewer_id": "investigator-2", "viewer_role": "investigator"},
+    ).json()
+    snapshot_after_review = client.get(f"/sessions/{session_id}/snapshot").json()
+
+    rejected_draft = next(
+        draft
+        for draft in keeper_after_review["visible_draft_actions"]
+        if draft["draft_id"] == draft_payload["draft_id"]
+    )
+    keeper_timeline_after = [
+        (event["event_id"], event["event_type"], event["text"])
+        for event in keeper_after_review["visible_events"]
+    ]
+    snapshot_timeline_after = [
+        (event["event_id"], event["event_type"], event["text"])
+        for event in snapshot_after_review["timeline"]
+    ]
+
+    assert rejected_draft["review_status"] == "rejected"
+    assert rejected_draft["risk_level"] == "high"
+    assert rejected_draft["requires_explicit_approval"] is True
+    assert keeper_after_review["visible_reviewed_actions"] == []
+    assert keeper_after_review["visible_authoritative_actions"] == []
+    assert keeper_after_review["progress_state"]["current_beat"] == "beat.cellar_entry"
+    assert all(
+        prompt["category"] != "sanity_review"
+        for prompt in keeper_after_review["keeper_workflow"]["active_prompts"]
+    )
+    assert any(
+        objective["objective_id"] == "objective.cellar.assess_whisper"
+        for objective in keeper_after_review["keeper_workflow"]["unresolved_objectives"]
+    )
+    assert all(
+        objective["objective_id"] != "beat:beat.sanity_review"
+        for objective in keeper_after_review["keeper_workflow"]["unresolved_objectives"]
+    )
+    assert all(
+        event["event_type"] != "reviewed_action"
+        for event in keeper_after_review["visible_events"]
+    )
+    assert all(
+        event["text"] != draft_payload["draft_text"]
+        for event in keeper_after_review["visible_events"]
+    )
+    assert keeper_timeline_after == timeline_before
+
+    assert snapshot_after_review["reviewed_actions"] == []
+    assert snapshot_after_review["authoritative_actions"] == []
+    assert snapshot_after_review["progress_state"] == snapshot_before_review["progress_state"]
+    assert snapshot_timeline_after == timeline_before
+    assert len(snapshot_after_review["draft_actions"]) == len(snapshot_before_review["draft_actions"])
+    assert snapshot_after_review["draft_actions"][-1]["draft_id"] == draft_payload["draft_id"]
+    assert snapshot_after_review["draft_actions"][-1]["review_status"] == "rejected"
+
+    assert keeper_after_review["visible_character_states_by_actor"]["investigator-1"]["temporary_conditions"] == []
+    assert keeper_after_review["visible_character_states_by_actor"]["investigator-1"]["clue_ids"] == []
+    assert keeper_after_review["visible_character_states_by_actor"]["investigator-1"]["private_notes"] == []
+
+    for investigator_state in (investigator_one, investigator_two):
+        assert investigator_state["keeper_workflow"] is None
+        assert investigator_state["visible_reviewed_actions"] == []
+        assert investigator_state["visible_authoritative_actions"] == []
+        assert all(
+            event["event_type"] != "reviewed_action"
+            for event in investigator_state["visible_events"]
+        )
+        assert all(
+            event["text"] != draft_payload["draft_text"]
+            for event in investigator_state["visible_events"]
+        )
+
+    assert investigator_one["current_scene"]["title"] == "旅店地窖门前"
+    assert investigator_one["scenario"]["clues"] == []
+    assert investigator_one["own_character_state"]["temporary_conditions"] == []
+    assert investigator_one["own_character_state"]["clue_ids"] == []
+    assert investigator_one["own_character_state"]["private_notes"] == []
+
+    assert investigator_two["current_scene"]["title"] == "旅店地窖门前"
+    assert investigator_two["scenario"]["clues"] == []
+    assert investigator_two["own_character_state"]["temporary_conditions"] == []
+    assert investigator_two["own_character_state"]["clue_ids"] == []
+    assert investigator_two["own_character_state"]["private_notes"] == []
+
+
 def test_core_clue_contract_requires_fail_forward_support(client: TestClient) -> None:
     response = client.post(
         "/sessions/start",
