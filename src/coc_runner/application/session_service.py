@@ -881,6 +881,18 @@ class SessionService:
             session,
             operator_id=request.operator_id,
             language=effective_language,
+            error_detail={
+                "code": "character_import_operator_not_authorized",
+                "message": self._message(
+                    "character_import_operator_not_authorized",
+                    effective_language,
+                ),
+                "source_id": request.source_id,
+                "session_id": session.session_id,
+                "actor_id": request.actor_id,
+                "operator_id": request.operator_id,
+                "scope": "character_import_permission",
+            },
         )
         try:
             source = self._load_character_import_source(
@@ -4670,6 +4682,7 @@ class SessionService:
             "character_import_missing_extraction": "知识源 {source_id} 尚未生成人物卡提取结果",
             "character_import_not_supported": "当前会话服务未启用角色导入知识仓库",
             "character_import_force_review_required": "该导入仍需人工复核；如需强制覆盖会话状态，请显式启用 force_apply_manual_review",
+            "character_import_operator_not_authorized": "只有本局 KP 可以应用角色导入结果",
             "session_import_missing_participant_source_warning": "导入已保留调查员 {actor_id} 的角色来源 {source_id}，但当前环境未找到该知识源；后续角色再同步可能降级。",
             "session_import_missing_character_state_source_warning": "导入已保留角色状态 {actor_id} 的 import_source_id={source_id}，但当前环境未找到该知识源；导入来源追溯与刷新可能降级。",
             "session_import_missing_secret_source_warning": "导入已保留角色状态 {actor_id} 的秘密来源引用 {ref}，但当前环境未找到知识源 {source_id}；相关来源说明可能不可用。",
@@ -4750,6 +4763,7 @@ class SessionService:
             "character_import_missing_extraction": "Knowledge source {source_id} does not have a character-sheet extraction yet",
             "character_import_not_supported": "Character import support is not configured for this session service",
             "character_import_force_review_required": "This import still requires manual review; set force_apply_manual_review explicitly before force replacing session state",
+            "character_import_operator_not_authorized": "Only the session keeper may apply character import results",
             "session_import_missing_participant_source_warning": "Import kept participant {actor_id} source {source_id}, but that knowledge source is missing in the current environment; future character resync may degrade.",
             "session_import_missing_character_state_source_warning": "Import kept character state {actor_id} import_source_id={source_id}, but that knowledge source is missing in the current environment; source tracing and refresh may degrade.",
             "session_import_missing_secret_source_warning": "Import kept character state {actor_id} secret source ref {ref}, but knowledge source {source_id} is missing in the current environment; related provenance details may be unavailable.",

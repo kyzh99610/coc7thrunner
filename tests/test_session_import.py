@@ -1099,3 +1099,47 @@ def test_apply_character_import_not_supported_returns_structured_400_without_mut
 
     snapshot_after_apply_failure = _get_snapshot(client, session_id)
     assert snapshot_after_apply_failure == snapshot_before_apply
+
+
+def test_apply_character_import_forbidden_returns_structured_403_without_mutating_session(
+    client: TestClient,
+) -> None:
+    source_id = "character-sheet-template-forbidden-structured"
+    _import_character_sheet_source(client, source_id=source_id)
+    start_response = client.post(
+        "/sessions/start",
+        json={
+            "keeper_name": "KP",
+            "scenario": _snapshot_scenario(),
+            "participants": [
+                make_participant("investigator-1", "占位调查员"),
+                make_participant("investigator-2", "周岚"),
+            ],
+        },
+    )
+    assert start_response.status_code == 201
+    session_id = start_response.json()["session_id"]
+    snapshot_before_apply = _get_snapshot(client, session_id)
+
+    apply_response = client.post(
+        f"/sessions/{session_id}/apply-character-import",
+        json={
+            "operator_id": "investigator-2",
+            "actor_id": "investigator-1",
+            "source_id": source_id,
+            "sync_policy": "refresh_with_merge",
+        },
+    )
+    assert apply_response.status_code == 403
+    assert apply_response.json()["detail"] == {
+        "code": "character_import_operator_not_authorized",
+        "message": "只有本局 KP 可以应用角色导入结果",
+        "source_id": source_id,
+        "session_id": session_id,
+        "actor_id": "investigator-1",
+        "operator_id": "investigator-2",
+        "scope": "character_import_permission",
+    }
+
+    snapshot_after_apply_failure = _get_snapshot(client, session_id)
+    assert snapshot_after_apply_failure == snapshot_before_apply
