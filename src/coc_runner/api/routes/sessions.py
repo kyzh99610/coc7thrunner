@@ -130,7 +130,8 @@ def apply_character_import(
         detail = exc.args[0] if exc.args and isinstance(exc.args[0], dict) else str(exc)
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=detail) from exc
     except ConflictError as exc:
-        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+        detail = exc.args[0] if exc.args and isinstance(exc.args[0], dict) else str(exc)
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=detail) from exc
     except ValueError as exc:
         detail = exc.args[0] if exc.args and isinstance(exc.args[0], dict) else str(exc)
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=detail) from exc

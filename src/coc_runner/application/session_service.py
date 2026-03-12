@@ -983,12 +983,28 @@ class SessionService:
             raise
         session.state_version += 1
         session.updated_at = current_time
-        self._save_session(
-            session,
-            expected_version=expected_version,
-            reason="character_import_applied",
-            language=effective_language,
-        )
+        try:
+            self._save_session(
+                session,
+                expected_version=expected_version,
+                reason="character_import_applied",
+                language=effective_language,
+            )
+        except ConflictError as exc:
+            message = exc.args[0] if exc.args and isinstance(exc.args[0], str) else self._message(
+                "state_conflict",
+                effective_language,
+            )
+            raise ConflictError(
+                {
+                    "code": "character_import_state_conflict",
+                    "message": message,
+                    "source_id": request.source_id,
+                    "session_id": session.session_id,
+                    "actor_id": request.actor_id,
+                    "scope": "character_import_state",
+                }
+            ) from exc
         return ApplyCharacterImportResponse(
             message=self._message("character_import_applied", effective_language),
             session_id=session.session_id,
