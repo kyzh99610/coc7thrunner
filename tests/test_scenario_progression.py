@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from fastapi.testclient import TestClient
 
+from coc_runner.domain.errors import ConflictError
 from coc_runner.domain.models import ScenarioProgressState
 from tests.helpers import make_participant, make_scenario
 
@@ -32,6 +33,12 @@ def _register_spot_hidden_rule(client: TestClient, *, source_id: str) -> None:
 
 def _beat_map(state_payload: dict) -> dict[str, dict]:
     return {beat["beat_id"]: beat for beat in state_payload["scenario"]["beats"]}
+
+
+def _get_snapshot(client: TestClient, session_id: str) -> dict:
+    snapshot_response = client.get(f"/sessions/{session_id}/snapshot")
+    assert snapshot_response.status_code == 200
+    return snapshot_response.json()
 
 
 def _start_session_with_keeper_prompt_assignment(
@@ -809,6 +816,104 @@ def test_current_keeper_can_acknowledge_legacy_keeper_alias_prompt(client: TestC
     assert snapshot_response.json()["progress_state"]["queued_kp_prompts"][0]["assigned_to"] == "keeper_wow_001"
 
 
+def test_keeper_prompt_missing_session_returns_structured_404_with_language_override(
+    client: TestClient,
+) -> None:
+    zh_response = client.post(
+        "/sessions/missing-keeper-prompt/keeper-prompts/prompt-404/status",
+        json={
+            "operator_id": "keeper-1",
+            "status": "acknowledged",
+        },
+    )
+    assert zh_response.status_code == 404
+    assert zh_response.json()["detail"] == {
+        "code": "keeper_prompt_session_not_found",
+        "message": "未找到会话 missing-keeper-prompt",
+        "session_id": "missing-keeper-prompt",
+        "operator_id": "keeper-1",
+        "prompt_id": "prompt-404",
+        "scope": "keeper_prompt_session",
+    }
+
+    en_response = client.post(
+        "/sessions/missing-keeper-prompt/keeper-prompts/prompt-404/status",
+        json={
+            "operator_id": "keeper-1",
+            "status": "acknowledged",
+            "language_preference": "en-US",
+        },
+    )
+    assert en_response.status_code == 404
+    assert en_response.json()["detail"] == {
+        "code": "keeper_prompt_session_not_found",
+        "message": "Session missing-keeper-prompt was not found",
+        "session_id": "missing-keeper-prompt",
+        "operator_id": "keeper-1",
+        "prompt_id": "prompt-404",
+        "scope": "keeper_prompt_session",
+    }
+
+
+def test_keeper_prompt_unauthorized_operator_returns_structured_403_without_mutating_session(
+    client: TestClient,
+) -> None:
+    session_id, keeper_state = _start_session_with_keeper_prompt_assignment(
+        client,
+        keeper_id="keeper-1",
+    )
+    prompt_id = keeper_state["keeper_workflow"]["active_prompts"][0]["prompt_id"]
+    snapshot_before = _get_snapshot(client, session_id)
+
+    response = client.post(
+        f"/sessions/{session_id}/keeper-prompts/{prompt_id}/status",
+        json={
+            "operator_id": "investigator-1",
+            "status": "acknowledged",
+        },
+    )
+    assert response.status_code == 403
+    assert response.json()["detail"] == {
+        "code": "keeper_prompt_operator_not_authorized",
+        "message": "只有本局 KP 可以更新 KP 提示状态",
+        "session_id": session_id,
+        "operator_id": "investigator-1",
+        "prompt_id": prompt_id,
+        "scope": "keeper_prompt_permission",
+    }
+    snapshot_after = _get_snapshot(client, session_id)
+    assert snapshot_after == snapshot_before
+
+
+def test_keeper_prompt_missing_prompt_returns_structured_404_without_mutating_session(
+    client: TestClient,
+) -> None:
+    session_id, _ = _start_session_with_keeper_prompt_assignment(
+        client,
+        keeper_id="keeper-1",
+    )
+    snapshot_before = _get_snapshot(client, session_id)
+
+    response = client.post(
+        f"/sessions/{session_id}/keeper-prompts/prompt-missing/status",
+        json={
+            "operator_id": "keeper-1",
+            "status": "acknowledged",
+        },
+    )
+    assert response.status_code == 404
+    assert response.json()["detail"] == {
+        "code": "keeper_prompt_not_found",
+        "message": "未找到 KP 提示 prompt-missing",
+        "session_id": session_id,
+        "operator_id": "keeper-1",
+        "prompt_id": "prompt-missing",
+        "scope": "keeper_prompt_prompt",
+    }
+    snapshot_after = _get_snapshot(client, session_id)
+    assert snapshot_after == snapshot_before
+
+
 def test_investigator_view_remains_unchanged_for_legacy_keeper_alias_prompt(client: TestClient) -> None:
     session_id, _ = _start_session_with_keeper_prompt_assignment(
         client,
@@ -1124,6 +1229,83 @@ def test_keeper_prompt_lifecycle_supports_acknowledge_complete_and_dismiss(
         for transition in final_summary["recent_beat_transitions"]
     )
     assert any("最近推进" in line for line in final_summary["summary_lines"])
+
+
+def test_keeper_prompt_terminal_update_returns_structured_400_without_mutating_session(
+    client: TestClient,
+) -> None:
+    session_id, keeper_state = _start_session_with_keeper_prompt_assignment(
+        client,
+        keeper_id="keeper-1",
+    )
+    prompt_id = keeper_state["keeper_workflow"]["active_prompts"][0]["prompt_id"]
+
+    complete_response = client.post(
+        f"/sessions/{session_id}/keeper-prompts/{prompt_id}/status",
+        json={
+            "operator_id": "keeper-1",
+            "status": "completed",
+        },
+    )
+    assert complete_response.status_code == 200
+    snapshot_before = _get_snapshot(client, session_id)
+
+    failed_response = client.post(
+        f"/sessions/{session_id}/keeper-prompts/{prompt_id}/status",
+        json={
+            "operator_id": "keeper-1",
+            "status": "dismissed",
+        },
+    )
+    assert failed_response.status_code == 400
+    assert failed_response.json()["detail"] == {
+        "code": "keeper_prompt_invalid",
+        "message": f"KP 提示 {prompt_id} 已结束，不能再次变更状态",
+        "session_id": session_id,
+        "operator_id": "keeper-1",
+        "prompt_id": prompt_id,
+        "scope": "keeper_prompt_update",
+    }
+    snapshot_after = _get_snapshot(client, session_id)
+    assert snapshot_after == snapshot_before
+
+
+def test_keeper_prompt_state_conflict_returns_structured_409_without_mutating_session(
+    client: TestClient,
+) -> None:
+    session_id, keeper_state = _start_session_with_keeper_prompt_assignment(
+        client,
+        keeper_id="keeper-1",
+    )
+    prompt_id = keeper_state["keeper_workflow"]["active_prompts"][0]["prompt_id"]
+    snapshot_before = _get_snapshot(client, session_id)
+
+    def _conflicting_save_session(session, *, expected_version, reason, language):
+        raise ConflictError("会话状态版本冲突，请重新加载后再试")
+
+    original_save_session = client.app.state.session_service._save_session
+    client.app.state.session_service._save_session = _conflicting_save_session
+    try:
+        response = client.post(
+            f"/sessions/{session_id}/keeper-prompts/{prompt_id}/status",
+            json={
+                "operator_id": "keeper-1",
+                "status": "acknowledged",
+            },
+        )
+    finally:
+        client.app.state.session_service._save_session = original_save_session
+    assert response.status_code == 409
+    assert response.json()["detail"] == {
+        "code": "keeper_prompt_state_conflict",
+        "message": "会话状态版本冲突，请重新加载后再试",
+        "session_id": session_id,
+        "operator_id": "keeper-1",
+        "prompt_id": prompt_id,
+        "scope": "keeper_prompt_state",
+    }
+    snapshot_after = _get_snapshot(client, session_id)
+    assert snapshot_after == snapshot_before
 
 
 def test_pending_prompt_auto_dismisses_on_scene_change(client: TestClient) -> None:

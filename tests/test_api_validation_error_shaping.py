@@ -74,6 +74,21 @@ def test_structured_error_helper_builds_expected_business_detail_shape() -> None
         "draft_id": "draft-123",
         "reviewer_id": "keeper-1",
     }
+    assert build_session_action_error_detail(
+        code="keeper_prompt_not_found",
+        message="未找到 KP 提示 prompt-123",
+        scope="keeper_prompt_prompt",
+        session_id="session-321",
+        operator_id="keeper-1",
+        prompt_id="prompt-123",
+    ) == {
+        "code": "keeper_prompt_not_found",
+        "message": "未找到 KP 提示 prompt-123",
+        "scope": "keeper_prompt_prompt",
+        "session_id": "session-321",
+        "operator_id": "keeper-1",
+        "prompt_id": "prompt-123",
+    }
 
 
 def test_extract_error_detail_returns_dict_for_structured_errors_and_string_otherwise() -> None:

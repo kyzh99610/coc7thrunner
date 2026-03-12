@@ -1206,49 +1206,120 @@ class SessionService:
         request: UpdateKeeperPromptRequest,
     ) -> UpdateKeeperPromptResponse:
         error_language = self._resolve_language(request.language_preference)
-        session = self._load_session(session_id, language=error_language)
+        try:
+            session = self._load_session(session_id, language=error_language)
+        except LookupError as exc:
+            message = exc.args[0] if exc.args and isinstance(exc.args[0], str) else self._message(
+                "session_not_found",
+                error_language,
+                session_id=session_id,
+            )
+            raise LookupError(
+                build_session_action_error_detail(
+                    code="keeper_prompt_session_not_found",
+                    message=message,
+                    scope="keeper_prompt_session",
+                    session_id=session_id,
+                    operator_id=request.operator_id,
+                    prompt_id=prompt_id,
+                )
+            ) from exc
         effective_language = self._resolve_language(
             request.language_preference,
             session.language_preference,
         )
+        error_context = {
+            "session_id": session.session_id,
+            "operator_id": request.operator_id,
+            "prompt_id": prompt_id,
+        }
         self._authorize_operator(
             session,
             operator_id=request.operator_id,
             language=effective_language,
+            error_detail=build_session_action_error_detail(
+                code="keeper_prompt_operator_not_authorized",
+                message=self._message("keeper_prompt_operator_not_authorized", effective_language),
+                scope="keeper_prompt_permission",
+                **error_context,
+            ),
         )
-        prompt = self._get_keeper_prompt(session, prompt_id, language=effective_language)
-        current_time = datetime.now(timezone.utc)
-        expected_version = session.state_version
-        self._update_keeper_prompt(
-            prompt,
-            status=request.status,
-            add_notes=request.add_notes,
-            priority=request.priority,
-            assigned_to=request.assigned_to,
-            current_time=current_time,
-            language=effective_language,
-        )
-        self._append_audit_log(
-            session,
-            action=AuditActionType.KEEPER_PROMPT_UPDATED,
-            actor_id=request.operator_id,
-            subject_id=prompt.prompt_id,
-            current_time=current_time,
-            details={
-                "status": request.status.value if request.status is not None else None,
-                "priority": request.priority.value if request.priority is not None else None,
-                "assigned_to": request.assigned_to,
-                "note_count_added": len(request.add_notes),
-            },
-        )
-        session.state_version += 1
-        session.updated_at = current_time
-        self._save_session(
-            session,
-            expected_version=expected_version,
-            reason="keeper_prompt_status_updated",
-            language=effective_language,
-        )
+        try:
+            prompt = self._get_keeper_prompt(session, prompt_id, language=effective_language)
+            current_time = datetime.now(timezone.utc)
+            expected_version = session.state_version
+            self._update_keeper_prompt(
+                prompt,
+                status=request.status,
+                add_notes=request.add_notes,
+                priority=request.priority,
+                assigned_to=request.assigned_to,
+                current_time=current_time,
+                language=effective_language,
+            )
+            self._append_audit_log(
+                session,
+                action=AuditActionType.KEEPER_PROMPT_UPDATED,
+                actor_id=request.operator_id,
+                subject_id=prompt.prompt_id,
+                current_time=current_time,
+                details={
+                    "status": request.status.value if request.status is not None else None,
+                    "priority": request.priority.value if request.priority is not None else None,
+                    "assigned_to": request.assigned_to,
+                    "note_count_added": len(request.add_notes),
+                },
+            )
+            session.state_version += 1
+            session.updated_at = current_time
+            self._save_session(
+                session,
+                expected_version=expected_version,
+                reason="keeper_prompt_status_updated",
+                language=effective_language,
+            )
+        except LookupError as exc:
+            message = exc.args[0] if exc.args and isinstance(exc.args[0], str) else self._message(
+                "keeper_prompt_not_found",
+                effective_language,
+                prompt_id=prompt_id,
+            )
+            raise LookupError(
+                build_session_action_error_detail(
+                    code="keeper_prompt_not_found",
+                    message=message,
+                    scope="keeper_prompt_prompt",
+                    **error_context,
+                )
+            ) from exc
+        except ConflictError as exc:
+            message = exc.args[0] if exc.args and isinstance(exc.args[0], str) else self._message(
+                "state_conflict",
+                effective_language,
+            )
+            raise ConflictError(
+                build_session_action_error_detail(
+                    code="keeper_prompt_state_conflict",
+                    message=message,
+                    scope="keeper_prompt_state",
+                    **error_context,
+                )
+            ) from exc
+        except ValueError as exc:
+            message = exc.args[0] if exc.args and isinstance(exc.args[0], str) else self._message(
+                "keeper_prompt_status_invalid",
+                effective_language,
+                from_status="pending",
+                to_status="invalid",
+            )
+            raise ValueError(
+                build_session_action_error_detail(
+                    code="keeper_prompt_invalid",
+                    message=message,
+                    scope="keeper_prompt_update",
+                    **error_context,
+                )
+            ) from exc
         keeper_workflow = filter_session_for_viewer(
             session,
             viewer_id=None,
@@ -4994,6 +5065,7 @@ class SessionService:
             "draft_not_pending": "草稿 {draft_id} 当前不是待审核状态",
             "reviewer_not_authorized": "只有本局 KP 可以审核该草稿",
             "operator_not_authorized": "只有本局 KP 可以提交手动权威行动",
+            "keeper_prompt_operator_not_authorized": "只有本局 KP 可以更新 KP 提示状态",
             "keeper_prompt_not_found": "未找到 KP 提示 {prompt_id}",
             "keeper_prompt_updated": "KP 提示已更新",
             "keeper_prompt_status_updated": "KP 提示状态已更新为 {status}",
@@ -5075,6 +5147,7 @@ class SessionService:
             "draft_not_pending": "Draft {draft_id} is not pending review",
             "reviewer_not_authorized": "Only the session keeper may review this draft",
             "operator_not_authorized": "Only the session keeper may submit manual authoritative actions",
+            "keeper_prompt_operator_not_authorized": "Only the session keeper may update KP prompt status",
             "keeper_prompt_not_found": "KP prompt {prompt_id} was not found",
             "keeper_prompt_updated": "KP prompt updated",
             "keeper_prompt_status_updated": "KP prompt status updated to {status}",
