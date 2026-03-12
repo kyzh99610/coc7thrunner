@@ -1685,7 +1685,23 @@ class SessionService:
         request: RollbackRequest,
     ) -> RollbackResponse:
         error_language = self._resolve_language(request.language_preference)
-        session = self._load_session(session_id, language=error_language)
+        try:
+            session = self._load_session(session_id, language=error_language)
+        except LookupError as exc:
+            message = exc.args[0] if exc.args and isinstance(exc.args[0], str) else self._message(
+                "session_not_found",
+                error_language,
+                session_id=session_id,
+            )
+            raise LookupError(
+                build_session_action_error_detail(
+                    code="rollback_session_not_found",
+                    message=message,
+                    scope="rollback_session",
+                    session_id=session_id,
+                    target_version=request.target_version,
+                )
+            ) from exc
         effective_language = self._resolve_language(
             request.language_preference,
             session.language_preference,
@@ -1702,12 +1718,32 @@ class SessionService:
                 target_version=request.target_version,
                 event_text=event_text,
             )
+        except ConflictError as exc:
+            message = exc.args[0] if exc.args and isinstance(exc.args[0], str) else self._message(
+                "state_conflict",
+                effective_language,
+            )
+            raise ConflictError(
+                build_session_action_error_detail(
+                    code="rollback_state_conflict",
+                    message=message,
+                    scope="rollback_state",
+                    session_id=session.session_id,
+                    target_version=request.target_version,
+                )
+            ) from exc
         except ValueError as exc:
             raise ValueError(
-                self._message(
-                    "snapshot_not_found",
-                    effective_language,
-                    version=request.target_version,
+                build_session_action_error_detail(
+                    code="rollback_snapshot_not_found",
+                    message=self._message(
+                        "snapshot_not_found",
+                        effective_language,
+                        version=request.target_version,
+                    ),
+                    scope="rollback_target",
+                    session_id=session.session_id,
+                    target_version=request.target_version,
                 )
             ) from exc
         current_view = filter_session_for_viewer(

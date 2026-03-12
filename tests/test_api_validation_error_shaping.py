@@ -89,6 +89,19 @@ def test_structured_error_helper_builds_expected_business_detail_shape() -> None
         "operator_id": "keeper-1",
         "prompt_id": "prompt-123",
     }
+    assert build_session_action_error_detail(
+        code="rollback_snapshot_not_found",
+        message="未找到版本 9 的会话快照",
+        scope="rollback_target",
+        session_id="session-654",
+        target_version=9,
+    ) == {
+        "code": "rollback_snapshot_not_found",
+        "message": "未找到版本 9 的会话快照",
+        "scope": "rollback_target",
+        "session_id": "session-654",
+        "target_version": 9,
+    }
 
 
 def test_extract_error_detail_returns_dict_for_structured_errors_and_string_otherwise() -> None:
