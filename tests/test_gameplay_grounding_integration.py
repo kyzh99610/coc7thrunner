@@ -432,6 +432,7 @@ def test_gameplay_smoke_flow_uses_grounded_rules_and_review_gate(client: TestCli
 
     assert reviewed["rules_grounding"]["deterministic_handoff_topic"] == "term:spot_hidden"
     assert reviewed["review_summary"] is not None
+    assert "规则依据降级" not in reviewed["review_summary"]
     assert "引用：" in reviewed["review_summary"]
 
     keeper_after_review = client.get(

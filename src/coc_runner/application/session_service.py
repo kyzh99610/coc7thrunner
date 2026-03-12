@@ -536,6 +536,21 @@ class SessionService:
             return False
         return self._session_has_missing_external_sources(session)
 
+    @staticmethod
+    def _grounding_degraded_review_summary() -> str:
+        return "规则依据降级：当前环境缺少外部知识源，未命中可用规则依据。"
+
+    def _annotate_grounding_review_summary(
+        self,
+        *,
+        session: SessionState,
+        rules_grounding: RuleGroundingSummary | None,
+    ) -> bool:
+        grounding_degraded = self._is_grounding_degraded(session, rules_grounding)
+        if grounding_degraded and rules_grounding is not None:
+            rules_grounding.review_summary = self._grounding_degraded_review_summary()
+        return grounding_degraded
+
     def _knowledge_source_exists(self, source_id: str) -> bool:
         if self.knowledge_repository is None:
             return False
@@ -579,7 +594,10 @@ class SessionService:
             ),
             deterministic_resolution_required=request.deterministic_resolution_required,
             )
-        grounding_degraded = self._is_grounding_degraded(session, rules_grounding)
+        grounding_degraded = self._annotate_grounding_review_summary(
+            session=session,
+            rules_grounding=rules_grounding,
+        )
 
         resolved_effects, effect_contract_origin = self._resolve_action_effect_contract(
             explicit_effects=request.effects,
@@ -699,7 +717,10 @@ class SessionService:
             ),
             deterministic_resolution_required=request.deterministic_resolution_required,
         )
-        grounding_degraded = self._is_grounding_degraded(session, rules_grounding)
+        grounding_degraded = self._annotate_grounding_review_summary(
+            session=session,
+            rules_grounding=rules_grounding,
+        )
         resolved_effects, effect_contract_origin = self._resolve_action_effect_contract(
             explicit_effects=request.effects,
             structured_action=request.structured_action,
@@ -798,7 +819,10 @@ class SessionService:
             ),
             deterministic_resolution_required=request.deterministic_resolution_required,
         )
-        grounding_degraded = self._is_grounding_degraded(session, rules_grounding)
+        grounding_degraded = self._annotate_grounding_review_summary(
+            session=session,
+            rules_grounding=rules_grounding,
+        )
         resolved_effects, effect_contract_origin = self._resolve_action_effect_contract(
             explicit_effects=request.effects,
             structured_action=request.structured_action,
@@ -1101,6 +1125,40 @@ class SessionService:
                     ),
                 )
             )
+            regenerated_rules_grounding = self._ground_rules_for_action(
+                actor_id=draft_action.actor_id,
+                actor_type=draft_action.actor_type,
+                query_text=self._resolve_rules_query_text(
+                    (
+                        request.regenerated_structured_action or {}
+                    ).get("rules_query_text")
+                    if request.regenerated_structured_action is not None
+                    else draft_action.rules_grounding.query_text
+                    if draft_action.rules_grounding is not None
+                    else None,
+                    request.regenerated_draft_text or draft_action.draft_text,
+                    request.regenerated_structured_action
+                    if request.regenerated_structured_action is not None
+                    else draft_action.structured_action,
+                ),
+                deterministic_resolution_required=(
+                    bool(
+                        (
+                            request.regenerated_structured_action or {}
+                        ).get("deterministic_resolution_required")
+                    )
+                    if request.regenerated_structured_action is not None
+                    else (
+                        draft_action.rules_grounding.deterministic_resolution_required
+                        if draft_action.rules_grounding is not None
+                        else False
+                    )
+                ),
+            )
+            self._annotate_grounding_review_summary(
+                session=session,
+                rules_grounding=regenerated_rules_grounding,
+            )
             regenerated_draft = self._build_draft_action(
                 session=session,
                 actor_id=draft_action.actor_id,
@@ -1113,36 +1171,7 @@ class SessionService:
                 effect_contract_origin=regenerated_effect_contract_origin,
                 rationale_summary=request.editor_notes
                 or self._message("draft_rationale", effective_language),
-                rules_grounding=self._ground_rules_for_action(
-                    actor_id=draft_action.actor_id,
-                    actor_type=draft_action.actor_type,
-                    query_text=self._resolve_rules_query_text(
-                        (
-                            request.regenerated_structured_action or {}
-                        ).get("rules_query_text")
-                        if request.regenerated_structured_action is not None
-                        else draft_action.rules_grounding.query_text
-                        if draft_action.rules_grounding is not None
-                        else None,
-                        request.regenerated_draft_text or draft_action.draft_text,
-                        request.regenerated_structured_action
-                        if request.regenerated_structured_action is not None
-                        else draft_action.structured_action,
-                    ),
-                    deterministic_resolution_required=(
-                        bool(
-                            (
-                                request.regenerated_structured_action or {}
-                            ).get("deterministic_resolution_required")
-                        )
-                        if request.regenerated_structured_action is not None
-                        else (
-                            draft_action.rules_grounding.deterministic_resolution_required
-                            if draft_action.rules_grounding is not None
-                            else False
-                        )
-                    ),
-                ),
+                rules_grounding=regenerated_rules_grounding,
                 language=effective_language,
                 behavior_context=(
                     self._get_behavior_context(session, draft_action.actor_id)
@@ -1726,8 +1755,8 @@ class SessionService:
             return rationale_summary
         return f"{rationale_summary}；{rules_grounding.review_summary}"
 
-    @staticmethod
     def _build_review_summary(
+        self,
         rules_grounding: RuleGroundingSummary | None,
     ) -> str | None:
         if rules_grounding is None:
@@ -1746,6 +1775,8 @@ class SessionService:
         if rules_grounding.citations:
             summary_parts.append(f"引用：{'；'.join(rules_grounding.citations)}。")
         if not summary_parts:
+            if rules_grounding.review_summary is not None:
+                return rules_grounding.review_summary
             return "未命中可用规则依据。"
         return "".join(summary_parts)
 

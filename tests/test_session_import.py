@@ -86,6 +86,20 @@ def _snapshot_scenario() -> dict:
     )
 
 
+def _high_risk_grounding_review_scenario() -> dict:
+    return make_scenario(
+        start_scene_id="scene.library",
+        scenes=[
+            {
+                "scene_id": "scene.library",
+                "title": "旅店阅览室",
+                "summary": "昏黄煤气灯下的阅览室里散着旧报纸与借阅卡。",
+                "revealed": True,
+            }
+        ],
+    )
+
+
 def _start_snapshot_session(
     client: TestClient,
     *,
@@ -625,7 +639,10 @@ def test_cross_environment_import_allows_rules_grounding_to_degrade_without_cras
             assert degraded_grounding["deterministic_handoff_topic"] is None
             assert degraded_grounding["citations"] == []
             assert degraded_grounding["matched_topics"] == []
-            assert degraded_grounding["review_summary"] == "未命中可用规则依据。"
+            assert (
+                degraded_grounding["review_summary"]
+                == "规则依据降级：当前环境缺少外部知识源，未命中可用规则依据。"
+            )
             assert (
                 degraded_event["structured_payload"]["rules_grounding"]["citations"] == []
             )
@@ -654,5 +671,143 @@ def test_cross_environment_import_allows_rules_grounding_to_degrade_without_cras
             assert imported_snapshot["timeline"][-1]["event_type"] == "player_action"
             assert imported_snapshot["authoritative_actions"][-1]["text"] == "我去图书馆查阅旧报纸。"
             assert imported_snapshot["authoritative_actions"][-1]["rules_grounding"]["citations"] == []
+    finally:
+        shutil.rmtree(run_dir, ignore_errors=True)
+
+
+def test_cross_environment_review_summary_surfaces_grounding_degraded_for_keeper_only(
+    client: TestClient,
+) -> None:
+    character_source_id = "character-sheet-template-import-review-summary"
+    degraded_summary = "规则依据降级：当前环境缺少外部知识源，未命中可用规则依据。"
+
+    _import_character_sheet_source(client, source_id=character_source_id)
+    start_response = client.post(
+        "/sessions/start",
+        json={
+            "keeper_name": "KP",
+            "scenario": _high_risk_grounding_review_scenario(),
+            "participants": [
+                make_participant(
+                    "investigator-1",
+                    "占位调查员",
+                    imported_character_source_id=character_source_id,
+                ),
+                make_participant("ai-1", "测试调查员", kind="ai"),
+            ],
+        },
+    )
+    assert start_response.status_code == 201
+    snapshot = _get_snapshot(client, start_response.json()["session_id"])
+
+    import_env_client, run_dir = _make_cross_environment_client("review_summary_grounding_degraded")
+    try:
+        with import_env_client:
+            import_response = import_env_client.post("/sessions/import", json=snapshot)
+            assert import_response.status_code == 201
+            assert import_response.json()["warnings"]
+
+            imported_session_id = import_response.json()["new_session_id"]
+            draft_response = import_env_client.post(
+                f"/sessions/{imported_session_id}/player-action",
+                json={
+                    "actor_id": "ai-1",
+                    "action_text": "我建议先去图书馆查阅旧报纸，再决定是否继续追踪旅店记录。",
+                    "structured_action": {
+                        "type": "research",
+                        "risk_level": "high",
+                        "requires_explicit_approval": True,
+                    },
+                    "rules_query_text": "图书馆使用",
+                    "deterministic_resolution_required": True,
+                },
+            )
+            assert draft_response.status_code == 202
+            draft_payload = draft_response.json()
+            assert draft_payload["grounding_degraded"] is True
+            assert draft_payload["draft_action"]["review_status"] == "pending"
+            assert (
+                draft_payload["draft_action"]["rules_grounding"]["review_summary"]
+                == degraded_summary
+            )
+            assert degraded_summary in draft_payload["draft_action"]["rationale_summary"]
+
+            review_response = import_env_client.post(
+                f"/sessions/{imported_session_id}/draft-actions/{draft_payload['draft_action']['draft_id']}/review",
+                json={"reviewer_id": "keeper-1", "decision": "approve"},
+            )
+            assert review_response.status_code == 200
+            review_payload = review_response.json()
+            assert review_payload["grounding_degraded"] is True
+            assert review_payload["reviewed_action"]["review_summary"] == degraded_summary
+            assert (
+                review_payload["reviewed_action"]["rules_grounding"]["review_summary"]
+                == degraded_summary
+            )
+            assert review_payload["authoritative_action"]["review_summary"] == degraded_summary
+            assert (
+                review_payload["authoritative_action"]["rules_grounding"]["review_summary"]
+                == degraded_summary
+            )
+
+            keeper_state = _get_keeper_state(import_env_client, imported_session_id)
+            investigator_state = _get_investigator_state(
+                import_env_client,
+                imported_session_id,
+                "investigator-1",
+            )
+            imported_snapshot = _get_snapshot(import_env_client, imported_session_id)
+
+            reviewed_action = next(
+                reviewed
+                for reviewed in keeper_state["visible_reviewed_actions"]
+                if reviewed["review_id"] == review_payload["reviewed_action"]["review_id"]
+            )
+            authoritative_action = next(
+                action
+                for action in keeper_state["visible_authoritative_actions"]
+                if action["action_id"] == review_payload["authoritative_action"]["action_id"]
+            )
+            keeper_event = next(
+                event
+                for event in keeper_state["visible_events"]
+                if event["event_id"] == review_payload["reviewed_action"]["canonical_event_id"]
+            )
+            investigator_event = next(
+                event
+                for event in investigator_state["visible_events"]
+                if event["event_id"] == review_payload["reviewed_action"]["canonical_event_id"]
+            )
+
+            assert reviewed_action["review_summary"] == degraded_summary
+            assert reviewed_action["rules_grounding"]["review_summary"] == degraded_summary
+            assert authoritative_action["review_summary"] == degraded_summary
+            assert authoritative_action["rules_grounding"]["review_summary"] == degraded_summary
+            assert keeper_event["structured_payload"]["review_summary"] == degraded_summary
+            assert (
+                keeper_event["structured_payload"]["rules_grounding"]["review_summary"]
+                == degraded_summary
+            )
+
+            assert investigator_state["visible_reviewed_actions"] == []
+            assert investigator_state["visible_authoritative_actions"] == []
+            assert "review_summary" not in investigator_event["structured_payload"]
+            assert (
+                "review_summary"
+                not in investigator_event["structured_payload"]["rules_grounding"]
+            )
+
+            assert (
+                imported_snapshot["reviewed_actions"][-1]["review_summary"]
+                == degraded_summary
+            )
+            assert (
+                imported_snapshot["authoritative_actions"][-1]["review_summary"]
+                == degraded_summary
+            )
+            assert (
+                imported_snapshot["timeline"][-1]["structured_payload"]["review_summary"]
+                == degraded_summary
+            )
     finally:
         shutil.rmtree(run_dir, ignore_errors=True)
