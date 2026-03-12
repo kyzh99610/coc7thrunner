@@ -490,3 +490,138 @@ def test_scenario_validation_allows_completion_any_of_with_one_impossible_branch
     scenario = ScenarioScaffold.model_validate(payload)
     assert scenario.beats[0].beat_id == "beat.review_ledger"
     assert len(scenario.beats[0].complete_conditions.any_of) == 2
+
+
+def test_scenario_validation_rejects_unlock_conditions_with_conflicting_scene_title_requirements() -> None:
+    payload = _base_scenario_payload()
+    payload["scenes"].append(
+        {
+            "scene_id": "scene.cellar",
+            "title": "地窖",
+            "summary": "这里不是书房。",
+        }
+    )
+    payload["beats"][0]["start_unlocked"] = False
+    payload["beats"][0]["unlock_conditions"] = {
+        "all_of": [
+            {"scene_is": {"title": "书房"}},
+            {"current_scene_in": {"titles": ["地窖"]}},
+        ]
+    }
+
+    _assert_validation_error(
+        payload,
+        "scenario beat beat.review_ledger unlock_conditions can never be satisfied",
+        "书房",
+        "地窖",
+    )
+
+
+def test_scenario_validation_rejects_complete_conditions_with_conflicting_scene_phase_requirements() -> None:
+    payload = _base_scenario_payload()
+    payload["scenes"].append(
+        {
+            "scene_id": "scene.ritual_room",
+            "title": "祭坛间",
+            "summary": "这里只用于制造 phase 冲突。",
+            "phase": "ritual",
+        }
+    )
+    payload["beats"][0]["complete_conditions"] = {
+        "all_of": [
+            {"scene_is": {"phase": "investigation"}},
+            {"current_scene_in": {"phases": ["ritual"]}},
+        ]
+    }
+
+    _assert_validation_error(
+        payload,
+        "scenario beat beat.review_ledger complete_conditions can never be satisfied",
+        "investigation",
+        "ritual",
+    )
+
+
+def test_scenario_validation_rejects_current_scene_in_titles_with_unknown_scene_title() -> None:
+    payload = _base_scenario_payload()
+    payload["beats"][0]["unlock_conditions"] = {
+        "current_scene_in": {"titles": ["不存在的阁楼"]}
+    }
+
+    _assert_validation_error(
+        payload,
+        "scenario beat beat.review_ledger condition references unknown scene title 不存在的阁楼",
+    )
+
+
+def test_scenario_validation_rejects_current_scene_in_phases_with_unknown_scene_phase() -> None:
+    payload = _base_scenario_payload()
+    payload["beats"][0]["complete_conditions"] = {
+        "current_scene_in": {"phases": ["combat"]}
+    }
+
+    _assert_validation_error(
+        payload,
+        "scenario beat beat.review_ledger condition references unknown scene phase combat",
+    )
+
+
+def test_scenario_validation_rejects_unlock_conditions_with_impossible_scene_title_phase_combo() -> None:
+    payload = _base_scenario_payload()
+    payload["scenes"].append(
+        {
+            "scene_id": "scene.dream_attic",
+            "title": "阁楼",
+            "summary": "这里只用于制造 title 和 phase 的显式无解组合。",
+            "phase": "dream",
+        }
+    )
+    payload["beats"][0]["start_unlocked"] = False
+    payload["beats"][0]["unlock_conditions"] = {
+        "scene_is": {"title": "书房", "phase": "dream"}
+    }
+
+    _assert_validation_error(
+        payload,
+        "scenario beat beat.review_ledger unlock_conditions can never be satisfied",
+        "书房",
+        "dream",
+    )
+
+
+def test_scenario_validation_allows_scene_title_phase_condition_with_viable_branch() -> None:
+    payload = _base_scenario_payload()
+    payload["scenes"].append(
+        {
+            "scene_id": "scene.cellar",
+            "title": "地窖",
+            "summary": "这里只用于提供第二个可选场景。",
+            "phase": "ritual",
+        }
+    )
+    payload["beats"][0]["complete_conditions"] = {
+        "any_of": [
+            {
+                "all_of": [
+                    {"scene_is": {"title": "书房"}},
+                    {"current_scene_in": {"phases": ["ritual"]}},
+                ]
+            },
+            {
+                "all_of": [
+                    {"scene_is": {"title": "书房"}},
+                    {
+                        "current_scene_in": {
+                            "titles": ["书房", "地窖"],
+                            "phases": ["investigation", "ritual"],
+                        }
+                    },
+                    {"clue_discovered": {"clue_id": "clue.ledger"}},
+                ]
+            },
+        ]
+    }
+
+    scenario = ScenarioScaffold.model_validate(payload)
+    assert scenario.beats[0].beat_id == "beat.review_ledger"
+    assert len(scenario.beats[0].complete_conditions.any_of) == 2

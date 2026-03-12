@@ -859,30 +859,92 @@ class ScenarioScaffold(BaseModel):
         def normalize_condition_payload(condition: BeatCondition) -> dict[str, Any]:
             return condition.model_dump(mode="python", exclude_none=True)
 
+        def analyze_unsatisfiable_scene_branch(branch: list[BeatCondition]) -> str | None:
+            candidate_scenes = list(self.scenes)
+            scene_constraint_refs: list[str] = []
+            has_scene_constraint = False
+
+            for leaf in branch:
+                if leaf.scene_is is not None:
+                    has_scene_constraint = True
+                    if leaf.scene_is.scene_id is not None:
+                        scene_constraint_refs.append(f"scene_is.scene_id={leaf.scene_is.scene_id}")
+                    if leaf.scene_is.title is not None:
+                        scene_constraint_refs.append(f"scene_is.title={leaf.scene_is.title}")
+                    if leaf.scene_is.phase is not None:
+                        scene_constraint_refs.append(f"scene_is.phase={leaf.scene_is.phase}")
+                    candidate_scenes = [
+                        scene
+                        for scene in candidate_scenes
+                        if (
+                            (leaf.scene_is.scene_id is None or scene.scene_id == leaf.scene_is.scene_id)
+                            and (leaf.scene_is.title is None or scene.title == leaf.scene_is.title)
+                            and (leaf.scene_is.phase is None or scene.phase == leaf.scene_is.phase)
+                        )
+                    ]
+                if leaf.current_scene_in is not None:
+                    has_scene_constraint = True
+                    if leaf.current_scene_in.scene_ids:
+                        scene_constraint_refs.append(
+                            "current_scene_in.scene_ids="
+                            + ",".join(leaf.current_scene_in.scene_ids)
+                        )
+                    if leaf.current_scene_in.titles:
+                        scene_constraint_refs.append(
+                            "current_scene_in.titles=" + ",".join(leaf.current_scene_in.titles)
+                        )
+                    if leaf.current_scene_in.phases:
+                        scene_constraint_refs.append(
+                            "current_scene_in.phases=" + ",".join(leaf.current_scene_in.phases)
+                        )
+                    candidate_scenes = [
+                        scene
+                        for scene in candidate_scenes
+                        if (
+                            (
+                                not leaf.current_scene_in.scene_ids
+                                or scene.scene_id in leaf.current_scene_in.scene_ids
+                            )
+                            and (
+                                not leaf.current_scene_in.titles
+                                or scene.title in leaf.current_scene_in.titles
+                            )
+                            and (
+                                not leaf.current_scene_in.phases
+                                or scene.phase in leaf.current_scene_in.phases
+                            )
+                        )
+                    ]
+            if has_scene_constraint and not candidate_scenes:
+                return "no scenario scene matches " + "; ".join(scene_constraint_refs)
+            return None
+
+        def analyze_unsatisfiable_scene_condition(condition: BeatCondition | None) -> str | None:
+            if condition is None:
+                return None
+            branches = expand_condition_branches(condition)
+            if not branches:
+                return None
+            branch_reasons: list[str] = []
+            for branch in branches:
+                reason = analyze_unsatisfiable_scene_branch(branch)
+                if reason is None:
+                    return None
+                branch_reasons.append(reason)
+            return branch_reasons[0] if branch_reasons else None
+
         def analyze_unsatisfiable_complete_branch(
             branch: list[BeatCondition],
             *,
             beat_id: str,
         ) -> str | None:
             beat_statuses: dict[str, set[ScenarioBeatStatus]] = {}
-            scene_is_ids: set[str] = set()
-            current_scene_id_refs: list[str] = []
-            current_scene_id_intersection: set[str] | None = None
 
             for leaf in branch:
                 if leaf.beat_status_is is not None:
                     beat_statuses.setdefault(leaf.beat_status_is.beat_id, set()).add(
                         leaf.beat_status_is.status
                     )
-                if leaf.scene_is is not None and leaf.scene_is.scene_id is not None:
-                    scene_is_ids.add(leaf.scene_is.scene_id)
-                if leaf.current_scene_in is not None and leaf.current_scene_in.scene_ids:
-                    scene_ids = set(leaf.current_scene_in.scene_ids)
-                    current_scene_id_refs.extend(leaf.current_scene_in.scene_ids)
-                    if current_scene_id_intersection is None:
-                        current_scene_id_intersection = scene_ids
-                    else:
-                        current_scene_id_intersection &= scene_ids
 
             for target_beat_id, statuses in beat_statuses.items():
                 if len(statuses) > 1:
@@ -901,26 +963,7 @@ class ScenarioScaffold(BaseModel):
                 status_list = ", ".join(sorted(status.value for status in impossible_self_statuses))
                 return f"it requires its own status to already be {status_list}"
 
-            if len(scene_is_ids) > 1:
-                return f"conflicting scene_is requirements: {', '.join(sorted(scene_is_ids))}"
-
-            if current_scene_id_intersection is not None and not current_scene_id_intersection:
-                return (
-                    "current_scene_in requirements have no overlapping scene_ids: "
-                    + ", ".join(sorted(set(current_scene_id_refs)))
-                )
-
-            if scene_is_ids and current_scene_id_refs:
-                allowed_scene_ids = set(current_scene_id_refs)
-                incompatible_scene_ids = sorted(
-                    scene_id for scene_id in scene_is_ids if scene_id not in allowed_scene_ids
-                )
-                if incompatible_scene_ids:
-                    return (
-                        f"scene_is {incompatible_scene_ids[0]} is incompatible with current_scene_in "
-                        f"{', '.join(sorted(allowed_scene_ids))}"
-                    )
-            return None
+            return analyze_unsatisfiable_scene_branch(branch)
 
         def analyze_unsatisfiable_complete_condition(
             condition: BeatCondition | None,
@@ -982,6 +1025,8 @@ class ScenarioScaffold(BaseModel):
         if duplicate_beat_id is not None:
             raise ValueError(f"scenario beat_id {duplicate_beat_id} must be unique")
         scene_id_set = set(scene_ids)
+        scene_title_set = {scene.title for scene in self.scenes}
+        scene_phase_set = {scene.phase for scene in self.scenes}
         clue_refs = {
             clue_ref
             for clue in self.clues
@@ -1024,11 +1069,37 @@ class ScenarioScaffold(BaseModel):
                 raise ValueError(
                     f"scenario beat {beat_id} condition references unknown scene {condition.scene_is.scene_id}"
                 )
+            if (
+                condition.scene_is is not None
+                and condition.scene_is.title is not None
+                and condition.scene_is.title not in scene_title_set
+            ):
+                raise ValueError(
+                    f"scenario beat {beat_id} condition references unknown scene title {condition.scene_is.title}"
+                )
+            if (
+                condition.scene_is is not None
+                and condition.scene_is.phase is not None
+                and condition.scene_is.phase not in scene_phase_set
+            ):
+                raise ValueError(
+                    f"scenario beat {beat_id} condition references unknown scene phase {condition.scene_is.phase}"
+                )
             if condition.current_scene_in is not None:
                 for scene_id in condition.current_scene_in.scene_ids:
                     if scene_id not in scene_id_set:
                         raise ValueError(
                             f"scenario beat {beat_id} condition references unknown scene {scene_id}"
+                        )
+                for scene_title in condition.current_scene_in.titles:
+                    if scene_title not in scene_title_set:
+                        raise ValueError(
+                            f"scenario beat {beat_id} condition references unknown scene title {scene_title}"
+                        )
+                for scene_phase in condition.current_scene_in.phases:
+                    if scene_phase not in scene_phase_set:
+                        raise ValueError(
+                            f"scenario beat {beat_id} condition references unknown scene phase {scene_phase}"
                         )
             if (
                 condition.beat_status_is is not None
@@ -1133,6 +1204,13 @@ class ScenarioScaffold(BaseModel):
                 raise ValueError(
                     f"scenario beat {beat.beat_id} can never complete because downstream beat flow depends on it: "
                     + ", ".join(sorted(downstream_completion_dependents))
+                )
+
+            impossible_unlock_reason = analyze_unsatisfiable_scene_condition(unlock_condition)
+            if impossible_unlock_reason is not None:
+                raise ValueError(
+                    f"scenario beat {beat.beat_id} unlock_conditions can never be satisfied: "
+                    f"{impossible_unlock_reason}"
                 )
 
             if (
