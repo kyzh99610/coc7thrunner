@@ -66,6 +66,7 @@ from coc_runner.domain.models import (
     SessionEvent,
     SessionCharacterState,
     SessionImportResponse,
+    SessionImportWarning,
     SessionParticipant,
     SessionStartRequest,
     SessionStartResponse,
@@ -368,17 +369,26 @@ class SessionService:
         *,
         language_preference: LanguagePreference | None = None,
     ) -> SessionImportResponse:
-        self._resolve_language(language_preference)
+        requested_language = self._resolve_language(language_preference)
         imported_session = SessionState.model_validate(payload)
         original_session_id = imported_session.session_id
         original_version = imported_session.state_version
         current_time = datetime.now(timezone.utc)
+        diagnostics_language = self._resolve_language(
+            language_preference,
+            imported_session.language_preference,
+            requested_language,
+        )
 
         restored_session = imported_session.model_copy(deep=True)
         restored_session.session_id = f"session-{uuid4().hex}"
         restored_session.state_version = 1
         restored_session.created_at = current_time
         restored_session.updated_at = current_time
+        warnings = self._collect_import_warnings(
+            restored_session,
+            language=diagnostics_language,
+        )
         restored_session.timeline.append(
             SessionEvent(
                 event_type=EventType.IMPORT,
@@ -412,8 +422,95 @@ class SessionService:
             original_session_id=original_session_id,
             new_session_id=restored_session.session_id,
             state_version=restored_session.state_version,
-            warnings=[],
+            warnings=warnings,
         )
+
+    def _collect_import_warnings(
+        self,
+        session: SessionState,
+        *,
+        language: LanguagePreference,
+    ) -> list[SessionImportWarning]:
+        warnings: list[SessionImportWarning] = []
+        source_exists_cache: dict[str, bool] = {}
+
+        def source_exists(source_id: str) -> bool:
+            if source_id not in source_exists_cache:
+                source_exists_cache[source_id] = self._knowledge_source_exists(source_id)
+            return source_exists_cache[source_id]
+
+        for participant in session.participants:
+            source_id = participant.imported_character_source_id
+            if source_id is None or source_exists(source_id):
+                continue
+            warnings.append(
+                SessionImportWarning(
+                    code="missing_external_source",
+                    scope="participant.imported_character_source_id",
+                    ref=f"participants.{participant.actor_id}.imported_character_source_id",
+                    source_id=source_id,
+                    message=self._message(
+                        "session_import_missing_participant_source_warning",
+                        language,
+                        actor_id=participant.actor_id,
+                        source_id=source_id,
+                    ),
+                )
+            )
+
+        for actor_id, character_state in session.character_states.items():
+            source_id = character_state.import_source_id
+            if source_id is not None and not source_exists(source_id):
+                warnings.append(
+                    SessionImportWarning(
+                        code="missing_external_source",
+                        scope="character_state.import_source_id",
+                        ref=f"character_states.{actor_id}.import_source_id",
+                        source_id=source_id,
+                        message=self._message(
+                            "session_import_missing_character_state_source_warning",
+                            language,
+                            actor_id=actor_id,
+                            source_id=source_id,
+                        ),
+                    )
+                )
+
+            for ref in dict.fromkeys(character_state.secret_state_refs):
+                ref_source_id = self._extract_knowledge_source_id_from_secret_ref(ref)
+                if ref_source_id is None or source_exists(ref_source_id):
+                    continue
+                warnings.append(
+                    SessionImportWarning(
+                        code="missing_external_source",
+                        scope="character_state.secret_state_refs",
+                        ref=ref,
+                        source_id=ref_source_id,
+                        message=self._message(
+                            "session_import_missing_secret_source_warning",
+                            language,
+                            actor_id=actor_id,
+                            ref=ref,
+                            source_id=ref_source_id,
+                        ),
+                    )
+                )
+        return warnings
+
+    def _knowledge_source_exists(self, source_id: str) -> bool:
+        if self.knowledge_repository is None:
+            return False
+        return self.knowledge_repository.get_source(source_id) is not None
+
+    @staticmethod
+    def _extract_knowledge_source_id_from_secret_ref(ref: str) -> str | None:
+        prefix = "knowledge_source:"
+        if not ref.startswith(prefix):
+            return None
+        remainder = ref[len(prefix) :]
+        if not remainder:
+            return None
+        return remainder.split(":", 1)[0]
 
     def submit_player_action(
         self,
@@ -4415,6 +4512,9 @@ class SessionService:
             "character_import_missing_extraction": "知识源 {source_id} 尚未生成人物卡提取结果",
             "character_import_not_supported": "当前会话服务未启用角色导入知识仓库",
             "character_import_force_review_required": "该导入仍需人工复核；如需强制覆盖会话状态，请显式启用 force_apply_manual_review",
+            "session_import_missing_participant_source_warning": "导入已保留调查员 {actor_id} 的角色来源 {source_id}，但当前环境未找到该知识源；后续角色再同步可能降级。",
+            "session_import_missing_character_state_source_warning": "导入已保留角色状态 {actor_id} 的 import_source_id={source_id}，但当前环境未找到该知识源；导入来源追溯与刷新可能降级。",
+            "session_import_missing_secret_source_warning": "导入已保留角色状态 {actor_id} 的秘密来源引用 {ref}，但当前环境未找到知识源 {source_id}；相关来源说明可能不可用。",
             "draft_approved": "已批准草稿行动并写入权威历史",
             "draft_edited": "已编辑并批准草稿行动，最终版本已写入权威历史",
             "draft_rejected": "已拒绝草稿行动，未写入权威历史",
@@ -4492,6 +4592,9 @@ class SessionService:
             "character_import_missing_extraction": "Knowledge source {source_id} does not have a character-sheet extraction yet",
             "character_import_not_supported": "Character import support is not configured for this session service",
             "character_import_force_review_required": "This import still requires manual review; set force_apply_manual_review explicitly before force replacing session state",
+            "session_import_missing_participant_source_warning": "Import kept participant {actor_id} source {source_id}, but that knowledge source is missing in the current environment; future character resync may degrade.",
+            "session_import_missing_character_state_source_warning": "Import kept character state {actor_id} import_source_id={source_id}, but that knowledge source is missing in the current environment; source tracing and refresh may degrade.",
+            "session_import_missing_secret_source_warning": "Import kept character state {actor_id} secret source ref {ref}, but knowledge source {source_id} is missing in the current environment; related provenance details may be unavailable.",
             "draft_approved": "Draft action approved and written to canonical history",
             "draft_edited": "Draft action edited, approved, and written to canonical history",
             "draft_rejected": "Draft action rejected and not written to canonical history",

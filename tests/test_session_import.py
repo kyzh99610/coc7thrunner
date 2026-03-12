@@ -1,11 +1,19 @@
 from __future__ import annotations
 
+import shutil
+from pathlib import Path
+from uuid import uuid4
+
 from fastapi.testclient import TestClient
 
+from coc_runner.config import Settings
+from coc_runner.main import create_app
 from tests.helpers import make_participant, make_scenario
 
 
 KEEPER_ID = "keeper-1"
+UPLOADED_TEMPLATE_DIR = Path(__file__).resolve().parents[1] / "coc7th rules and templates"
+UPLOADED_TEMPLATE_SAMPLE_DIR = UPLOADED_TEMPLATE_DIR / "sample templates"
 
 
 def _snapshot_scenario() -> dict:
@@ -128,6 +136,42 @@ def _import_snapshot(client: TestClient, snapshot: dict) -> dict:
     response = client.post("/sessions/import", json=snapshot)
     assert response.status_code == 201
     return response.json()
+
+
+def _register_character_sheet_source(client: TestClient, *, source_id: str) -> None:
+    response = client.post(
+        "/knowledge/register-source",
+        json={
+            "source_id": source_id,
+            "source_kind": "character_sheet",
+            "source_format": "xlsx",
+            "source_title_zh": "布鲁斯角色卡",
+            "document_identity": source_id,
+            "source_path": str(UPLOADED_TEMPLATE_SAMPLE_DIR / "Bruce vain.xlsx"),
+            "default_priority": 0,
+            "is_authoritative": False,
+        },
+    )
+    assert response.status_code == 201
+
+
+def _import_character_sheet_source(client: TestClient, *, source_id: str) -> dict:
+    _register_character_sheet_source(client, source_id=source_id)
+    response = client.post(
+        "/knowledge/import-character-sheet",
+        json={"source_id": source_id},
+    )
+    assert response.status_code == 200
+    return response.json()
+
+
+def _make_cross_environment_client(suffix: str) -> tuple[TestClient, Path]:
+    base_dir = Path("test-artifacts")
+    base_dir.mkdir(exist_ok=True)
+    run_dir = base_dir / f"coc_runner_cross_env_{suffix}_{uuid4().hex}"
+    run_dir.mkdir()
+    db_path = run_dir / "coc_runner_cross_env.db"
+    return TestClient(create_app(Settings(db_url=f"sqlite:///{db_path.as_posix()}"))), run_dir
 
 
 def _discover_note_and_queue_prompt(client: TestClient, session_id: str) -> None:
@@ -364,3 +408,115 @@ def test_duplicate_import_creates_independent_sessions(client: TestClient) -> No
 
     assert "我只在第一个导入副本里检查档案室门口的脚印。" in first_event_texts
     assert "我只在第一个导入副本里检查档案室门口的脚印。" not in second_event_texts
+
+
+def test_same_environment_import_with_existing_sources_keeps_warnings_empty(client: TestClient) -> None:
+    source_id = "character-sheet-template-import-same-env"
+    _import_character_sheet_source(client, source_id=source_id)
+    start_response = client.post(
+        "/sessions/start",
+        json={
+            "keeper_name": "KP",
+            "scenario": _snapshot_scenario(),
+            "participants": [
+                make_participant(
+                    "investigator-1",
+                    "占位调查员",
+                    imported_character_source_id=source_id,
+                )
+            ],
+        },
+    )
+    assert start_response.status_code == 201
+    original_session_id = start_response.json()["session_id"]
+
+    _discover_note_and_queue_prompt(client, original_session_id)
+    snapshot = _get_snapshot(client, original_session_id)
+
+    import_response = _import_snapshot(client, snapshot)
+
+    assert import_response["warnings"] == []
+
+
+def test_cross_environment_import_returns_structured_missing_source_warnings_but_restores_session(
+    client: TestClient,
+) -> None:
+    source_id = "character-sheet-template-import-cross-env"
+    _import_character_sheet_source(client, source_id=source_id)
+    start_response = client.post(
+        "/sessions/start",
+        json={
+            "keeper_name": "KP",
+            "scenario": _snapshot_scenario(),
+            "participants": [
+                make_participant(
+                    "investigator-1",
+                    "占位调查员",
+                    imported_character_source_id=source_id,
+                )
+            ],
+        },
+    )
+    assert start_response.status_code == 201
+    original_session_id = start_response.json()["session_id"]
+
+    _discover_note_and_queue_prompt(client, original_session_id)
+    snapshot = _get_snapshot(client, original_session_id)
+    original_secret_refs = list(snapshot["character_states"]["investigator-1"]["secret_state_refs"])
+    assert any(ref.startswith(f"knowledge_source:{source_id}") for ref in original_secret_refs)
+
+    import_env_client, run_dir = _make_cross_environment_client("missing_sources")
+    try:
+        with import_env_client:
+            import_response = import_env_client.post("/sessions/import", json=snapshot)
+            assert import_response.status_code == 201
+            import_payload = import_response.json()
+
+            warnings = import_payload["warnings"]
+            assert warnings
+            assert all("code" in warning for warning in warnings)
+            assert all("message" in warning for warning in warnings)
+            assert all("scope" in warning for warning in warnings)
+            assert all(
+                ("ref" in warning and warning["ref"]) or ("source_id" in warning and warning["source_id"])
+                for warning in warnings
+            )
+
+            warning_scopes = {warning["scope"] for warning in warnings}
+            assert "participant.imported_character_source_id" in warning_scopes
+            assert "character_state.import_source_id" in warning_scopes
+            assert "character_state.secret_state_refs" in warning_scopes
+            assert all(warning["code"] == "missing_external_source" for warning in warnings)
+            assert any(warning.get("source_id") == source_id for warning in warnings)
+            assert any(
+                warning["scope"] == "character_state.secret_state_refs"
+                and warning.get("ref") == f"knowledge_source:{source_id}"
+                for warning in warnings
+            )
+
+            imported_session_id = import_payload["new_session_id"]
+            keeper_state = _get_keeper_state(import_env_client, imported_session_id)
+            assert keeper_state["scenario"]["title"] == snapshot["scenario"]["title"]
+
+            move_response = import_env_client.post(
+                f"/sessions/{imported_session_id}/player-action",
+                json={
+                    "actor_id": "investigator-1",
+                    "action_text": "我顺着纸条指向前往档案室继续调查。",
+                    "structured_action": {"type": "move_to_archive"},
+                    "effects": {
+                        "scene_transitions": [{"scene_id": "scene.archive"}]
+                    },
+                },
+            )
+            assert move_response.status_code == 202
+
+            imported_snapshot = _get_snapshot(import_env_client, imported_session_id)
+            imported_participant = imported_snapshot["participants"][0]
+            imported_character_state = imported_snapshot["character_states"]["investigator-1"]
+
+            assert imported_participant["imported_character_source_id"] == source_id
+            assert imported_character_state["import_source_id"] == source_id
+            assert imported_character_state["secret_state_refs"] == original_secret_refs
+    finally:
+        shutil.rmtree(run_dir, ignore_errors=True)

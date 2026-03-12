@@ -1674,11 +1674,19 @@ class RollbackResponse(BaseModel):
     current_view: InvestigatorView
 
 
+class SessionImportWarning(BaseModel):
+    code: str = Field(min_length=1)
+    message: str = Field(min_length=1)
+    scope: str = Field(min_length=1)
+    ref: str | None = None
+    source_id: str | None = None
+
+
 class SessionImportResponse(BaseModel):
     original_session_id: str
     new_session_id: str
     state_version: int
-    warnings: list[str] = Field(default_factory=list)
+    warnings: list[SessionImportWarning] = Field(default_factory=list)
 
 
 SessionEvent.model_rebuild()
