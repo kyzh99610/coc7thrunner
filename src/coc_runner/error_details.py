@@ -21,6 +21,16 @@ def build_structured_error_detail(
     return detail
 
 
+def _json_safe_error_value(value: Any) -> Any:
+    if value is None or isinstance(value, (str, int, float, bool)):
+        return value
+    if isinstance(value, dict):
+        return {str(key): _json_safe_error_value(nested) for key, nested in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_json_safe_error_value(item) for item in value]
+    return str(value)
+
+
 def shape_validation_error_items(
     errors: list[dict[str, Any]],
 ) -> list[dict[str, Any]]:
@@ -32,9 +42,9 @@ def shape_validation_error_items(
             "type": error.get("type", ""),
         }
         if "input" in error:
-            shaped_error["input"] = error["input"]
+            shaped_error["input"] = _json_safe_error_value(error["input"])
         if "ctx" in error:
-            shaped_error["ctx"] = error["ctx"]
+            shaped_error["ctx"] = _json_safe_error_value(error["ctx"])
         shaped_errors.append(shaped_error)
     return shaped_errors
 

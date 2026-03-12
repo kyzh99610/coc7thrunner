@@ -168,6 +168,23 @@ def test_shape_validation_error_items_preserves_loc_message_type_and_optional_fi
             "ctx": {"expected": "'zh-CN' or 'en-US'"},
         },
     ]
+    assert shape_validation_error_items(
+        [
+            {
+                "loc": (),
+                "msg": "Value error, participant actor_ids must be unique",
+                "type": "value_error",
+                "ctx": {"error": ValueError("participant actor_ids must be unique")},
+            }
+        ]
+    ) == [
+        {
+            "loc": [],
+            "message": "Value error, participant actor_ids must be unique",
+            "type": "value_error",
+            "ctx": {"error": "participant actor_ids must be unique"},
+        }
+    ]
 
 
 def test_request_validation_body_missing_uses_structured_422_detail(

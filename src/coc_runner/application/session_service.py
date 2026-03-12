@@ -267,43 +267,58 @@ class SessionService:
         scenario = request.scenario.model_copy(
             update={"language_preference": request.scenario.language_preference or session_language}
         )
+        error_context = {
+            "scenario_id": scenario.scenario_id,
+            "participant_count": len(request.participants),
+        }
         current_scene = self._build_initial_scene_state(
             scenario,
             language=session_language,
         )
-        session = SessionState(
-            keeper_id=request.keeper_id or self.DEFAULT_KEEPER_ID,
-            keeper_name=request.keeper_name,
-            language_preference=session_language,
-            allow_test_mode_self_review=request.allow_test_mode_self_review,
-            scenario=scenario,
-            current_scene=current_scene,
-            participants=request.participants,
-            character_states=self._build_initial_character_states(
-                request.participants,
-                current_time=current_time,
-            ),
-            progress_state=self._build_initial_progress_state(
-                scenario,
-                current_time=current_time,
-            ),
-            timeline=[
-                SessionEvent(
-                    event_type=EventType.SESSION_STARTED,
-                    actor_type=ActorType.SYSTEM,
-                    visibility_scope=VisibilityScope.PUBLIC,
-                    text=self._message("session_created_detail", session_language, title=scenario.title),
-                    structured_payload={
-                        "scenario_id": scenario.scenario_id,
-                        "participant_count": len(request.participants),
-                    },
-                    language_preference=session_language,
-                    created_at=current_time,
+        try:
+            session = SessionState(
+                keeper_id=request.keeper_id or self.DEFAULT_KEEPER_ID,
+                keeper_name=request.keeper_name,
+                language_preference=session_language,
+                allow_test_mode_self_review=request.allow_test_mode_self_review,
+                scenario=scenario,
+                current_scene=current_scene,
+                participants=request.participants,
+                character_states=self._build_initial_character_states(
+                    request.participants,
+                    current_time=current_time,
+                ),
+                progress_state=self._build_initial_progress_state(
+                    scenario,
+                    current_time=current_time,
+                ),
+                timeline=[
+                    SessionEvent(
+                        event_type=EventType.SESSION_STARTED,
+                        actor_type=ActorType.SYSTEM,
+                        visibility_scope=VisibilityScope.PUBLIC,
+                        text=self._message("session_created_detail", session_language, title=scenario.title),
+                        structured_payload={
+                            "scenario_id": scenario.scenario_id,
+                            "participant_count": len(request.participants),
+                        },
+                        language_preference=session_language,
+                        created_at=current_time,
+                    )
+                ],
+                created_at=current_time,
+                updated_at=current_time,
+            )
+        except ValidationError as exc:
+            raise ValueError(
+                build_structured_error_detail(
+                    code="session_start_invalid",
+                    message=self._message("session_start_invalid", session_language),
+                    scope="session_start_payload",
+                    errors=shape_validation_error_items(exc.errors(include_input=False)),
+                    **error_context,
                 )
-            ],
-            created_at=current_time,
-            updated_at=current_time,
-        )
+            ) from exc
         self._initialize_scenario_runtime_state(
             session,
             current_time=current_time,
@@ -4626,19 +4641,54 @@ class SessionService:
         for participant in session.participants:
             if participant.imported_character_source_id is None:
                 continue
-            source = self._load_character_import_source(
-                participant.imported_character_source_id,
-                language=language,
-            )
-            self._apply_character_sheet_extraction_to_session(
-                session,
-                actor_id=participant.actor_id,
-                source=source,
-                sync_policy=participant.character_import_sync_policy,
-                force_apply_manual_review=False,
-                current_time=current_time,
-                language=language,
-            )
+            error_context = {
+                "scenario_id": session.scenario.scenario_id,
+                "participant_count": len(session.participants),
+                "actor_id": participant.actor_id,
+                "source_id": participant.imported_character_source_id,
+            }
+            try:
+                source = self._load_character_import_source(
+                    participant.imported_character_source_id,
+                    language=language,
+                )
+                self._apply_character_sheet_extraction_to_session(
+                    session,
+                    actor_id=participant.actor_id,
+                    source=source,
+                    sync_policy=participant.character_import_sync_policy,
+                    force_apply_manual_review=False,
+                    current_time=current_time,
+                    language=language,
+                )
+            except LookupError as exc:
+                message = exc.args[0] if exc.args and isinstance(exc.args[0], str) else self._message(
+                    "character_import_source_not_found",
+                    language,
+                    source_id=participant.imported_character_source_id,
+                )
+                raise LookupError(
+                    build_structured_error_detail(
+                        code="session_start_character_import_source_not_found",
+                        message=message,
+                        scope="session_start_character_import",
+                        **error_context,
+                    )
+                ) from exc
+            except ValueError as exc:
+                message = exc.args[0] if exc.args and isinstance(exc.args[0], str) else self._message(
+                    "character_import_missing_extraction",
+                    language,
+                    source_id=participant.imported_character_source_id,
+                )
+                raise ValueError(
+                    build_structured_error_detail(
+                        code="session_start_character_import_invalid",
+                        message=message,
+                        scope="session_start_character_import",
+                        **error_context,
+                    )
+                ) from exc
 
     def _apply_character_sheet_extraction_to_session(
         self,
@@ -5170,6 +5220,7 @@ class SessionService:
             "opening_scene_title": "开场",
             "session_created": "会话已创建",
             "session_created_detail": "会话已创建：{title}",
+            "session_start_invalid": "会话初始化校验失败",
             "player_action_recorded": "已记录玩家行动",
             "manual_action_recorded": "已记录手动权威行动",
             "draft_recorded": "已记录待审核行动草稿",
@@ -5253,6 +5304,7 @@ class SessionService:
             "opening_scene_title": "Opening",
             "session_created": "Session created",
             "session_created_detail": "Session created: {title}",
+            "session_start_invalid": "Session bootstrap validation failed",
             "player_action_recorded": "Player action recorded",
             "manual_action_recorded": "Manual authoritative action recorded",
             "draft_recorded": "Reviewable AI draft recorded",

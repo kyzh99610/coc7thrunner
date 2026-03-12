@@ -3,6 +3,9 @@ from __future__ import annotations
 from pathlib import Path
 
 from fastapi.testclient import TestClient
+from sqlalchemy import func, select
+
+from coc_runner.infrastructure.models import SessionRecord
 
 from tests.helpers import make_participant, make_scenario
 
@@ -44,6 +47,12 @@ def _import_integrated_workbook(
     )
     assert response.status_code == 200
     return response.json()
+
+
+def _count_session_records(client: TestClient) -> int:
+    repository = client.app.state.session_service.repository
+    with repository.session_factory() as db:
+        return db.execute(select(func.count()).select_from(SessionRecord)).scalar_one()
 
 
 def test_start_session_initializes_character_state_from_imported_workbook(
@@ -109,6 +118,118 @@ def test_start_session_initializes_character_state_from_imported_workbook(
         (extraction["campaign_notes"] or "") in note
         for note in character_state["private_notes"]
     )
+
+
+def test_start_session_duplicate_participants_returns_structured_400_without_creating_session(
+    client: TestClient,
+) -> None:
+    scenario = make_scenario()
+    scenario["scenario_id"] = "scenario-start-duplicate"
+    session_count_before_start = _count_session_records(client)
+
+    start_response = client.post(
+        "/sessions/start",
+        json={
+            "keeper_name": "KP",
+            "scenario": scenario,
+            "participants": [
+                make_participant("investigator-1", "林舟"),
+                make_participant("investigator-1", "周岚"),
+            ],
+        },
+    )
+
+    assert start_response.status_code == 400
+    detail = start_response.json()["detail"]
+    assert detail["code"] == "session_start_invalid"
+    assert detail["message"] == "会话初始化校验失败"
+    assert detail["scope"] == "session_start_payload"
+    assert detail["scenario_id"] == "scenario-start-duplicate"
+    assert detail["participant_count"] == 2
+    assert any(
+        error["loc"] == []
+        and error["message"] == "Value error, participant actor_ids must be unique"
+        and error["type"] == "value_error"
+        for error in detail["errors"]
+    )
+    session_count_after_start = _count_session_records(client)
+    assert session_count_after_start == session_count_before_start
+
+
+def test_start_session_missing_import_source_returns_structured_404_without_creating_session(
+    client: TestClient,
+) -> None:
+    scenario = make_scenario()
+    scenario["scenario_id"] = "scenario-start-missing-source"
+    session_count_before_start = _count_session_records(client)
+
+    start_response = client.post(
+        "/sessions/start",
+        json={
+            "keeper_name": "KP",
+            "scenario": scenario,
+            "participants": [
+                make_participant(
+                    "investigator-1",
+                    "占位调查员",
+                    imported_character_source_id="character-sheet-template-start-missing-source",
+                )
+            ],
+        },
+    )
+
+    assert start_response.status_code == 404
+    assert start_response.json()["detail"] == {
+        "code": "session_start_character_import_source_not_found",
+        "message": "未找到角色导入源 character-sheet-template-start-missing-source",
+        "scope": "session_start_character_import",
+        "scenario_id": "scenario-start-missing-source",
+        "participant_count": 1,
+        "actor_id": "investigator-1",
+        "source_id": "character-sheet-template-start-missing-source",
+    }
+    session_count_after_start = _count_session_records(client)
+    assert session_count_after_start == session_count_before_start
+
+
+def test_start_session_missing_import_extraction_returns_structured_400_without_creating_session(
+    client: TestClient,
+) -> None:
+    _register_integrated_workbook_source(
+        client,
+        source_id="character-sheet-template-start-missing-extraction",
+    )
+    scenario = make_scenario()
+    scenario["scenario_id"] = "scenario-start-missing-extraction"
+    session_count_before_start = _count_session_records(client)
+
+    start_response = client.post(
+        "/sessions/start",
+        json={
+            "keeper_name": "KP",
+            "scenario": scenario,
+            "participants": [
+                make_participant(
+                    "investigator-1",
+                    "占位调查员",
+                    imported_character_source_id="character-sheet-template-start-missing-extraction",
+                )
+            ],
+        },
+    )
+
+    assert start_response.status_code == 400
+    assert start_response.json()["detail"] == {
+        "code": "session_start_character_import_invalid",
+        "message": "知识源 character-sheet-template-start-missing-extraction 尚未生成人物卡提取结果",
+        "scope": "session_start_character_import",
+        "scenario_id": "scenario-start-missing-extraction",
+        "participant_count": 1,
+        "actor_id": "investigator-1",
+        "source_id": "character-sheet-template-start-missing-extraction",
+    }
+    session_count_after_start = _count_session_records(client)
+    assert session_count_after_start == session_count_before_start
 
 
 def test_apply_character_import_refreshes_existing_session_character_state(
