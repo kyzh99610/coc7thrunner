@@ -132,6 +132,55 @@ def test_scenario_validation_rejects_duplicate_ids_with_offending_id(
     _assert_validation_error(payload, *expected_fragments)
 
 
+def test_scenario_validation_rejects_duplicate_scene_title_even_when_phase_differs() -> None:
+    payload = _base_scenario_payload()
+    payload["scenes"].append(
+        {
+            "scene_id": "scene.attic",
+            "title": "书房",
+            "summary": "不同 scene_id 但同名会让 title-based 条件失去唯一语义。",
+            "phase": "dream",
+        }
+    )
+
+    _assert_validation_error(
+        payload,
+        "scenario scene title 书房 must be unique",
+    )
+
+
+@pytest.mark.parametrize(
+    "condition_payload",
+    [
+        pytest.param(
+            {"scene_is": {"title": "书房"}},
+            id="scene-is-title",
+        ),
+        pytest.param(
+            {"current_scene_in": {"titles": ["书房"]}},
+            id="current-scene-in-titles",
+        ),
+    ],
+)
+def test_scenario_validation_rejects_duplicate_scene_title_before_title_based_condition_resolution(
+    condition_payload: dict[str, Any],
+) -> None:
+    payload = _base_scenario_payload()
+    payload["scenes"].append(
+        {
+            "scene_id": "scene.attic",
+            "title": "书房",
+            "summary": "同名场景会让 title 条件失去唯一含义。",
+        }
+    )
+    payload["beats"][0]["unlock_conditions"] = condition_payload
+
+    _assert_validation_error(
+        payload,
+        "scenario scene title 书房 must be unique",
+    )
+
+
 @pytest.mark.parametrize(
     ("mutator", "expected_fragments"),
     [
@@ -625,3 +674,40 @@ def test_scenario_validation_allows_scene_title_phase_condition_with_viable_bran
     scenario = ScenarioScaffold.model_validate(payload)
     assert scenario.beats[0].beat_id == "beat.review_ledger"
     assert len(scenario.beats[0].complete_conditions.any_of) == 2
+
+
+def test_scenario_validation_allows_scene_id_based_conditions_when_titles_are_unique() -> None:
+    payload = _base_scenario_payload()
+    payload["scenes"].append(
+        {
+            "scene_id": "scene.cellar",
+            "title": "地窖",
+            "summary": "唯一 title 的场景不应影响 scene_id 条件。",
+        }
+    )
+    payload["beats"][0]["unlock_conditions"] = {
+        "scene_is": {"scene_id": "scene.study"}
+    }
+
+    scenario = ScenarioScaffold.model_validate(payload)
+    assert scenario.beats[0].unlock_conditions.scene_is.scene_id == "scene.study"
+
+
+def test_scenario_validation_allows_unique_title_based_conditions() -> None:
+    payload = _base_scenario_payload()
+    payload["scenes"].append(
+        {
+            "scene_id": "scene.cellar",
+            "title": "地窖",
+            "summary": "唯一 title 的 title-based 条件仍应可用。",
+        }
+    )
+    payload["beats"][0]["unlock_conditions"] = {
+        "all_of": [
+            {"scene_is": {"title": "书房"}},
+            {"current_scene_in": {"titles": ["书房", "地窖"]}},
+        ]
+    }
+
+    scenario = ScenarioScaffold.model_validate(payload)
+    assert scenario.beats[0].unlock_conditions.all_of[0].scene_is.title == "书房"

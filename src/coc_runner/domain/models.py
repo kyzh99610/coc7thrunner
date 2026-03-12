@@ -1014,6 +1014,10 @@ class ScenarioScaffold(BaseModel):
         duplicate_scene_id = find_duplicate(scene_ids)
         if duplicate_scene_id is not None:
             raise ValueError(f"scenario scene_id {duplicate_scene_id} must be unique")
+        scene_titles = [scene.title for scene in self.scenes]
+        duplicate_scene_title = find_duplicate(scene_titles)
+        if duplicate_scene_title is not None:
+            raise ValueError(f"scenario scene title {duplicate_scene_title} must be unique")
         if self.start_scene_id is not None and self.start_scene_id not in set(scene_ids):
             raise ValueError(f"scenario start_scene_id {self.start_scene_id} was not found")
         clue_ids = [clue.clue_id for clue in self.clues]
