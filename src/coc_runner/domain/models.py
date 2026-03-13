@@ -1771,6 +1771,25 @@ class DeleteCheckpointResponse(BaseModel):
     checkpoint_id: str
 
 
+class SessionCheckpointExportPayload(BaseModel):
+    format_version: int = Field(default=1, ge=1)
+    exported_at: datetime
+    checkpoint: SessionCheckpoint
+
+    @field_validator("format_version")
+    @classmethod
+    def _validate_format_version(cls, value: int) -> int:
+        if value != 1:
+            raise ValueError("unsupported checkpoint export format_version")
+        return value
+
+
+class ImportCheckpointResponse(BaseModel):
+    message: str
+    checkpoint: SessionCheckpointSummary
+    original_checkpoint_id: str = Field(min_length=1)
+
+
 SessionEvent.model_rebuild()
 DraftAction.model_rebuild()
 ReviewedAction.model_rebuild()

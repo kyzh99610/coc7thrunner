@@ -14,6 +14,7 @@ from coc_runner.domain.models import (
     CreateCheckpointRequest,
     CreateCheckpointResponse,
     DeleteCheckpointResponse,
+    ImportCheckpointResponse,
     InvestigatorView,
     KPDraftRequest,
     LanguagePreference,
@@ -27,6 +28,7 @@ from coc_runner.domain.models import (
     RestoreCheckpointResponse,
     RollbackRequest,
     RollbackResponse,
+    SessionCheckpointExportPayload,
     SessionImportResponse,
     SessionStartRequest,
     SessionStartResponse,
@@ -427,6 +429,39 @@ def list_checkpoints(
         ) from exc
 
 
+@router.get(
+    "/{session_id}/checkpoints/{checkpoint_id}/export",
+    response_model=SessionCheckpointExportPayload,
+)
+def export_checkpoint(
+    session_id: str,
+    checkpoint_id: str,
+    language_preference: LanguagePreference | None = Query(default=None),
+    service: SessionService = Depends(get_session_service),
+) -> SessionCheckpointExportPayload:
+    try:
+        return service.export_checkpoint(
+            session_id,
+            checkpoint_id,
+            language_preference=language_preference,
+        )
+    except LookupError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=extract_error_detail(exc),
+        ) from exc
+    except ConflictError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=extract_error_detail(exc),
+        ) from exc
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=extract_error_detail(exc),
+        ) from exc
+
+
 @router.patch(
     "/{session_id}/checkpoints/{checkpoint_id}",
     response_model=UpdateCheckpointResponse,
@@ -513,6 +548,43 @@ def restore_checkpoint(
             detail=extract_error_detail(exc),
         ) from exc
     except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=extract_error_detail(exc),
+        ) from exc
+
+
+@router.post(
+    "/checkpoints/import",
+    response_model=ImportCheckpointResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+def import_checkpoint(
+    payload: dict[str, Any],
+    language_preference: LanguagePreference | None = Query(default=None),
+    service: SessionService = Depends(get_session_service),
+) -> ImportCheckpointResponse:
+    try:
+        return service.import_checkpoint(
+            payload,
+            language_preference=language_preference,
+        )
+    except LookupError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=extract_error_detail(exc),
+        ) from exc
+    except PermissionError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=extract_error_detail(exc),
+        ) from exc
+    except ConflictError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=extract_error_detail(exc),
+        ) from exc
+    except (ValidationError, ValueError) as exc:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=extract_error_detail(exc),

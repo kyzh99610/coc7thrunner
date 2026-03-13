@@ -233,6 +233,24 @@ def _restore_checkpoint(client: TestClient, session_id: str, checkpoint_id: str)
     return response.json()
 
 
+def _export_checkpoint(client: TestClient, session_id: str, checkpoint_id: str) -> dict:
+    response = client.get(f"/sessions/{session_id}/checkpoints/{checkpoint_id}/export")
+    assert response.status_code == 200
+    return response.json()
+
+
+def _import_checkpoint_payload(client: TestClient, payload: dict) -> dict:
+    response = client.post("/sessions/checkpoints/import", json=payload)
+    assert response.status_code == 201
+    return response.json()
+
+
+def _delete_checkpoint(client: TestClient, session_id: str, checkpoint_id: str) -> dict:
+    response = client.delete(f"/sessions/{session_id}/checkpoints/{checkpoint_id}")
+    assert response.status_code == 200
+    return response.json()
+
+
 def _seed_checkpoint_record(
     client: TestClient,
     *,
@@ -681,6 +699,76 @@ def test_list_checkpoints_returns_desc_metadata_without_snapshot_payload(
     assert all("raw_snapshot" not in checkpoint for checkpoint in checkpoints)
 
 
+def test_export_checkpoint_returns_stable_payload_without_mutating_state(
+    client: TestClient,
+) -> None:
+    session_id = _start_snapshot_session(client)
+    _discover_note_and_queue_prompt(client, session_id)
+    checkpoint = _create_checkpoint(
+        client,
+        session_id,
+        label="发现纸条后",
+        note="准备导出给另一台机器。",
+        operator_id=KEEPER_ID,
+    )["checkpoint"]
+    snapshot_before_export = _get_snapshot(client, session_id)
+    checkpoint_count_before_export = _count_checkpoint_records(client)
+
+    export_payload = _export_checkpoint(client, session_id, checkpoint["checkpoint_id"])
+
+    assert export_payload["format_version"] == 1
+    assert export_payload["exported_at"]
+    exported_checkpoint = export_payload["checkpoint"]
+    assert exported_checkpoint["checkpoint_id"] == checkpoint["checkpoint_id"]
+    assert exported_checkpoint["source_session_id"] == session_id
+    assert exported_checkpoint["source_session_version"] == checkpoint["source_session_version"]
+    assert exported_checkpoint["label"] == "发现纸条后"
+    assert exported_checkpoint["note"] == "准备导出给另一台机器。"
+    assert exported_checkpoint["created_by"] == KEEPER_ID
+    assert exported_checkpoint["snapshot_payload"] == snapshot_before_export
+    assert _count_checkpoint_records(client) == checkpoint_count_before_export
+    assert _get_snapshot(client, session_id) == snapshot_before_export
+
+
+def test_export_checkpoint_missing_session_returns_structured_404_without_mutating_state(
+    client: TestClient,
+) -> None:
+    checkpoint_count_before_request = _count_checkpoint_records(client)
+
+    response = client.get("/sessions/session-missing/checkpoints/checkpoint-missing/export")
+
+    assert response.status_code == 404
+    assert response.json()["detail"] == {
+        "code": "session_checkpoint_session_not_found",
+        "message": "未找到会话 session-missing",
+        "scope": "session_checkpoint_session",
+        "session_id": "session-missing",
+    }
+    assert _count_checkpoint_records(client) == checkpoint_count_before_request
+
+
+def test_export_checkpoint_missing_checkpoint_returns_structured_404_without_mutating_state(
+    client: TestClient,
+) -> None:
+    session_id = _start_snapshot_session(client)
+    checkpoint_count_before_request = _count_checkpoint_records(client)
+    snapshot_before_request = _get_snapshot(client, session_id)
+
+    response = client.get(f"/sessions/{session_id}/checkpoints/checkpoint-missing/export")
+
+    assert response.status_code == 404
+    assert response.json()["detail"] == {
+        "code": "session_checkpoint_not_found",
+        "message": "未找到检查点 checkpoint-missing",
+        "scope": "session_checkpoint_record",
+        "session_id": session_id,
+        "checkpoint_id": "checkpoint-missing",
+        "source_session_id": session_id,
+    }
+    assert _count_checkpoint_records(client) == checkpoint_count_before_request
+    assert _get_snapshot(client, session_id) == snapshot_before_request
+
+
 def test_restore_checkpoint_creates_new_session_and_preserves_original_session(
     client: TestClient,
 ) -> None:
@@ -778,6 +866,152 @@ def test_restore_checkpoint_inherits_import_warnings_for_missing_external_source
 
             assert restore_response.status_code == 201
             restore_payload = restore_response.json()
+            warnings = restore_payload["warnings"]
+            assert warnings
+            assert all(warning["code"] == "missing_external_source" for warning in warnings)
+            assert {
+                "participant.imported_character_source_id",
+                "character_state.import_source_id",
+                "character_state.secret_state_refs",
+            }.issubset({warning["scope"] for warning in warnings})
+            assert any(warning.get("source_id") == source_id for warning in warnings)
+    finally:
+        shutil.rmtree(run_dir, ignore_errors=True)
+
+
+def test_import_checkpoint_payload_creates_manageable_restorable_checkpoint_with_new_id(
+    client: TestClient,
+) -> None:
+    session_id = _start_snapshot_session(client)
+    _discover_note_and_queue_prompt(client, session_id)
+    original_checkpoint = _create_checkpoint(
+        client,
+        session_id,
+        label="导出前检查点",
+        note="用于验证 checkpoint import。",
+        operator_id=KEEPER_ID,
+    )["checkpoint"]
+    export_payload = _export_checkpoint(client, session_id, original_checkpoint["checkpoint_id"])
+
+    import_env_client, run_dir = _make_cross_environment_client("checkpoint_import_roundtrip")
+    try:
+        with import_env_client:
+            checkpoint_count_before_import = _count_checkpoint_records(import_env_client)
+            import_payload = _import_checkpoint_payload(import_env_client, export_payload)
+
+            assert import_payload["message"] == "检查点已导入"
+            imported_checkpoint = import_payload["checkpoint"]
+            assert import_payload["original_checkpoint_id"] == original_checkpoint["checkpoint_id"]
+            assert imported_checkpoint["checkpoint_id"] != original_checkpoint["checkpoint_id"]
+            assert imported_checkpoint["source_session_id"] == session_id
+            assert imported_checkpoint["source_session_version"] == original_checkpoint["source_session_version"]
+            assert imported_checkpoint["label"] == original_checkpoint["label"]
+            assert imported_checkpoint["note"] == original_checkpoint["note"]
+            assert _count_checkpoint_records(import_env_client) == checkpoint_count_before_import + 1
+
+            listed_payload = _list_checkpoints(import_env_client, session_id)
+            assert listed_payload["session_id"] == session_id
+            assert [checkpoint["checkpoint_id"] for checkpoint in listed_payload["checkpoints"]] == [
+                imported_checkpoint["checkpoint_id"]
+            ]
+
+            updated_payload = _update_checkpoint(
+                import_env_client,
+                session_id,
+                imported_checkpoint["checkpoint_id"],
+                label="导入后改名",
+                note="导入后继续管理。",
+                operator_id=KEEPER_ID,
+            )
+            assert updated_payload["checkpoint"]["label"] == "导入后改名"
+            assert updated_payload["checkpoint"]["note"] == "导入后继续管理。"
+
+            restore_payload = _restore_checkpoint(
+                import_env_client,
+                session_id,
+                imported_checkpoint["checkpoint_id"],
+            )
+            restored_session_id = restore_payload["new_session_id"]
+            continue_response = import_env_client.post(
+                f"/sessions/{restored_session_id}/player-action",
+                json={
+                    "actor_id": "investigator-1",
+                    "action_text": "我在导入后的 checkpoint 副本里继续调查前厅。",
+                    "structured_action": {"type": "resume_from_imported_checkpoint"},
+                },
+            )
+            assert continue_response.status_code == 202
+
+            delete_payload = _delete_checkpoint(
+                import_env_client,
+                session_id,
+                imported_checkpoint["checkpoint_id"],
+            )
+            assert delete_payload == {
+                "message": "检查点已删除",
+                "session_id": session_id,
+                "checkpoint_id": imported_checkpoint["checkpoint_id"],
+            }
+            restore_missing_response = import_env_client.post(
+                f"/sessions/{session_id}/checkpoints/{imported_checkpoint['checkpoint_id']}/restore",
+                json={},
+            )
+            assert restore_missing_response.status_code == 404
+            assert restore_missing_response.json()["detail"] == {
+                "code": "session_checkpoint_not_found",
+                "message": f"未找到检查点 {imported_checkpoint['checkpoint_id']}",
+                "scope": "session_checkpoint_record",
+                "session_id": session_id,
+                "checkpoint_id": imported_checkpoint["checkpoint_id"],
+                "source_session_id": session_id,
+            }
+    finally:
+        shutil.rmtree(run_dir, ignore_errors=True)
+
+
+def test_imported_checkpoint_restore_inherits_import_warnings_for_missing_external_sources(
+    client: TestClient,
+) -> None:
+    source_id = "character-sheet-template-checkpoint-export-import-cross-env"
+    _import_character_sheet_source(client, source_id=source_id)
+    start_response = client.post(
+        "/sessions/start",
+        json={
+            "keeper_name": "KP",
+            "scenario": _snapshot_scenario(),
+            "participants": [
+                make_participant(
+                    "investigator-1",
+                    "占位调查员",
+                    imported_character_source_id=source_id,
+                )
+            ],
+        },
+    )
+    assert start_response.status_code == 201
+    original_session_id = start_response.json()["session_id"]
+    _discover_note_and_queue_prompt(client, original_session_id)
+    checkpoint = _create_checkpoint(
+        client,
+        original_session_id,
+        label="跨环境导入检查点",
+        note="验证 export/import 后 restore 仍继承 warning。",
+        operator_id=KEEPER_ID,
+    )["checkpoint"]
+    export_payload = _export_checkpoint(client, original_session_id, checkpoint["checkpoint_id"])
+
+    import_env_client, run_dir = _make_cross_environment_client("checkpoint_import_missing_sources")
+    try:
+        with import_env_client:
+            import_payload = _import_checkpoint_payload(import_env_client, export_payload)
+            imported_checkpoint_id = import_payload["checkpoint"]["checkpoint_id"]
+
+            restore_payload = _restore_checkpoint(
+                import_env_client,
+                original_session_id,
+                imported_checkpoint_id,
+            )
+
             warnings = restore_payload["warnings"]
             assert warnings
             assert all(warning["code"] == "missing_external_source" for warning in warnings)
@@ -1131,6 +1365,39 @@ def test_delete_checkpoint_missing_checkpoint_returns_structured_404_without_mut
         "source_session_id": session_id,
     }
     assert _list_checkpoints(client, session_id) == checkpoints_before_failure
+
+
+def test_import_checkpoint_invalid_payload_returns_structured_400_without_creating_record(
+    client: TestClient,
+) -> None:
+    checkpoint_count_before_request = _count_checkpoint_records(client)
+    invalid_payload = {
+        "format_version": 1,
+        "exported_at": datetime.now(timezone.utc).isoformat(),
+        "checkpoint": {
+            "checkpoint_id": "checkpoint-invalid",
+            "source_session_id": "session-import-invalid",
+            "source_session_version": 1,
+            "label": "坏检查点",
+            "created_at": datetime.now(timezone.utc).isoformat(),
+            "snapshot_payload": {
+                "session_id": "session-import-invalid",
+                "participants": "oops",
+            },
+        },
+    }
+
+    response = client.post("/sessions/checkpoints/import", json=invalid_payload)
+
+    assert response.status_code == 400
+    detail = response.json()["detail"]
+    assert detail["code"] == "session_checkpoint_import_invalid_payload"
+    assert detail["message"] == "检查点导入载荷校验失败"
+    assert detail["scope"] == "session_checkpoint_import_payload"
+    assert detail["source_session_id"] == "session-import-invalid"
+    assert detail["original_checkpoint_id"] == "checkpoint-invalid"
+    assert isinstance(detail["errors"], list)
+    assert _count_checkpoint_records(client) == checkpoint_count_before_request
 
 
 def test_same_environment_import_with_existing_sources_keeps_warnings_empty(client: TestClient) -> None:

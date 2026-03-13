@@ -336,6 +336,30 @@ def test_request_validation_query_errors_use_structured_422_detail_for_import_en
     ]
 
 
+def test_request_validation_query_errors_use_structured_422_detail_for_checkpoint_import_endpoint(
+    client: TestClient,
+) -> None:
+    response = client.post(
+        "/sessions/checkpoints/import",
+        params={"language_preference": "bad-lang"},
+        json={},
+    )
+
+    assert response.status_code == 422
+    detail = response.json()["detail"]
+    assert detail["code"] == "request_validation_failed"
+    assert detail["scope"] == "request_validation"
+    assert detail["errors"] == [
+        {
+            "loc": ["query", "language_preference"],
+            "message": "Input should be 'zh-CN' or 'en-US'",
+            "type": "enum",
+            "input": "bad-lang",
+            "ctx": {"expected": "'zh-CN' or 'en-US'"},
+        }
+    ]
+
+
 def test_request_validation_body_errors_use_structured_422_detail_for_checkpoint_create_endpoint(
     client: TestClient,
 ) -> None:

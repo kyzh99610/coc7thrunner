@@ -36,6 +36,7 @@ from coc_runner.domain.models import (
     EventType,
     InventoryEffect,
     InvestigatorView,
+    ImportCheckpointResponse,
     KPDraftRequest,
     ListCheckpointsResponse,
     KeeperPromptPriority,
@@ -74,6 +75,7 @@ from coc_runner.domain.models import (
     SessionEvent,
     SessionCharacterState,
     SessionCheckpoint,
+    SessionCheckpointExportPayload,
     SessionCheckpointSummary,
     SessionImportResponse,
     SessionImportWarning,
@@ -500,6 +502,53 @@ class SessionService:
         warnings = self._collect_import_warnings(session, language=error_language)
         return session, keeper_view, checkpoints, warnings
 
+    def _resolve_checkpoint_namespace_session_id(
+        self,
+        session_id: str,
+        *,
+        language: LanguagePreference,
+        operator_id: str | None = None,
+    ) -> str:
+        try:
+            session = self._load_session(session_id, language=language)
+        except LookupError as exc:
+            if self.repository.has_checkpoints_for_session(session_id):
+                return session_id
+            message = exc.args[0] if exc.args and isinstance(exc.args[0], str) else self._message(
+                "session_not_found",
+                language,
+                session_id=session_id,
+            )
+            raise LookupError(
+                build_session_action_error_detail(
+                    code="session_checkpoint_session_not_found",
+                    message=message,
+                    scope="session_checkpoint_session",
+                    session_id=session_id,
+                    operator_id=operator_id,
+                )
+            ) from exc
+        return session.session_id
+
+    @staticmethod
+    def _extract_checkpoint_import_hints(
+        payload: dict[str, Any],
+    ) -> tuple[str | None, str | None]:
+        checkpoint_payload = payload.get("checkpoint")
+        if not isinstance(checkpoint_payload, dict):
+            return None, None
+        source_session_id = (
+            checkpoint_payload.get("source_session_id")
+            if isinstance(checkpoint_payload.get("source_session_id"), str)
+            else None
+        )
+        original_checkpoint_id = (
+            checkpoint_payload.get("checkpoint_id")
+            if isinstance(checkpoint_payload.get("checkpoint_id"), str)
+            else None
+        )
+        return source_session_id, original_checkpoint_id
+
     def create_checkpoint(
         self,
         session_id: str,
@@ -550,25 +599,46 @@ class SessionService:
         language_preference: LanguagePreference | None = None,
     ) -> ListCheckpointsResponse:
         error_language = self._resolve_language(language_preference)
-        try:
-            session = self._load_session(session_id, language=error_language)
-        except LookupError as exc:
-            message = exc.args[0] if exc.args and isinstance(exc.args[0], str) else self._message(
-                "session_not_found",
-                error_language,
-                session_id=session_id,
-            )
+        namespace_session_id = self._resolve_checkpoint_namespace_session_id(
+            session_id,
+            language=error_language,
+        )
+        return ListCheckpointsResponse(
+            session_id=namespace_session_id,
+            checkpoints=self.repository.list_checkpoints(namespace_session_id),
+        )
+
+    def export_checkpoint(
+        self,
+        session_id: str,
+        checkpoint_id: str,
+        *,
+        language_preference: LanguagePreference | None = None,
+    ) -> SessionCheckpointExportPayload:
+        error_language = self._resolve_language(language_preference)
+        namespace_session_id = self._resolve_checkpoint_namespace_session_id(
+            session_id,
+            language=error_language,
+        )
+        checkpoint = self.repository.get_checkpoint(namespace_session_id, checkpoint_id)
+        if checkpoint is None:
             raise LookupError(
                 build_session_action_error_detail(
-                    code="session_checkpoint_session_not_found",
-                    message=message,
-                    scope="session_checkpoint_session",
-                    session_id=session_id,
+                    code="session_checkpoint_not_found",
+                    message=self._message(
+                        "checkpoint_not_found",
+                        error_language,
+                        checkpoint_id=checkpoint_id,
+                    ),
+                    scope="session_checkpoint_record",
+                    session_id=namespace_session_id,
+                    checkpoint_id=checkpoint_id,
+                    source_session_id=namespace_session_id,
                 )
-            ) from exc
-        return ListCheckpointsResponse(
-            session_id=session.session_id,
-            checkpoints=self.repository.list_checkpoints(session.session_id),
+            )
+        return SessionCheckpointExportPayload(
+            exported_at=datetime.now(timezone.utc),
+            checkpoint=checkpoint,
         )
 
     def restore_checkpoint(
@@ -613,25 +683,13 @@ class SessionService:
         request: UpdateCheckpointRequest,
     ) -> UpdateCheckpointResponse:
         error_language = self._resolve_language(request.language_preference)
-        try:
-            session = self._load_session(session_id, language=error_language)
-        except LookupError as exc:
-            message = exc.args[0] if exc.args and isinstance(exc.args[0], str) else self._message(
-                "session_not_found",
-                error_language,
-                session_id=session_id,
-            )
-            raise LookupError(
-                build_session_action_error_detail(
-                    code="session_checkpoint_session_not_found",
-                    message=message,
-                    scope="session_checkpoint_session",
-                    session_id=session_id,
-                    operator_id=request.operator_id,
-                )
-            ) from exc
+        namespace_session_id = self._resolve_checkpoint_namespace_session_id(
+            session_id,
+            language=error_language,
+            operator_id=request.operator_id,
+        )
 
-        checkpoint = self.repository.get_checkpoint(session.session_id, checkpoint_id)
+        checkpoint = self.repository.get_checkpoint(namespace_session_id, checkpoint_id)
         if checkpoint is None:
             raise LookupError(
                 build_session_action_error_detail(
@@ -642,9 +700,9 @@ class SessionService:
                         checkpoint_id=checkpoint_id,
                     ),
                     scope="session_checkpoint_record",
-                    session_id=session.session_id,
+                    session_id=namespace_session_id,
                     checkpoint_id=checkpoint_id,
-                    source_session_id=session.session_id,
+                    source_session_id=namespace_session_id,
                 )
             )
 
@@ -654,9 +712,9 @@ class SessionService:
                     code="session_checkpoint_update_invalid",
                     message=self._message("checkpoint_update_invalid", error_language),
                     scope="session_checkpoint_update",
-                    session_id=session.session_id,
+                    session_id=namespace_session_id,
                     checkpoint_id=checkpoint_id,
-                    source_session_id=session.session_id,
+                    source_session_id=namespace_session_id,
                     operator_id=request.operator_id,
                 )
             )
@@ -669,7 +727,7 @@ class SessionService:
         self.repository.save_checkpoint_metadata(checkpoint)
         return UpdateCheckpointResponse(
             message=self._message("checkpoint_updated", error_language),
-            session_id=session.session_id,
+            session_id=namespace_session_id,
             checkpoint=SessionCheckpointSummary.model_validate(
                 checkpoint.model_dump(exclude={"snapshot_payload"})
             ),
@@ -683,24 +741,12 @@ class SessionService:
         language_preference: LanguagePreference | None = None,
     ) -> DeleteCheckpointResponse:
         error_language = self._resolve_language(language_preference)
-        try:
-            session = self._load_session(session_id, language=error_language)
-        except LookupError as exc:
-            message = exc.args[0] if exc.args and isinstance(exc.args[0], str) else self._message(
-                "session_not_found",
-                error_language,
-                session_id=session_id,
-            )
-            raise LookupError(
-                build_session_action_error_detail(
-                    code="session_checkpoint_session_not_found",
-                    message=message,
-                    scope="session_checkpoint_session",
-                    session_id=session_id,
-                )
-            ) from exc
+        namespace_session_id = self._resolve_checkpoint_namespace_session_id(
+            session_id,
+            language=error_language,
+        )
 
-        checkpoint = self.repository.get_checkpoint(session.session_id, checkpoint_id)
+        checkpoint = self.repository.get_checkpoint(namespace_session_id, checkpoint_id)
         if checkpoint is None:
             raise LookupError(
                 build_session_action_error_detail(
@@ -711,16 +757,72 @@ class SessionService:
                         checkpoint_id=checkpoint_id,
                     ),
                     scope="session_checkpoint_record",
-                    session_id=session.session_id,
+                    session_id=namespace_session_id,
                     checkpoint_id=checkpoint_id,
-                    source_session_id=session.session_id,
+                    source_session_id=namespace_session_id,
                 )
             )
-        self.repository.delete_checkpoint(session.session_id, checkpoint_id)
+        self.repository.delete_checkpoint(namespace_session_id, checkpoint_id)
         return DeleteCheckpointResponse(
             message=self._message("checkpoint_deleted", error_language),
-            session_id=session.session_id,
+            session_id=namespace_session_id,
             checkpoint_id=checkpoint_id,
+        )
+
+    def import_checkpoint(
+        self,
+        payload: dict[str, Any],
+        *,
+        language_preference: LanguagePreference | None = None,
+    ) -> ImportCheckpointResponse:
+        requested_language = self._resolve_language(language_preference)
+        source_session_id_hint, original_checkpoint_id_hint = self._extract_checkpoint_import_hints(
+            payload
+        )
+        try:
+            exported_checkpoint = SessionCheckpointExportPayload.model_validate(payload)
+        except ValidationError as exc:
+            raise ValueError(
+                build_structured_error_detail(
+                    code="session_checkpoint_import_invalid_payload",
+                    message=self._message(
+                        "checkpoint_import_invalid_payload",
+                        requested_language,
+                    ),
+                    scope="session_checkpoint_import_payload",
+                    source_session_id=source_session_id_hint,
+                    original_checkpoint_id=original_checkpoint_id_hint,
+                    errors=shape_validation_error_items(exc.errors()),
+                )
+            ) from exc
+
+        checkpoint = exported_checkpoint.checkpoint.model_copy(deep=True)
+        try:
+            SessionState.model_validate(checkpoint.snapshot_payload)
+        except ValidationError as exc:
+            raise ValueError(
+                build_structured_error_detail(
+                    code="session_checkpoint_import_invalid_payload",
+                    message=self._message(
+                        "checkpoint_import_invalid_payload",
+                        requested_language,
+                    ),
+                    scope="session_checkpoint_import_payload",
+                    source_session_id=checkpoint.source_session_id,
+                    original_checkpoint_id=checkpoint.checkpoint_id,
+                    errors=shape_validation_error_items(exc.errors()),
+                )
+            ) from exc
+
+        original_checkpoint_id = checkpoint.checkpoint_id
+        checkpoint.checkpoint_id = f"checkpoint-{uuid4().hex}"
+        self.repository.create_checkpoint(checkpoint)
+        return ImportCheckpointResponse(
+            message=self._message("checkpoint_imported", requested_language),
+            checkpoint=SessionCheckpointSummary.model_validate(
+                checkpoint.model_dump(exclude={"snapshot_payload"})
+            ),
+            original_checkpoint_id=original_checkpoint_id,
         )
 
     def import_session(
@@ -5531,9 +5633,11 @@ class SessionService:
             "session_import_missing_character_state_source_warning": "导入已保留角色状态 {actor_id} 的 import_source_id={source_id}，但当前环境未找到该知识源；导入来源追溯与刷新可能降级。",
             "session_import_missing_secret_source_warning": "导入已保留角色状态 {actor_id} 的秘密来源引用 {ref}，但当前环境未找到知识源 {source_id}；相关来源说明可能不可用。",
             "checkpoint_created": "检查点已创建",
+            "checkpoint_imported": "检查点已导入",
             "checkpoint_updated": "检查点已更新",
             "checkpoint_deleted": "检查点已删除",
             "checkpoint_not_found": "未找到检查点 {checkpoint_id}",
+            "checkpoint_import_invalid_payload": "检查点导入载荷校验失败",
             "checkpoint_update_invalid": "检查点更新请求至少要提供 label 或 note。",
             "draft_approved": "已批准草稿行动并写入权威历史",
             "draft_edited": "已编辑并批准草稿行动，最终版本已写入权威历史",
@@ -5620,9 +5724,11 @@ class SessionService:
             "session_import_missing_character_state_source_warning": "Import kept character state {actor_id} import_source_id={source_id}, but that knowledge source is missing in the current environment; source tracing and refresh may degrade.",
             "session_import_missing_secret_source_warning": "Import kept character state {actor_id} secret source ref {ref}, but knowledge source {source_id} is missing in the current environment; related provenance details may be unavailable.",
             "checkpoint_created": "Checkpoint created",
+            "checkpoint_imported": "Checkpoint imported",
             "checkpoint_updated": "Checkpoint updated",
             "checkpoint_deleted": "Checkpoint deleted",
             "checkpoint_not_found": "Checkpoint {checkpoint_id} was not found",
+            "checkpoint_import_invalid_payload": "Checkpoint import payload validation failed",
             "checkpoint_update_invalid": "Checkpoint updates must provide at least one of label or note.",
             "draft_approved": "Draft action approved and written to canonical history",
             "draft_edited": "Draft action edited, approved, and written to canonical history",

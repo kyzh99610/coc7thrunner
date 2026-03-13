@@ -45,6 +45,9 @@ class SessionRepository(Protocol):
     def list_checkpoints(self, source_session_id: str) -> list[SessionCheckpointSummary]:
         ...
 
+    def has_checkpoints_for_session(self, source_session_id: str) -> bool:
+        ...
+
     def get_checkpoint(self, source_session_id: str, checkpoint_id: str) -> SessionCheckpoint | None:
         ...
 
@@ -204,6 +207,15 @@ class SqlAlchemySessionRepository:
             )
             records = db.execute(statement).scalars().all()
             return [self._build_checkpoint_summary(record) for record in records]
+
+    def has_checkpoints_for_session(self, source_session_id: str) -> bool:
+        with self.session_factory() as db:
+            statement = (
+                select(SessionCheckpointRecord.checkpoint_id)
+                .where(SessionCheckpointRecord.source_session_id == source_session_id)
+                .limit(1)
+            )
+            return db.execute(statement).scalar_one_or_none() is not None
 
     def get_checkpoint(self, source_session_id: str, checkpoint_id: str) -> SessionCheckpoint | None:
         with self.session_factory() as db:
