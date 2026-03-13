@@ -564,6 +564,14 @@ def _render_prompt_jump_targets(
         trigger_reason = prompt.get("trigger_reason")
         beat_id = prompt.get("beat_id")
         scene_id = prompt.get("scene_id")
+        notes = prompt.get("notes") or []
+        notes_block = (
+            "<ul>"
+            + "".join(f"<li>{escape(str(note))}</li>" for note in notes)
+            + "</ul>"
+            if notes
+            else '<p class="muted">当前还没有备注。</p>'
+        )
         cards.append(
             f"""
             <article class="attention-card" id="prompt-{escape(prompt_id)}">
@@ -592,11 +600,19 @@ def _render_prompt_jump_targets(
                   if trigger_reason
                   else '<p class="muted">该提示没有额外触发说明。</p>'
               }
+              <div>
+                <p class="meta-line">当前备注</p>
+                {notes_block}
+              </div>
               <p class="meta-line">
                 处理入口：<code>/sessions/{escape(session_id)}/keeper-prompts/{escape(prompt_id)}/status</code>
               </p>
               <form method="post" action="/playtest/sessions/{escape(session_id)}/keeper/prompts/{escape(prompt_id)}/status#prompt-{escape(prompt_id)}" data-submit-label="提交中...">
                 <input type="hidden" name="operator_id" value="{escape(operator_id)}" />
+                <label>
+                  备注（可选）
+                  <textarea name="note" rows="2" placeholder="可选。顺手留一句处理说明。"></textarea>
+                </label>
                 <div class="checkpoint-secondary-actions">
                   <button type="submit" name="status" value="acknowledged">标记 acknowledged</button>
                   <button type="submit" name="status" value="completed">标记 completed</button>
@@ -1001,6 +1017,7 @@ async def update_keeper_prompt_via_dashboard(
     service: SessionService = Depends(get_session_service),
 ) -> HTMLResponse:
     form = await _read_form_payload(request)
+    note = _normalize_form_text(form.get("note")) or None
     try:
         response = service.update_keeper_prompt_status(
             session_id,
@@ -1008,12 +1025,16 @@ async def update_keeper_prompt_via_dashboard(
             UpdateKeeperPromptRequest(
                 operator_id=form.get("operator_id", ""),
                 status=form.get("status"),
+                add_notes=[note] if note else [],
             ),
         )
+        notice = response.message
+        if note:
+            notice = f"{notice} 备注：{note}"
         return _render_keeper_dashboard_from_service(
             service=service,
             session_id=session_id,
-            notice=response.message,
+            notice=notice,
         )
     except ValidationError as exc:
         return _render_keeper_dashboard_from_service(

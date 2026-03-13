@@ -143,29 +143,80 @@ def test_keeper_dashboard_prompt_target_supports_acknowledge_and_completed_form_
         f'action="/playtest/sessions/{session_id}/keeper/prompts/{prompt_id}/status#prompt-{prompt_id}"'
         in dashboard_html
     )
+    assert 'name="note"' in dashboard_html
     assert 'name="status" value="acknowledged"' in dashboard_html
     assert 'name="status" value="completed"' in dashboard_html
     assert 'name="status" value="dismissed"' in dashboard_html
 
     acknowledge_response = client.post(
         f"/playtest/sessions/{session_id}/keeper/prompts/{prompt_id}/status",
-        data={"operator_id": KEEPER_ID, "status": "acknowledged"},
+        data={
+            "operator_id": KEEPER_ID,
+            "status": "acknowledged",
+            "note": "先记下老板失态，再决定是否继续追问。",
+        },
     )
     assert acknowledge_response.status_code == 200
     acknowledge_html = acknowledge_response.text
     assert "KP 提示已更新" in acknowledge_html
     assert f'id="prompt-{prompt_id}"' in acknowledge_html
     assert "acknowledged" in acknowledge_html
+    assert "先记下老板失态，再决定是否继续追问。" in acknowledge_html
 
     complete_response = client.post(
         f"/playtest/sessions/{session_id}/keeper/prompts/{prompt_id}/status",
-        data={"operator_id": KEEPER_ID, "status": "completed"},
+        data={
+            "operator_id": KEEPER_ID,
+            "status": "completed",
+            "note": "提示已处理完毕，可继续推进账房调查。",
+        },
     )
     assert complete_response.status_code == 200
     complete_html = complete_response.text
     assert "KP 提示已更新" in complete_html
+    assert "提示已处理完毕，可继续推进账房调查。" in complete_html
     assert "当前没有待处理的 KP 提示。" in complete_html
     assert f'id="prompt-{prompt_id}"' not in complete_html
+
+
+def test_keeper_dashboard_prompt_target_supports_dismissed_with_optional_note(
+    client: TestClient,
+) -> None:
+    session_id = _start_keeper_dashboard_session(client)
+    prompt_id, _ = _advance_keeper_dashboard_session(client, session_id)
+
+    dismiss_response = client.post(
+        f"/playtest/sessions/{session_id}/keeper/prompts/{prompt_id}/status",
+        data={
+            "operator_id": KEEPER_ID,
+            "status": "dismissed",
+            "note": "本条先不处理，后续由人工场景演绎覆盖。",
+        },
+    )
+    assert dismiss_response.status_code == 200
+    dismiss_html = dismiss_response.text
+    assert "KP 提示已更新" in dismiss_html
+    assert "本条先不处理，后续由人工场景演绎覆盖。" in dismiss_html
+    assert "当前没有待处理的 KP 提示。" in dismiss_html
+    assert f'id="prompt-{prompt_id}"' not in dismiss_html
+
+
+def test_keeper_dashboard_prompt_target_still_supports_submission_without_note(
+    client: TestClient,
+) -> None:
+    session_id = _start_keeper_dashboard_session(client)
+    prompt_id, _ = _advance_keeper_dashboard_session(client, session_id)
+
+    response = client.post(
+        f"/playtest/sessions/{session_id}/keeper/prompts/{prompt_id}/status",
+        data={"operator_id": KEEPER_ID, "status": "acknowledged"},
+    )
+
+    assert response.status_code == 200
+    html = response.text
+    assert "KP 提示已更新" in html
+    assert f'id="prompt-{prompt_id}"' in html
+    assert "acknowledged" in html
 
 
 def test_keeper_dashboard_prompt_update_failure_renders_structured_error(
