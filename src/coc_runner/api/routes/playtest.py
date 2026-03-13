@@ -674,6 +674,10 @@ def _render_draft_jump_targets(
               </p>
               <form method="post" action="/playtest/sessions/{escape(session_id)}/draft-actions/{escape(draft_id)}/review#draft-{escape(draft_id)}" data-submit-label="提交中...">
                 <input type="hidden" name="reviewer_id" value="{escape(reviewer_id)}" />
+                <label>
+                  editor_notes（可选）
+                  <textarea name="editor_notes" rows="2" placeholder="可选。顺手留一句审阅说明。"></textarea>
+                </label>
                 <div class="checkpoint-secondary-actions">
                   <button type="submit" name="decision" value="approve">批准草稿</button>
                   <button type="submit" name="decision" value="reject" class="danger">驳回草稿</button>
@@ -1081,6 +1085,7 @@ async def review_draft_via_dashboard(
     service: SessionService = Depends(get_session_service),
 ) -> HTMLResponse:
     form = await _read_form_payload(request)
+    editor_notes = _normalize_form_text(form.get("editor_notes")) or None
     try:
         response = service.review_draft_action(
             session_id,
@@ -1088,9 +1093,12 @@ async def review_draft_via_dashboard(
             ReviewDraftRequest(
                 reviewer_id=form.get("reviewer_id", ""),
                 decision=form.get("decision"),
+                editor_notes=editor_notes,
             ),
         )
         notice = response.message
+        if editor_notes:
+            notice = f"{notice} 审阅说明：{editor_notes}"
         if response.grounding_degraded:
             notice = f"{notice}（规则依据处于降级状态）"
         return _render_keeper_dashboard_from_service(

@@ -255,16 +255,22 @@ def test_keeper_dashboard_draft_target_supports_approve_submission_and_clears_pe
         f'action="/playtest/sessions/{session_id}/draft-actions/{draft_id}/review#draft-{draft_id}"'
         in dashboard_html
     )
+    assert 'name="editor_notes"' in dashboard_html
     assert 'name="decision" value="approve"' in dashboard_html
     assert 'name="decision" value="reject"' in dashboard_html
 
     approve_response = client.post(
         f"/playtest/sessions/{session_id}/draft-actions/{draft_id}/review",
-        data={"reviewer_id": KEEPER_ID, "decision": "approve"},
+        data={
+            "reviewer_id": KEEPER_ID,
+            "decision": "approve",
+            "editor_notes": "这条建议可以直接通过，并作为后续口风基准。",
+        },
     )
     assert approve_response.status_code == 200
     approve_html = approve_response.text
     assert "已批准草稿行动并写入权威历史" in approve_html
+    assert "这条建议可以直接通过，并作为后续口风基准。" in approve_html
     assert "当前没有待审草稿。" in approve_html
     assert f'id="draft-{draft_id}"' not in approve_html
 
@@ -277,11 +283,16 @@ def test_keeper_dashboard_draft_reject_and_review_failure_render_feedback(
 
     reject_response = client.post(
         f"/playtest/sessions/{session_id}/draft-actions/{draft_id}/review",
-        data={"reviewer_id": KEEPER_ID, "decision": "reject"},
+        data={
+            "reviewer_id": KEEPER_ID,
+            "decision": "reject",
+            "editor_notes": "先不要采用这条口风，等更多线索落地后再决定。",
+        },
     )
     assert reject_response.status_code == 200
     reject_html = reject_response.text
     assert "已拒绝草稿行动，未写入权威历史" in reject_html
+    assert "先不要采用这条口风，等更多线索落地后再决定。" in reject_html
     assert "当前没有待审草稿。" in reject_html
 
     failed_response = client.post(
@@ -293,6 +304,23 @@ def test_keeper_dashboard_draft_reject_and_review_failure_render_feedback(
     assert "操作失败" in failed_html
     assert "draft_review_invalid" in failed_html
     assert f"草稿 {draft_id} 当前不是待审核状态" in failed_html
+
+
+def test_keeper_dashboard_draft_target_still_supports_review_without_editor_notes(
+    client: TestClient,
+) -> None:
+    session_id = _start_keeper_dashboard_session(client)
+    _, draft_id = _advance_keeper_dashboard_session(client, session_id)
+
+    response = client.post(
+        f"/playtest/sessions/{session_id}/draft-actions/{draft_id}/review",
+        data={"reviewer_id": KEEPER_ID, "decision": "approve"},
+    )
+
+    assert response.status_code == 200
+    html = response.text
+    assert "已批准草稿行动并写入权威历史" in html
+    assert "当前没有待审草稿。" in html
 
 
 def test_keeper_dashboard_shows_natural_empty_states_without_optional_data(
