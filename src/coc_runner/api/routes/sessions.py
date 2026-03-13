@@ -11,14 +11,19 @@ from coc_runner.domain.errors import ConflictError
 from coc_runner.domain.models import (
     ApplyCharacterImportRequest,
     ApplyCharacterImportResponse,
+    CreateCheckpointRequest,
+    CreateCheckpointResponse,
     InvestigatorView,
     KPDraftRequest,
     LanguagePreference,
+    ListCheckpointsResponse,
     ManualActionRequest,
     PlayerActionRequest,
     PlayerActionResponse,
     ReviewDraftRequest,
     ReviewDraftResponse,
+    RestoreCheckpointRequest,
+    RestoreCheckpointResponse,
     RollbackRequest,
     RollbackResponse,
     SessionImportResponse,
@@ -348,6 +353,93 @@ def snapshot_session(
     except PermissionError as exc:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
+            detail=extract_error_detail(exc),
+        ) from exc
+    except ConflictError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=extract_error_detail(exc),
+        ) from exc
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=extract_error_detail(exc),
+        ) from exc
+
+
+@router.post(
+    "/{session_id}/checkpoints",
+    response_model=CreateCheckpointResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+def create_checkpoint(
+    session_id: str,
+    request: CreateCheckpointRequest,
+    service: SessionService = Depends(get_session_service),
+) -> CreateCheckpointResponse:
+    try:
+        return service.create_checkpoint(session_id, request)
+    except LookupError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=extract_error_detail(exc),
+        ) from exc
+    except ConflictError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=extract_error_detail(exc),
+        ) from exc
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=extract_error_detail(exc),
+        ) from exc
+
+
+@router.get("/{session_id}/checkpoints", response_model=ListCheckpointsResponse)
+def list_checkpoints(
+    session_id: str,
+    language_preference: LanguagePreference | None = Query(default=None),
+    service: SessionService = Depends(get_session_service),
+) -> ListCheckpointsResponse:
+    try:
+        return service.list_checkpoints(
+            session_id,
+            language_preference=language_preference,
+        )
+    except LookupError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=extract_error_detail(exc),
+        ) from exc
+    except ConflictError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=extract_error_detail(exc),
+        ) from exc
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=extract_error_detail(exc),
+        ) from exc
+
+
+@router.post(
+    "/{session_id}/checkpoints/{checkpoint_id}/restore",
+    response_model=RestoreCheckpointResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+def restore_checkpoint(
+    session_id: str,
+    checkpoint_id: str,
+    request: RestoreCheckpointRequest,
+    service: SessionService = Depends(get_session_service),
+) -> RestoreCheckpointResponse:
+    try:
+        return service.restore_checkpoint(session_id, checkpoint_id, request)
+    except LookupError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
             detail=extract_error_detail(exc),
         ) from exc
     except ConflictError as exc:

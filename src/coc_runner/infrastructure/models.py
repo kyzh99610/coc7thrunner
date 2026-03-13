@@ -41,6 +41,21 @@ class SessionSnapshotRecord(Base):
     )
 
 
+class SessionCheckpointRecord(Base):
+    __tablename__ = "session_checkpoints"
+
+    checkpoint_id: Mapped[str] = mapped_column(String(80), primary_key=True)
+    source_session_id: Mapped[str] = mapped_column(String(80), index=True, nullable=False)
+    source_session_version: Mapped[int] = mapped_column(Integer, nullable=False)
+    label: Mapped[str] = mapped_column(String(80), nullable=False)
+    note: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_by: Mapped[str | None] = mapped_column(String(80), nullable=True)
+    snapshot_json: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=utc_now
+    )
+
+
 class KnowledgeSourceRecord(Base):
     __tablename__ = "knowledge_sources"
 

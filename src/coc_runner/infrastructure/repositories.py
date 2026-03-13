@@ -13,11 +13,17 @@ from coc_runner.domain.models import (
     AuditActionType,
     AuditLogEntry,
     EventType,
+    SessionCheckpoint,
+    SessionCheckpointSummary,
     SessionEvent,
     SessionState,
     VisibilityScope,
 )
-from coc_runner.infrastructure.models import SessionRecord, SessionSnapshotRecord
+from coc_runner.infrastructure.models import (
+    SessionCheckpointRecord,
+    SessionRecord,
+    SessionSnapshotRecord,
+)
 
 
 class SessionRepository(Protocol):
@@ -31,6 +37,15 @@ class SessionRepository(Protocol):
         ...
 
     def rollback(self, session_id: str, *, target_version: int, event_text: str) -> SessionState:
+        ...
+
+    def create_checkpoint(self, checkpoint: SessionCheckpoint) -> None:
+        ...
+
+    def list_checkpoints(self, source_session_id: str) -> list[SessionCheckpointSummary]:
+        ...
+
+    def get_checkpoint(self, source_session_id: str, checkpoint_id: str) -> SessionCheckpoint | None:
         ...
 
 
@@ -150,6 +165,64 @@ class SqlAlchemySessionRepository:
             )
             return restored
 
+    def create_checkpoint(self, checkpoint: SessionCheckpoint) -> None:
+        with self.session_factory.begin() as db:
+            existing = db.get(SessionCheckpointRecord, checkpoint.checkpoint_id)
+            if existing is not None:
+                raise ValueError(f"checkpoint {checkpoint.checkpoint_id} already exists")
+            db.add(
+                SessionCheckpointRecord(
+                    checkpoint_id=checkpoint.checkpoint_id,
+                    source_session_id=checkpoint.source_session_id,
+                    source_session_version=checkpoint.source_session_version,
+                    label=checkpoint.label,
+                    note=checkpoint.note,
+                    created_by=checkpoint.created_by,
+                    snapshot_json=json.dumps(
+                        checkpoint.snapshot_payload,
+                        ensure_ascii=False,
+                    ),
+                    created_at=checkpoint.created_at,
+                )
+            )
+
+    def list_checkpoints(self, source_session_id: str) -> list[SessionCheckpointSummary]:
+        with self.session_factory() as db:
+            statement = (
+                select(SessionCheckpointRecord)
+                .where(SessionCheckpointRecord.source_session_id == source_session_id)
+                .order_by(
+                    SessionCheckpointRecord.created_at.desc(),
+                    SessionCheckpointRecord.checkpoint_id.desc(),
+                )
+            )
+            records = db.execute(statement).scalars().all()
+            return [self._build_checkpoint_summary(record) for record in records]
+
+    def get_checkpoint(self, source_session_id: str, checkpoint_id: str) -> SessionCheckpoint | None:
+        with self.session_factory() as db:
+            statement = (
+                select(SessionCheckpointRecord)
+                .where(
+                    SessionCheckpointRecord.source_session_id == source_session_id,
+                    SessionCheckpointRecord.checkpoint_id == checkpoint_id,
+                )
+                .limit(1)
+            )
+            record = db.execute(statement).scalar_one_or_none()
+            if record is None:
+                return None
+            return SessionCheckpoint(
+                checkpoint_id=record.checkpoint_id,
+                source_session_id=record.source_session_id,
+                source_session_version=record.source_session_version,
+                label=record.label,
+                note=record.note,
+                created_by=record.created_by,
+                created_at=record.created_at,
+                snapshot_payload=json.loads(record.snapshot_json),
+            )
+
     @staticmethod
     def _serialize_session(session: SessionState) -> str:
         return json.dumps(session.model_dump(mode="json"), ensure_ascii=False)
@@ -168,4 +241,16 @@ class SqlAlchemySessionRepository:
             reason=reason,
             session_json=serialized,
             created_at=datetime.now(timezone.utc),
+        )
+
+    @staticmethod
+    def _build_checkpoint_summary(record: SessionCheckpointRecord) -> SessionCheckpointSummary:
+        return SessionCheckpointSummary(
+            checkpoint_id=record.checkpoint_id,
+            source_session_id=record.source_session_id,
+            source_session_version=record.source_session_version,
+            label=record.label,
+            note=record.note,
+            created_by=record.created_by,
+            created_at=record.created_at,
         )

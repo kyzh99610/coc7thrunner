@@ -118,6 +118,21 @@ def test_structured_error_helper_builds_expected_business_detail_shape() -> None
         "session_id": "session-987",
         "viewer_role": "investigator",
     }
+    assert build_session_action_error_detail(
+        code="session_checkpoint_not_found",
+        message="未找到检查点 checkpoint-123",
+        scope="session_checkpoint_record",
+        session_id="session-999",
+        checkpoint_id="checkpoint-123",
+        source_session_id="session-999",
+    ) == {
+        "code": "session_checkpoint_not_found",
+        "message": "未找到检查点 checkpoint-123",
+        "scope": "session_checkpoint_record",
+        "session_id": "session-999",
+        "checkpoint_id": "checkpoint-123",
+        "source_session_id": "session-999",
+    }
     assert build_rules_query_error_detail(
         code="rules_query_invalid",
         message="viewer_role invalid",
@@ -319,6 +334,37 @@ def test_request_validation_query_errors_use_structured_422_detail_for_import_en
             "ctx": {"expected": "'zh-CN' or 'en-US'"},
         }
     ]
+
+
+def test_request_validation_body_errors_use_structured_422_detail_for_checkpoint_create_endpoint(
+    client: TestClient,
+) -> None:
+    start_response = client.post(
+        "/sessions/start",
+        json={
+            "keeper_name": "KP",
+            "scenario": make_scenario(),
+            "participants": [make_participant("investigator-1", "占位调查员")],
+        },
+    )
+    assert start_response.status_code == 201
+    session_id = start_response.json()["session_id"]
+
+    response = client.post(
+        f"/sessions/{session_id}/checkpoints",
+        json={},
+    )
+
+    assert response.status_code == 422
+    detail = response.json()["detail"]
+    assert detail["code"] == "request_validation_failed"
+    assert detail["scope"] == "request_validation"
+    assert any(
+        error["loc"] == ["body", "label"]
+        and error["message"] == "Field required"
+        and error["type"] == "missing"
+        for error in detail["errors"]
+    )
 
 
 def test_request_validation_body_errors_use_structured_422_detail_for_rules_endpoint(

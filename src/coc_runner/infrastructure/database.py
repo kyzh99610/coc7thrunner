@@ -22,6 +22,7 @@ class Database:
         from coc_runner.infrastructure.models import (
             KnowledgeSourceRecord,
             RuleChunkRecord,
+            SessionCheckpointRecord,
             SessionRecord,
             SessionSnapshotRecord,
         )
@@ -31,6 +32,7 @@ class Database:
             tables=[
                 SessionRecord.__table__,
                 SessionSnapshotRecord.__table__,
+                SessionCheckpointRecord.__table__,
                 KnowledgeSourceRecord.__table__,
                 RuleChunkRecord.__table__,
             ],

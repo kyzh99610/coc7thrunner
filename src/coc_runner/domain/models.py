@@ -1691,6 +1691,50 @@ class SessionImportResponse(BaseModel):
     warnings: list[SessionImportWarning] = Field(default_factory=list)
 
 
+class SessionCheckpointSummary(BaseModel):
+    checkpoint_id: str = Field(min_length=1)
+    source_session_id: str = Field(min_length=1)
+    source_session_version: int = Field(ge=1)
+    label: str = Field(min_length=1, max_length=80)
+    note: str | None = None
+    created_at: datetime
+    created_by: str | None = None
+
+
+class SessionCheckpoint(SessionCheckpointSummary):
+    snapshot_payload: dict[str, Any]
+
+
+class CreateCheckpointRequest(BaseModel):
+    label: str = Field(min_length=1, max_length=80)
+    note: str | None = None
+    operator_id: str | None = Field(default=None, min_length=1, max_length=80)
+    language_preference: LanguagePreference | None = None
+
+
+class CreateCheckpointResponse(BaseModel):
+    message: str
+    session_id: str
+    checkpoint: SessionCheckpointSummary
+
+
+class ListCheckpointsResponse(BaseModel):
+    session_id: str
+    checkpoints: list[SessionCheckpointSummary] = Field(default_factory=list)
+
+
+class RestoreCheckpointRequest(BaseModel):
+    language_preference: LanguagePreference | None = None
+
+
+class RestoreCheckpointResponse(BaseModel):
+    checkpoint_id: str
+    source_session_id: str
+    new_session_id: str
+    state_version: int
+    warnings: list[SessionImportWarning] = Field(default_factory=list)
+
+
 SessionEvent.model_rebuild()
 DraftAction.model_rebuild()
 ReviewedAction.model_rebuild()

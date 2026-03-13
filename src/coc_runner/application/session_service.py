@@ -28,12 +28,15 @@ from coc_runner.domain.models import (
     CharacterStatEffect,
     ClueStateEffect,
     ClueProgressState,
+    CreateCheckpointRequest,
+    CreateCheckpointResponse,
     DraftAction,
     EffectContractOrigin,
     EventType,
     InventoryEffect,
     InvestigatorView,
     KPDraftRequest,
+    ListCheckpointsResponse,
     KeeperPromptPriority,
     KeeperWorkflowState,
     KeeperPromptStatus,
@@ -55,6 +58,8 @@ from coc_runner.domain.models import (
     RuleGroundingSummary,
     RollbackRequest,
     RollbackResponse,
+    RestoreCheckpointRequest,
+    RestoreCheckpointResponse,
     ScenarioBeat,
     ScenarioBeatStatus,
     ScenarioBeatTransitionRecord,
@@ -67,6 +72,8 @@ from coc_runner.domain.models import (
     SceneTransitionEffect,
     SessionEvent,
     SessionCharacterState,
+    SessionCheckpoint,
+    SessionCheckpointSummary,
     SessionImportResponse,
     SessionImportWarning,
     SessionParticipant,
@@ -451,6 +458,112 @@ class SessionService:
                 )
             ) from exc
         return session.model_dump(mode="json")
+
+    def create_checkpoint(
+        self,
+        session_id: str,
+        request: CreateCheckpointRequest,
+    ) -> CreateCheckpointResponse:
+        error_language = self._resolve_language(request.language_preference)
+        try:
+            session = self._load_session(session_id, language=error_language)
+        except LookupError as exc:
+            message = exc.args[0] if exc.args and isinstance(exc.args[0], str) else self._message(
+                "session_not_found",
+                error_language,
+                session_id=session_id,
+            )
+            raise LookupError(
+                build_session_action_error_detail(
+                    code="session_checkpoint_session_not_found",
+                    message=message,
+                    scope="session_checkpoint_session",
+                    session_id=session_id,
+                    operator_id=request.operator_id,
+                )
+            ) from exc
+
+        checkpoint = SessionCheckpoint(
+            checkpoint_id=f"checkpoint-{uuid4().hex}",
+            source_session_id=session.session_id,
+            source_session_version=session.state_version,
+            label=request.label,
+            note=request.note,
+            created_by=request.operator_id,
+            created_at=datetime.now(timezone.utc),
+            snapshot_payload=session.model_dump(mode="json"),
+        )
+        self.repository.create_checkpoint(checkpoint)
+        return CreateCheckpointResponse(
+            message=self._message("checkpoint_created", error_language),
+            session_id=session.session_id,
+            checkpoint=SessionCheckpointSummary.model_validate(
+                checkpoint.model_dump(exclude={"snapshot_payload"})
+            ),
+        )
+
+    def list_checkpoints(
+        self,
+        session_id: str,
+        *,
+        language_preference: LanguagePreference | None = None,
+    ) -> ListCheckpointsResponse:
+        error_language = self._resolve_language(language_preference)
+        try:
+            session = self._load_session(session_id, language=error_language)
+        except LookupError as exc:
+            message = exc.args[0] if exc.args and isinstance(exc.args[0], str) else self._message(
+                "session_not_found",
+                error_language,
+                session_id=session_id,
+            )
+            raise LookupError(
+                build_session_action_error_detail(
+                    code="session_checkpoint_session_not_found",
+                    message=message,
+                    scope="session_checkpoint_session",
+                    session_id=session_id,
+                )
+            ) from exc
+        return ListCheckpointsResponse(
+            session_id=session.session_id,
+            checkpoints=self.repository.list_checkpoints(session.session_id),
+        )
+
+    def restore_checkpoint(
+        self,
+        session_id: str,
+        checkpoint_id: str,
+        request: RestoreCheckpointRequest,
+    ) -> RestoreCheckpointResponse:
+        error_language = self._resolve_language(request.language_preference)
+        checkpoint = self.repository.get_checkpoint(session_id, checkpoint_id)
+        if checkpoint is None:
+            raise LookupError(
+                build_session_action_error_detail(
+                    code="session_checkpoint_not_found",
+                    message=self._message(
+                        "checkpoint_not_found",
+                        error_language,
+                        checkpoint_id=checkpoint_id,
+                    ),
+                    scope="session_checkpoint_record",
+                    session_id=session_id,
+                    checkpoint_id=checkpoint_id,
+                    source_session_id=session_id,
+                )
+            )
+        import_response = self.import_session(
+            checkpoint.snapshot_payload,
+            language_preference=request.language_preference,
+        )
+        return RestoreCheckpointResponse(
+            checkpoint_id=checkpoint.checkpoint_id,
+            source_session_id=checkpoint.source_session_id,
+            new_session_id=import_response.new_session_id,
+            state_version=import_response.state_version,
+            warnings=import_response.warnings,
+        )
 
     def import_session(
         self,
@@ -5253,6 +5366,8 @@ class SessionService:
             "session_import_missing_participant_source_warning": "导入已保留调查员 {actor_id} 的角色来源 {source_id}，但当前环境未找到该知识源；后续角色再同步可能降级。",
             "session_import_missing_character_state_source_warning": "导入已保留角色状态 {actor_id} 的 import_source_id={source_id}，但当前环境未找到该知识源；导入来源追溯与刷新可能降级。",
             "session_import_missing_secret_source_warning": "导入已保留角色状态 {actor_id} 的秘密来源引用 {ref}，但当前环境未找到知识源 {source_id}；相关来源说明可能不可用。",
+            "checkpoint_created": "检查点已创建",
+            "checkpoint_not_found": "未找到检查点 {checkpoint_id}",
             "draft_approved": "已批准草稿行动并写入权威历史",
             "draft_edited": "已编辑并批准草稿行动，最终版本已写入权威历史",
             "draft_rejected": "已拒绝草稿行动，未写入权威历史",
@@ -5337,6 +5452,8 @@ class SessionService:
             "session_import_missing_participant_source_warning": "Import kept participant {actor_id} source {source_id}, but that knowledge source is missing in the current environment; future character resync may degrade.",
             "session_import_missing_character_state_source_warning": "Import kept character state {actor_id} import_source_id={source_id}, but that knowledge source is missing in the current environment; source tracing and refresh may degrade.",
             "session_import_missing_secret_source_warning": "Import kept character state {actor_id} secret source ref {ref}, but knowledge source {source_id} is missing in the current environment; related provenance details may be unavailable.",
+            "checkpoint_created": "Checkpoint created",
+            "checkpoint_not_found": "Checkpoint {checkpoint_id} was not found",
             "draft_approved": "Draft action approved and written to canonical history",
             "draft_edited": "Draft action edited, approved, and written to canonical history",
             "draft_rejected": "Draft action rejected and not written to canonical history",
