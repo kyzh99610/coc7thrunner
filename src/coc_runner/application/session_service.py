@@ -462,6 +462,44 @@ class SessionService:
             ) from exc
         return session.model_dump(mode="json")
 
+    def get_keeper_workspace(
+        self,
+        session_id: str,
+        *,
+        language_preference: LanguagePreference | None = None,
+    ) -> tuple[
+        SessionState,
+        InvestigatorView,
+        list[SessionCheckpointSummary],
+        list[SessionImportWarning],
+    ]:
+        error_language = self._resolve_language(language_preference)
+        try:
+            session = self._load_session(session_id, language=error_language)
+        except LookupError as exc:
+            message = exc.args[0] if exc.args and isinstance(exc.args[0], str) else self._message(
+                "session_not_found",
+                error_language,
+                session_id=session_id,
+            )
+            raise LookupError(
+                build_session_action_error_detail(
+                    code="session_state_session_not_found",
+                    message=message,
+                    scope="session_state_session",
+                    session_id=session_id,
+                    viewer_role=ViewerRole.KEEPER.value,
+                )
+            ) from exc
+        keeper_view = filter_session_for_viewer(
+            session,
+            viewer_id=None,
+            viewer_role=ViewerRole.KEEPER,
+        )
+        checkpoints = self.repository.list_checkpoints(session.session_id)
+        warnings = self._collect_import_warnings(session, language=error_language)
+        return session, keeper_view, checkpoints, warnings
+
     def create_checkpoint(
         self,
         session_id: str,
