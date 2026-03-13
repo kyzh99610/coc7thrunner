@@ -130,6 +130,120 @@ def test_keeper_dashboard_attention_items_include_prompt_and_draft_jump_targets(
     assert "KP 草稿：若调查员继续追问秦老板，应准备对话压力。" in html
 
 
+def test_keeper_dashboard_prompt_target_supports_acknowledge_and_completed_form_submission(
+    client: TestClient,
+) -> None:
+    session_id = _start_keeper_dashboard_session(client)
+    prompt_id, _ = _advance_keeper_dashboard_session(client, session_id)
+
+    dashboard_response = client.get(f"/playtest/sessions/{session_id}/keeper")
+    assert dashboard_response.status_code == 200
+    dashboard_html = dashboard_response.text
+    assert (
+        f'action="/playtest/sessions/{session_id}/keeper/prompts/{prompt_id}/status#prompt-{prompt_id}"'
+        in dashboard_html
+    )
+    assert 'name="status" value="acknowledged"' in dashboard_html
+    assert 'name="status" value="completed"' in dashboard_html
+    assert 'name="status" value="dismissed"' in dashboard_html
+
+    acknowledge_response = client.post(
+        f"/playtest/sessions/{session_id}/keeper/prompts/{prompt_id}/status",
+        data={"operator_id": KEEPER_ID, "status": "acknowledged"},
+    )
+    assert acknowledge_response.status_code == 200
+    acknowledge_html = acknowledge_response.text
+    assert "KP 提示已更新" in acknowledge_html
+    assert f'id="prompt-{prompt_id}"' in acknowledge_html
+    assert "acknowledged" in acknowledge_html
+
+    complete_response = client.post(
+        f"/playtest/sessions/{session_id}/keeper/prompts/{prompt_id}/status",
+        data={"operator_id": KEEPER_ID, "status": "completed"},
+    )
+    assert complete_response.status_code == 200
+    complete_html = complete_response.text
+    assert "KP 提示已更新" in complete_html
+    assert "当前没有待处理的 KP 提示。" in complete_html
+    assert f'id="prompt-{prompt_id}"' not in complete_html
+
+
+def test_keeper_dashboard_prompt_update_failure_renders_structured_error(
+    client: TestClient,
+) -> None:
+    session_id = _start_keeper_dashboard_session(client)
+    prompt_id, _ = _advance_keeper_dashboard_session(client, session_id)
+
+    first_response = client.post(
+        f"/playtest/sessions/{session_id}/keeper/prompts/{prompt_id}/status",
+        data={"operator_id": KEEPER_ID, "status": "completed"},
+    )
+    assert first_response.status_code == 200
+
+    failed_response = client.post(
+        f"/playtest/sessions/{session_id}/keeper/prompts/{prompt_id}/status",
+        data={"operator_id": KEEPER_ID, "status": "dismissed"},
+    )
+    assert failed_response.status_code == 400
+    failed_html = failed_response.text
+    assert "操作失败" in failed_html
+    assert "keeper_prompt_invalid" in failed_html
+    assert f"KP 提示 {prompt_id} 已结束，不能再次变更状态" in failed_html
+
+
+def test_keeper_dashboard_draft_target_supports_approve_submission_and_clears_pending_list(
+    client: TestClient,
+) -> None:
+    session_id = _start_keeper_dashboard_session(client)
+    _, draft_id = _advance_keeper_dashboard_session(client, session_id)
+
+    dashboard_response = client.get(f"/playtest/sessions/{session_id}/keeper")
+    assert dashboard_response.status_code == 200
+    dashboard_html = dashboard_response.text
+    assert (
+        f'action="/playtest/sessions/{session_id}/draft-actions/{draft_id}/review#draft-{draft_id}"'
+        in dashboard_html
+    )
+    assert 'name="decision" value="approve"' in dashboard_html
+    assert 'name="decision" value="reject"' in dashboard_html
+
+    approve_response = client.post(
+        f"/playtest/sessions/{session_id}/draft-actions/{draft_id}/review",
+        data={"reviewer_id": KEEPER_ID, "decision": "approve"},
+    )
+    assert approve_response.status_code == 200
+    approve_html = approve_response.text
+    assert "已批准草稿行动并写入权威历史" in approve_html
+    assert "当前没有待审草稿。" in approve_html
+    assert f'id="draft-{draft_id}"' not in approve_html
+
+
+def test_keeper_dashboard_draft_reject_and_review_failure_render_feedback(
+    client: TestClient,
+) -> None:
+    session_id = _start_keeper_dashboard_session(client)
+    _, draft_id = _advance_keeper_dashboard_session(client, session_id)
+
+    reject_response = client.post(
+        f"/playtest/sessions/{session_id}/draft-actions/{draft_id}/review",
+        data={"reviewer_id": KEEPER_ID, "decision": "reject"},
+    )
+    assert reject_response.status_code == 200
+    reject_html = reject_response.text
+    assert "已拒绝草稿行动，未写入权威历史" in reject_html
+    assert "当前没有待审草稿。" in reject_html
+
+    failed_response = client.post(
+        f"/playtest/sessions/{session_id}/draft-actions/{draft_id}/review",
+        data={"reviewer_id": KEEPER_ID, "decision": "approve"},
+    )
+    assert failed_response.status_code == 400
+    failed_html = failed_response.text
+    assert "操作失败" in failed_html
+    assert "draft_review_invalid" in failed_html
+    assert f"草稿 {draft_id} 当前不是待审核状态" in failed_html
+
+
 def test_keeper_dashboard_shows_natural_empty_states_without_optional_data(
     client: TestClient,
 ) -> None:
@@ -147,6 +261,8 @@ def test_keeper_dashboard_shows_natural_empty_states_without_optional_data(
     assert "当前环境缺少外部知识源" not in html
     assert 'href="#prompt-' not in html
     assert 'href="#draft-' not in html
+    assert f"/keeper/prompts/" not in html
+    assert f"/draft-actions/" not in html
 
 
 def test_keeper_dashboard_surfaces_missing_external_source_warnings() -> None:

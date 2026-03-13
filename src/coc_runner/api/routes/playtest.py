@@ -13,8 +13,10 @@ from coc_runner.application.session_service import SessionService
 from coc_runner.domain.errors import ConflictError
 from coc_runner.domain.models import (
     CreateCheckpointRequest,
+    ReviewDraftRequest,
     RestoreCheckpointRequest,
     UpdateCheckpointRequest,
+    UpdateKeeperPromptRequest,
 )
 from coc_runner.error_details import (
     build_structured_error_detail,
@@ -549,6 +551,7 @@ def _render_prompt_jump_targets(
     prompts: list[dict[str, Any]],
     *,
     session_id: str,
+    operator_id: str,
 ) -> str:
     if not prompts:
         return ""
@@ -592,6 +595,14 @@ def _render_prompt_jump_targets(
               <p class="meta-line">
                 处理入口：<code>/sessions/{escape(session_id)}/keeper-prompts/{escape(prompt_id)}/status</code>
               </p>
+              <form method="post" action="/playtest/sessions/{escape(session_id)}/keeper/prompts/{escape(prompt_id)}/status#prompt-{escape(prompt_id)}" data-submit-label="提交中...">
+                <input type="hidden" name="operator_id" value="{escape(operator_id)}" />
+                <div class="checkpoint-secondary-actions">
+                  <button type="submit" name="status" value="acknowledged">标记 acknowledged</button>
+                  <button type="submit" name="status" value="completed">标记 completed</button>
+                  <button type="submit" name="status" value="dismissed" class="danger">标记 dismissed</button>
+                </div>
+              </form>
             </article>
             """
         )
@@ -608,6 +619,7 @@ def _render_draft_jump_targets(
     drafts: list[dict[str, Any]],
     *,
     session_id: str,
+    reviewer_id: str,
 ) -> str:
     if not drafts:
         return ""
@@ -644,6 +656,13 @@ def _render_draft_jump_targets(
               <p class="meta-line">
                 审阅入口：<code>/sessions/{escape(session_id)}/draft-actions/{escape(draft_id)}/review</code>
               </p>
+              <form method="post" action="/playtest/sessions/{escape(session_id)}/draft-actions/{escape(draft_id)}/review#draft-{escape(draft_id)}" data-submit-label="提交中...">
+                <input type="hidden" name="reviewer_id" value="{escape(reviewer_id)}" />
+                <div class="checkpoint-secondary-actions">
+                  <button type="submit" name="decision" value="approve">批准草稿</button>
+                  <button type="submit" name="decision" value="reject" class="danger">驳回草稿</button>
+                </div>
+              </form>
             </article>
             """
         )
@@ -735,6 +754,7 @@ def _render_keeper_dashboard_page(
     keeper_view: dict[str, Any] | None,
     checkpoints: list[dict[str, Any]],
     warnings: list[dict[str, Any]],
+    notice: str | None = None,
     detail: dict[str, Any] | str | None = None,
     status_code: int = status.HTTP_200_OK,
 ) -> HTMLResponse:
@@ -745,6 +765,7 @@ def _render_keeper_dashboard_page(
     summary = workflow.get("summary") or {}
     scenario = current_view.get("scenario") or {}
     current_scene = current_view.get("current_scene") or {}
+    keeper_id = str(snapshot.get("keeper_id", current_view.get("keeper_id", "keeper-1")))
     beats = {beat["beat_id"]: beat for beat in scenario.get("beats", [])}
     current_beat_id = progress_state.get("current_beat")
     current_beat = beats.get(current_beat_id) if current_beat_id else None
@@ -786,6 +807,7 @@ def _render_keeper_dashboard_page(
           <a href="/sessions/{escape(session_id)}/export">export JSON</a>
         </div>
       </section>
+      {_render_notice(notice)}
       {_render_detail(detail)}
       {_render_warning_summary(warnings)}
       <section class="panel">
@@ -821,8 +843,8 @@ def _render_keeper_dashboard_page(
           {_render_attention_block(title='未完成目标', items=objective_items, empty_text='当前没有未完成目标。')}
         </div>
       </section>
-      {_render_prompt_jump_targets(active_prompts, session_id=session_id)}
-      {_render_draft_jump_targets(pending_drafts, session_id=session_id)}
+      {_render_prompt_jump_targets(active_prompts, session_id=session_id, operator_id=keeper_id)}
+      {_render_draft_jump_targets(pending_drafts, session_id=session_id, reviewer_id=keeper_id)}
       <section class="panel" id="recent-activity">
         <h2>最近活动</h2>
         <div class="recent-list">
@@ -836,6 +858,7 @@ def _render_keeper_dashboard_page(
         title=f"会话 {session_id} 主持人工作台",
         body=body,
         status_code=status_code,
+        include_form_script=True,
     )
 
 
@@ -918,6 +941,7 @@ def _render_keeper_dashboard_from_service(
     *,
     service: SessionService,
     session_id: str,
+    notice: str | None = None,
     detail: dict[str, Any] | str | None = None,
     status_code: int = status.HTTP_200_OK,
 ) -> HTMLResponse:
@@ -933,6 +957,7 @@ def _render_keeper_dashboard_from_service(
             keeper_view=None,
             checkpoints=[],
             warnings=[],
+            notice=notice,
             detail=detail or extract_error_detail(exc),
             status_code=(
                 status_code
@@ -946,6 +971,7 @@ def _render_keeper_dashboard_from_service(
         keeper_view=keeper_view,
         checkpoints=checkpoints,
         warnings=warnings,
+        notice=notice,
         detail=detail,
         status_code=status_code,
     )
@@ -965,6 +991,127 @@ def keeper_dashboard_page(
     service: SessionService = Depends(get_session_service),
 ) -> HTMLResponse:
     return _render_keeper_dashboard_from_service(service=service, session_id=session_id)
+
+
+@router.post("/sessions/{session_id}/keeper/prompts/{prompt_id}/status", response_class=HTMLResponse)
+async def update_keeper_prompt_via_dashboard(
+    session_id: str,
+    prompt_id: str,
+    request: Request,
+    service: SessionService = Depends(get_session_service),
+) -> HTMLResponse:
+    form = await _read_form_payload(request)
+    try:
+        response = service.update_keeper_prompt_status(
+            session_id,
+            prompt_id,
+            UpdateKeeperPromptRequest(
+                operator_id=form.get("operator_id", ""),
+                status=form.get("status"),
+            ),
+        )
+        return _render_keeper_dashboard_from_service(
+            service=service,
+            session_id=session_id,
+            notice=response.message,
+        )
+    except ValidationError as exc:
+        return _render_keeper_dashboard_from_service(
+            service=service,
+            session_id=session_id,
+            detail=_build_validation_detail(exc),
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+        )
+    except LookupError as exc:
+        return _render_keeper_dashboard_from_service(
+            service=service,
+            session_id=session_id,
+            detail=extract_error_detail(exc),
+            status_code=status.HTTP_404_NOT_FOUND,
+        )
+    except PermissionError as exc:
+        return _render_keeper_dashboard_from_service(
+            service=service,
+            session_id=session_id,
+            detail=extract_error_detail(exc),
+            status_code=status.HTTP_403_FORBIDDEN,
+        )
+    except ConflictError as exc:
+        return _render_keeper_dashboard_from_service(
+            service=service,
+            session_id=session_id,
+            detail=extract_error_detail(exc),
+            status_code=status.HTTP_409_CONFLICT,
+        )
+    except ValueError as exc:
+        return _render_keeper_dashboard_from_service(
+            service=service,
+            session_id=session_id,
+            detail=extract_error_detail(exc),
+            status_code=status.HTTP_400_BAD_REQUEST,
+        )
+
+
+@router.post("/sessions/{session_id}/draft-actions/{draft_id}/review", response_class=HTMLResponse)
+async def review_draft_via_dashboard(
+    session_id: str,
+    draft_id: str,
+    request: Request,
+    service: SessionService = Depends(get_session_service),
+) -> HTMLResponse:
+    form = await _read_form_payload(request)
+    try:
+        response = service.review_draft_action(
+            session_id,
+            draft_id,
+            ReviewDraftRequest(
+                reviewer_id=form.get("reviewer_id", ""),
+                decision=form.get("decision"),
+            ),
+        )
+        notice = response.message
+        if response.grounding_degraded:
+            notice = f"{notice}（规则依据处于降级状态）"
+        return _render_keeper_dashboard_from_service(
+            service=service,
+            session_id=session_id,
+            notice=notice,
+        )
+    except ValidationError as exc:
+        return _render_keeper_dashboard_from_service(
+            service=service,
+            session_id=session_id,
+            detail=_build_validation_detail(exc),
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+        )
+    except LookupError as exc:
+        return _render_keeper_dashboard_from_service(
+            service=service,
+            session_id=session_id,
+            detail=extract_error_detail(exc),
+            status_code=status.HTTP_404_NOT_FOUND,
+        )
+    except PermissionError as exc:
+        return _render_keeper_dashboard_from_service(
+            service=service,
+            session_id=session_id,
+            detail=extract_error_detail(exc),
+            status_code=status.HTTP_403_FORBIDDEN,
+        )
+    except ConflictError as exc:
+        return _render_keeper_dashboard_from_service(
+            service=service,
+            session_id=session_id,
+            detail=extract_error_detail(exc),
+            status_code=status.HTTP_409_CONFLICT,
+        )
+    except ValueError as exc:
+        return _render_keeper_dashboard_from_service(
+            service=service,
+            session_id=session_id,
+            detail=extract_error_detail(exc),
+            status_code=status.HTTP_400_BAD_REQUEST,
+        )
 
 
 @router.post("/sessions/{session_id}/checkpoints/create", response_class=HTMLResponse)
