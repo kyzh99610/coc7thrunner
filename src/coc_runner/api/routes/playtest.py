@@ -518,6 +518,144 @@ def _render_attention_block(
     )
 
 
+def _render_prompt_attention_item(prompt: dict[str, Any]) -> str:
+    prompt_id = str(prompt.get("prompt_id", "prompt"))
+    prompt_text = escape(str(prompt.get("prompt_text", "未命名提示")))
+    category = prompt.get("category")
+    category_suffix = (
+        f' <span class="meta-line">[{escape(str(category))}]</span>' if category else ""
+    )
+    return (
+        f"{prompt_text}{category_suffix} "
+        f'<a class="action-link" href="#prompt-{escape(prompt_id)}">处理此提示</a>'
+    )
+
+
+def _render_draft_attention_item(draft: dict[str, Any]) -> str:
+    draft_id = str(draft.get("draft_id", "draft"))
+    draft_text = escape(str(draft.get("draft_text", "未命名草稿")))
+    pending_suffix = (
+        ' <span class="meta-line">[待审]</span>'
+        if draft.get("requires_explicit_approval")
+        else ""
+    )
+    return (
+        f"{draft_text}{pending_suffix} "
+        f'<a class="action-link" href="#draft-{escape(draft_id)}">前往审阅</a>'
+    )
+
+
+def _render_prompt_jump_targets(
+    prompts: list[dict[str, Any]],
+    *,
+    session_id: str,
+) -> str:
+    if not prompts:
+        return ""
+    cards: list[str] = []
+    for prompt in prompts[:3]:
+        prompt_id = str(prompt.get("prompt_id", "prompt"))
+        prompt_text = escape(str(prompt.get("prompt_text", "未命名提示")))
+        category = prompt.get("category")
+        status_value = prompt.get("status")
+        trigger_reason = prompt.get("trigger_reason")
+        beat_id = prompt.get("beat_id")
+        scene_id = prompt.get("scene_id")
+        cards.append(
+            f"""
+            <article class="attention-card" id="prompt-{escape(prompt_id)}">
+              <div class="activity-header">
+                <h3>{prompt_text}</h3>
+                <span class="activity-meta">{escape(str(status_value or "pending"))}</span>
+              </div>
+              <p class="meta-line">prompt_id: <span class="mono">{escape(prompt_id)}</span></p>
+              {
+                  f'<p class="meta-line">category: <span class="mono">{escape(str(category))}</span></p>'
+                  if category
+                  else ''
+              }
+              {
+                  f'<p class="meta-line">scene_id: <span class="mono">{escape(str(scene_id))}</span></p>'
+                  if scene_id
+                  else ''
+              }
+              {
+                  f'<p class="meta-line">beat_id: <span class="mono">{escape(str(beat_id))}</span></p>'
+                  if beat_id
+                  else ''
+              }
+              {
+                  f'<p>{escape(str(trigger_reason))}</p>'
+                  if trigger_reason
+                  else '<p class="muted">该提示没有额外触发说明。</p>'
+              }
+              <p class="meta-line">
+                处理入口：<code>/sessions/{escape(session_id)}/keeper-prompts/{escape(prompt_id)}/status</code>
+              </p>
+            </article>
+            """
+        )
+    return (
+        '<section class="panel" id="prompt-targets">'
+        "<h2>KP 提示处理入口</h2>"
+        '<p class="help">以下定位块用于快速查看提示上下文；实际处理仍复用现有 keeper prompt API。</p>'
+        f"<div class=\"attention-grid\">{''.join(cards)}</div>"
+        "</section>"
+    )
+
+
+def _render_draft_jump_targets(
+    drafts: list[dict[str, Any]],
+    *,
+    session_id: str,
+) -> str:
+    if not drafts:
+        return ""
+    cards: list[str] = []
+    for draft in drafts[:3]:
+        draft_id = str(draft.get("draft_id", "draft"))
+        draft_text = escape(str(draft.get("draft_text", "未命名草稿")))
+        review_status = draft.get("review_status")
+        risk_level = draft.get("risk_level")
+        rationale_summary = draft.get("rationale_summary")
+        requires_explicit_approval = bool(draft.get("requires_explicit_approval"))
+        cards.append(
+            f"""
+            <article class="attention-card" id="draft-{escape(draft_id)}">
+              <div class="activity-header">
+                <h3>{draft_text}</h3>
+                <span class="activity-meta">{escape(str(review_status or "pending"))}</span>
+              </div>
+              <p class="meta-line">draft_id: <span class="mono">{escape(draft_id)}</span></p>
+              {
+                  f'<p class="meta-line">risk_level: <span class="mono">{escape(str(risk_level))}</span></p>'
+                  if risk_level
+                  else ''
+              }
+              <p class="meta-line">
+                requires_explicit_approval:
+                <span class="mono">{escape(str(requires_explicit_approval).lower())}</span>
+              </p>
+              {
+                  f'<p>{escape(str(rationale_summary))}</p>'
+                  if rationale_summary
+                  else '<p class="muted">该草稿没有额外的风险摘要。</p>'
+              }
+              <p class="meta-line">
+                审阅入口：<code>/sessions/{escape(session_id)}/draft-actions/{escape(draft_id)}/review</code>
+              </p>
+            </article>
+            """
+        )
+    return (
+        '<section class="panel" id="draft-review-targets">'
+        "<h2>待审草稿入口</h2>"
+        '<p class="help">以下定位块用于快速回到待审草稿上下文；实际 approve / edit / reject 继续走现有 review API。</p>'
+        f"<div class=\"attention-grid\">{''.join(cards)}</div>"
+        "</section>"
+    )
+
+
 def _render_recent_activity(events: list[dict[str, Any]]) -> str:
     if not events:
         return '<p class="empty-state">最近还没有可见活动。</p>'
@@ -617,26 +755,8 @@ def _render_keeper_dashboard_page(
         if draft.get("review_status") == "pending"
     ]
     unresolved_objectives = workflow.get("unresolved_objectives") or []
-    prompt_items: list[str] = []
-    for prompt in active_prompts[:3]:
-        category_suffix = ""
-        if prompt.get("category"):
-            category_suffix = (
-                f' <span class="meta-line">[{escape(str(prompt.get("category")))}]</span>'
-            )
-        prompt_items.append(
-            f"{escape(str(prompt.get('prompt_text', '未命名提示')))}{category_suffix}"
-        )
-    draft_items: list[str] = []
-    for draft in pending_drafts[:3]:
-        pending_suffix = (
-            ' <span class="meta-line">[待审]</span>'
-            if draft.get("requires_explicit_approval")
-            else ""
-        )
-        draft_items.append(
-            f"{escape(str(draft.get('draft_text', '未命名草稿')))}{pending_suffix}"
-        )
+    prompt_items = [_render_prompt_attention_item(prompt) for prompt in active_prompts[:3]]
+    draft_items = [_render_draft_attention_item(draft) for draft in pending_drafts[:3]]
     objective_items = [
         escape(str(objective.get("text", objective.get("objective_id", "未命名目标"))))
         for objective in unresolved_objectives[:3]
@@ -701,6 +821,8 @@ def _render_keeper_dashboard_page(
           {_render_attention_block(title='未完成目标', items=objective_items, empty_text='当前没有未完成目标。')}
         </div>
       </section>
+      {_render_prompt_jump_targets(active_prompts, session_id=session_id)}
+      {_render_draft_jump_targets(pending_drafts, session_id=session_id)}
       <section class="panel" id="recent-activity">
         <h2>最近活动</h2>
         <div class="recent-list">

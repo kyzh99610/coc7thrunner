@@ -34,7 +34,7 @@ def _start_keeper_dashboard_session(client: TestClient) -> str:
     return response.json()["session_id"]
 
 
-def _advance_keeper_dashboard_session(client: TestClient, session_id: str) -> None:
+def _advance_keeper_dashboard_session(client: TestClient, session_id: str) -> tuple[str, str]:
     lobby_action = client.post(
         f"/sessions/{session_id}/player-action",
         json={
@@ -56,6 +56,11 @@ def _advance_keeper_dashboard_session(client: TestClient, session_id: str) -> No
         },
     )
     assert lobby_action.status_code == 202
+    keeper_state = client.get(
+        f"/sessions/{session_id}/state",
+        params={"viewer_role": "keeper"},
+    ).json()
+    prompt_id = keeper_state["keeper_workflow"]["active_prompts"][0]["prompt_id"]
 
     draft_response = client.post(
         f"/sessions/{session_id}/kp-draft",
@@ -65,6 +70,8 @@ def _advance_keeper_dashboard_session(client: TestClient, session_id: str) -> No
         },
     )
     assert draft_response.status_code == 202
+    draft_id = draft_response.json()["draft_action"]["draft_id"]
+    return prompt_id, draft_id
 
 
 def test_keeper_dashboard_displays_summary_attention_activity_and_checkpoint_links(
@@ -102,6 +109,27 @@ def test_keeper_dashboard_displays_summary_attention_activity_and_checkpoint_lin
     )
 
 
+def test_keeper_dashboard_attention_items_include_prompt_and_draft_jump_targets(
+    client: TestClient,
+) -> None:
+    session_id = _start_keeper_dashboard_session(client)
+    prompt_id, draft_id = _advance_keeper_dashboard_session(client, session_id)
+
+    response = client.get(f"/playtest/sessions/{session_id}/keeper")
+
+    assert response.status_code == 200
+    html = response.text
+    assert f'href="#prompt-{prompt_id}"' in html
+    assert f'id="prompt-{prompt_id}"' in html
+    assert "处理此提示" in html
+    assert f"/sessions/{session_id}/keeper-prompts/{prompt_id}/status" in html
+    assert f'href="#draft-{draft_id}"' in html
+    assert f'id="draft-{draft_id}"' in html
+    assert "前往审阅" in html
+    assert f"/sessions/{session_id}/draft-actions/{draft_id}/review" in html
+    assert "KP 草稿：若调查员继续追问秦老板，应准备对话压力。" in html
+
+
 def test_keeper_dashboard_shows_natural_empty_states_without_optional_data(
     client: TestClient,
 ) -> None:
@@ -117,6 +145,8 @@ def test_keeper_dashboard_shows_natural_empty_states_without_optional_data(
     assert "当前没有未完成目标。" in html
     assert "还没有检查点。先去创建一个用于回放或分支。" in html
     assert "当前环境缺少外部知识源" not in html
+    assert 'href="#prompt-' not in html
+    assert 'href="#draft-' not in html
 
 
 def test_keeper_dashboard_surfaces_missing_external_source_warnings() -> None:
