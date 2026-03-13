@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from html import escape
 from typing import Any
 from urllib.parse import parse_qsl
@@ -313,6 +314,26 @@ def _render_restore_result(restore_result: dict[str, Any] | None) -> str:
     )
 
 
+def _render_checkpoint_import_result(import_result: dict[str, Any] | None) -> str:
+    if import_result is None:
+        return ""
+    checkpoint = import_result.get("checkpoint", {})
+    original_checkpoint_id = import_result.get("original_checkpoint_id")
+    lines = [
+        "<h2>检查点已导入</h2>",
+        f"<p>new_checkpoint_id: <code>{escape(str(checkpoint.get('checkpoint_id', '')))}</code></p>",
+    ]
+    if original_checkpoint_id:
+        lines.append(
+            f"<p>original_checkpoint_id: <code>{escape(str(original_checkpoint_id))}</code></p>"
+        )
+    return (
+        '<section class="feedback feedback-success">'
+        + "".join(lines)
+        + "</section>"
+    )
+
+
 def _render_notice(notice: str | None) -> str:
     if not notice:
         return ""
@@ -401,6 +422,7 @@ def _render_checkpoint_list(checkpoints: list[dict[str, Any]], *, session_id: st
               <button type="submit">保存</button>
             </form>
             <div class="checkpoint-secondary-actions">
+              <a class="action-link" href="/playtest/sessions/{escape(session_id)}/checkpoints/{checkpoint_id}/export">导出</a>
               <form method="post" action="/playtest/sessions/{escape(session_id)}/checkpoints/{checkpoint_id}/restore" data-submit-label="恢复中..." data-confirm="恢复会创建一个新的 session，不会覆盖当前 session。确定继续吗？">
                 <button type="submit">恢复为新会话</button>
               </form>
@@ -423,33 +445,31 @@ def _render_checkpoint_page(
     notice: str | None = None,
     detail: dict[str, Any] | str | None = None,
     restore_result: dict[str, Any] | None = None,
+    import_result: dict[str, Any] | None = None,
+    import_payload_text: str | None = None,
     status_code: int = status.HTTP_200_OK,
 ) -> HTMLResponse:
     snapshot = session_snapshot or {}
-    scenario_title = snapshot.get("scenario", {}).get("title", "未知会话")
-    current_scene = snapshot.get("current_scene", {}).get("title", "未知场景")
+    has_live_session = session_snapshot is not None
+    scenario_title = snapshot.get("scenario", {}).get("title", "检查点命名空间")
+    current_scene = snapshot.get("current_scene", {}).get("title", "无本地会话")
     state_version = snapshot.get("state_version", "—")
     keeper_id = str(snapshot.get("keeper_id", "keeper-1"))
     keeper_name = snapshot.get("keeper_name", "KP")
-
-    body = f"""
-      <section class="hero">
-        <h1>{escape(str(scenario_title))}</h1>
-        <div class="hero-meta">
-          <span>session_id: <code>{escape(session_id)}</code></span>
-          <span>当前场景：{escape(str(current_scene))}</span>
-          <span>版本：{escape(str(state_version))}</span>
-          <span>KP：{escape(str(keeper_name))}</span>
-        </div>
+    import_form_value = escape(import_payload_text or "")
+    nav_links = (
+        f"""
         <div class="nav-links">
           <a href="/playtest/sessions/{escape(session_id)}/keeper">打开主持人工作台</a>
           <a href="/sessions/{escape(session_id)}/snapshot">查看 snapshot JSON</a>
           <a href="/sessions/{escape(session_id)}/export">查看 export JSON</a>
         </div>
-      </section>
-      {_render_notice(notice)}
-      {_render_detail(detail)}
-      {_render_restore_result(restore_result)}
+        """
+        if has_live_session
+        else '<div class="nav-links"><span class="muted">当前页面只承载导入的 checkpoint 记录，没有对应的本地 source session。</span></div>'
+    )
+    create_panel = (
+        f"""
       <section class="panel">
         <h2>创建检查点</h2>
         <p class="help">恢复检查点会创建一个新的 session，不会覆盖当前 session。</p>
@@ -464,6 +484,38 @@ def _render_checkpoint_page(
             <textarea name="note" rows="3" placeholder="可选。记录为什么保留这个分支点。"></textarea>
           </label>
           <button type="submit">创建检查点</button>
+        </form>
+      </section>
+        """
+        if has_live_session
+        else ""
+    )
+
+    body = f"""
+      <section class="hero">
+        <h1>{escape(str(scenario_title))}</h1>
+        <div class="hero-meta">
+          <span>session_id: <code>{escape(session_id)}</code></span>
+          <span>当前场景：{escape(str(current_scene))}</span>
+          <span>版本：{escape(str(state_version))}</span>
+          <span>KP：{escape(str(keeper_name))}</span>
+        </div>
+        {nav_links}
+      </section>
+      {_render_notice(notice)}
+      {_render_detail(detail)}
+      {_render_restore_result(restore_result)}
+      {_render_checkpoint_import_result(import_result)}
+      {create_panel}
+      <section class="panel">
+        <h2>导入检查点</h2>
+        <p class="help">粘贴导出的 checkpoint JSON。导入后不会自动恢复 session。</p>
+        <form method="post" action="/playtest/sessions/{escape(session_id)}/checkpoints/import" data-submit-label="导入中...">
+          <label>
+            Checkpoint JSON
+            <textarea name="checkpoint_payload" rows="14" placeholder='{{"format_version":1,...}}' required>{import_form_value}</textarea>
+          </label>
+          <button type="submit">导入检查点</button>
         </form>
       </section>
       <section class="panel">
@@ -1088,11 +1140,21 @@ def _build_validation_detail(exc: ValidationError) -> dict[str, Any]:
 
 
 def _load_page_context(service: SessionService, session_id: str) -> tuple[dict[str, Any] | None, list[dict[str, Any]]]:
-    snapshot = service.snapshot_session(session_id)
-    checkpoints = [
-        checkpoint.model_dump(mode="json")
-        for checkpoint in service.list_checkpoints(session_id).checkpoints
-    ]
+    snapshot: dict[str, Any] | None = None
+    snapshot_error: LookupError | None = None
+    try:
+        snapshot = service.snapshot_session(session_id)
+    except LookupError as exc:
+        snapshot_error = exc
+    try:
+        checkpoints = [
+            checkpoint.model_dump(mode="json")
+            for checkpoint in service.list_checkpoints(session_id).checkpoints
+        ]
+    except LookupError:
+        if snapshot_error is not None:
+            raise snapshot_error
+        raise
     return snapshot, checkpoints
 
 
@@ -1116,6 +1178,8 @@ def _render_checkpoint_page_from_service(
     notice: str | None = None,
     detail: dict[str, Any] | str | None = None,
     restore_result: dict[str, Any] | None = None,
+    import_result: dict[str, Any] | None = None,
+    import_payload_text: str | None = None,
     status_code: int = status.HTTP_200_OK,
 ) -> HTMLResponse:
     try:
@@ -1129,6 +1193,8 @@ def _render_checkpoint_page_from_service(
             notice=notice,
             detail=fallback_detail,
             restore_result=restore_result,
+            import_result=import_result,
+            import_payload_text=import_payload_text,
             status_code=status_code,
         )
     return _render_checkpoint_page(
@@ -1138,6 +1204,43 @@ def _render_checkpoint_page_from_service(
         notice=notice,
         detail=detail,
         restore_result=restore_result,
+        import_result=import_result,
+        import_payload_text=import_payload_text,
+        status_code=status_code,
+    )
+
+
+def _render_checkpoint_export_page(
+    *,
+    session_id: str,
+    checkpoint_id: str,
+    export_payload: dict[str, Any],
+    status_code: int = status.HTTP_200_OK,
+) -> HTMLResponse:
+    export_json = escape(json.dumps(export_payload, ensure_ascii=False, indent=2))
+    body = f"""
+      <section class="hero">
+        <h1>导出检查点</h1>
+        <div class="hero-meta">
+          <span>session_id: <code>{escape(session_id)}</code></span>
+          <span>checkpoint_id: <code>{escape(checkpoint_id)}</code></span>
+        </div>
+        <div class="nav-links">
+          <a href="/playtest/sessions/{escape(session_id)}">返回检查点页面</a>
+        </div>
+      </section>
+      <section class="panel">
+        <h2>可复制的 checkpoint JSON</h2>
+        <p class="help">直接复制下面内容即可在另一台环境导入。</p>
+        <label>
+          Export JSON
+          <textarea rows="24" readonly>{export_json}</textarea>
+        </label>
+      </section>
+    """
+    return _render_shell(
+        title=f"Checkpoint {checkpoint_id} Export",
+        body=body,
         status_code=status_code,
     )
 
@@ -1375,6 +1478,117 @@ async def create_checkpoint_via_ui(
             service=service,
             session_id=session_id,
             detail=extract_error_detail(exc),
+            status_code=status.HTTP_400_BAD_REQUEST,
+        )
+
+
+@router.get("/sessions/{session_id}/checkpoints/{checkpoint_id}/export", response_class=HTMLResponse)
+def export_checkpoint_via_ui(
+    session_id: str,
+    checkpoint_id: str,
+    service: SessionService = Depends(get_session_service),
+) -> HTMLResponse:
+    try:
+        export_payload = service.export_checkpoint(session_id, checkpoint_id)
+        return _render_checkpoint_export_page(
+            session_id=session_id,
+            checkpoint_id=checkpoint_id,
+            export_payload=export_payload.model_dump(mode="json"),
+        )
+    except LookupError as exc:
+        return _render_checkpoint_page_from_service(
+            service=service,
+            session_id=session_id,
+            detail=extract_error_detail(exc),
+            status_code=status.HTTP_404_NOT_FOUND,
+        )
+    except ConflictError as exc:
+        return _render_checkpoint_page_from_service(
+            service=service,
+            session_id=session_id,
+            detail=extract_error_detail(exc),
+            status_code=status.HTTP_409_CONFLICT,
+        )
+    except ValueError as exc:
+        return _render_checkpoint_page_from_service(
+            service=service,
+            session_id=session_id,
+            detail=extract_error_detail(exc),
+            status_code=status.HTTP_400_BAD_REQUEST,
+        )
+
+
+@router.post("/sessions/{session_id}/checkpoints/import", response_class=HTMLResponse)
+async def import_checkpoint_via_ui(
+    session_id: str,
+    request: Request,
+    service: SessionService = Depends(get_session_service),
+) -> HTMLResponse:
+    form = await _read_form_payload(request)
+    checkpoint_payload_text = form.get("checkpoint_payload", "")
+    try:
+        payload = json.loads(checkpoint_payload_text)
+    except json.JSONDecodeError as exc:
+        return _render_checkpoint_page_from_service(
+            service=service,
+            session_id=session_id,
+            detail=build_structured_error_detail(
+                code="session_checkpoint_import_invalid_payload",
+                message="检查点导入载荷校验失败",
+                scope="session_checkpoint_import_payload",
+                errors=[
+                    {
+                        "loc": ["body", "checkpoint_payload"],
+                        "message": str(exc),
+                        "type": "json_invalid",
+                    }
+                ],
+            ),
+            import_payload_text=checkpoint_payload_text,
+            status_code=status.HTTP_400_BAD_REQUEST,
+        )
+    try:
+        response = service.import_checkpoint(payload)
+        imported_session_id = response.checkpoint.source_session_id
+        notice = response.message
+        if imported_session_id != session_id:
+            notice = f"{notice}，已切换到来源会话命名空间 {imported_session_id}。"
+        return _render_checkpoint_page_from_service(
+            service=service,
+            session_id=imported_session_id,
+            notice=notice,
+            import_result=response.model_dump(mode="json"),
+        )
+    except ValidationError as exc:
+        return _render_checkpoint_page_from_service(
+            service=service,
+            session_id=session_id,
+            detail=_build_validation_detail(exc),
+            import_payload_text=checkpoint_payload_text,
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+        )
+    except LookupError as exc:
+        return _render_checkpoint_page_from_service(
+            service=service,
+            session_id=session_id,
+            detail=extract_error_detail(exc),
+            import_payload_text=checkpoint_payload_text,
+            status_code=status.HTTP_404_NOT_FOUND,
+        )
+    except ConflictError as exc:
+        return _render_checkpoint_page_from_service(
+            service=service,
+            session_id=session_id,
+            detail=extract_error_detail(exc),
+            import_payload_text=checkpoint_payload_text,
+            status_code=status.HTTP_409_CONFLICT,
+        )
+    except ValueError as exc:
+        return _render_checkpoint_page_from_service(
+            service=service,
+            session_id=session_id,
+            detail=extract_error_detail(exc),
+            import_payload_text=checkpoint_payload_text,
             status_code=status.HTTP_400_BAD_REQUEST,
         )
 

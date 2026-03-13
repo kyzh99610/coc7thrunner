@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import re
 import shutil
 
@@ -9,6 +10,7 @@ from tests.helpers import make_participant
 from tests.test_session_import import (
     KEEPER_ID,
     _create_checkpoint,
+    _export_checkpoint,
     _get_snapshot,
     _import_character_sheet_source,
     _import_snapshot,
@@ -34,13 +36,45 @@ def test_session_checkpoint_page_displays_list_and_actions(client: TestClient) -
     html = response.text
     assert "检查点" in html
     assert "创建检查点" in html
+    assert "导入检查点" in html
+    assert 'name="checkpoint_payload"' in html
     assert "发现纸条后" in html
     assert "未写备注" in html
     assert str(checkpoint["source_session_version"]) in html
     assert checkpoint["created_by"] in html
+    assert f'/playtest/sessions/{session_id}/checkpoints/{checkpoint["checkpoint_id"]}/export' in html
     assert f"/playtest/sessions/{session_id}/checkpoints/{checkpoint['checkpoint_id']}/restore" in html
     assert "恢复会创建一个新的 session，不会覆盖当前 session。确定继续吗？" in html
     assert "确认删除该检查点吗？" in html
+
+
+def test_checkpoint_ui_export_page_displays_copyable_json_without_mutating_state(client: TestClient) -> None:
+    session_id = _start_snapshot_session(client)
+    checkpoint = _create_checkpoint(
+        client,
+        session_id,
+        label="导出用检查点",
+        note="导出给另一台环境。",
+        operator_id=KEEPER_ID,
+    )["checkpoint"]
+    checkpoints_before_export = _list_checkpoints(client, session_id)
+    snapshot_before_export = _get_snapshot(client, session_id)
+
+    response = client.get(
+        f"/playtest/sessions/{session_id}/checkpoints/{checkpoint['checkpoint_id']}/export"
+    )
+
+    assert response.status_code == 200
+    html = response.text
+    assert "导出检查点" in html
+    assert "可复制的 checkpoint JSON" in html
+    assert "&quot;format_version&quot;: 1" in html
+    assert f"&quot;checkpoint_id&quot;: &quot;{checkpoint['checkpoint_id']}&quot;" in html
+    assert f"&quot;source_session_id&quot;: &quot;{session_id}&quot;" in html
+    assert "&quot;snapshot_payload&quot;: {" in html
+    assert f'/playtest/sessions/{session_id}' in html
+    assert _list_checkpoints(client, session_id) == checkpoints_before_export
+    assert _get_snapshot(client, session_id) == snapshot_before_export
 
 
 def test_checkpoint_ui_create_edit_delete_flow_updates_page(client: TestClient) -> None:
@@ -83,6 +117,54 @@ def test_checkpoint_ui_create_edit_delete_flow_updates_page(client: TestClient) 
     assert delete_response.status_code == 200
     assert "检查点已删除" in delete_response.text
     assert "还没有检查点" in delete_response.text
+
+
+def test_checkpoint_ui_import_form_accepts_exported_json_and_updates_page(client: TestClient) -> None:
+    session_id = _start_snapshot_session(client)
+    checkpoint = _create_checkpoint(
+        client,
+        session_id,
+        label="导入源检查点",
+        note="准备复制再导入。",
+        operator_id=KEEPER_ID,
+    )["checkpoint"]
+    export_payload = _export_checkpoint(client, session_id, checkpoint["checkpoint_id"])
+
+    import_response = client.post(
+        f"/playtest/sessions/{session_id}/checkpoints/import",
+        data={"checkpoint_payload": json.dumps(export_payload, ensure_ascii=False)},
+    )
+
+    assert import_response.status_code == 200
+    html = import_response.text
+    assert "检查点已导入" in html
+    assert f"original_checkpoint_id: <code>{checkpoint['checkpoint_id']}</code>" in html
+    listed = _list_checkpoints(client, session_id)["checkpoints"]
+    assert len(listed) == 2
+    assert checkpoint["checkpoint_id"] in html
+    assert listed[0]["checkpoint_id"] in html
+    assert listed[1]["checkpoint_id"] in html
+    assert listed[0]["checkpoint_id"] != listed[1]["checkpoint_id"]
+
+
+def test_checkpoint_ui_import_invalid_json_shows_structured_error_without_half_write(
+    client: TestClient,
+) -> None:
+    session_id = _start_snapshot_session(client)
+    checkpoints_before_failure = _list_checkpoints(client, session_id)
+
+    response = client.post(
+        f"/playtest/sessions/{session_id}/checkpoints/import",
+        data={"checkpoint_payload": '{"format_version": 1, bad json'},
+    )
+
+    assert response.status_code == 400
+    html = response.text
+    assert "检查点导入载荷校验失败" in html
+    assert "session_checkpoint_import_invalid_payload" in html
+    assert "&quot;format_version&quot;" in html
+    assert "bad json" in html
+    assert _list_checkpoints(client, session_id) == checkpoints_before_failure
 
 
 def test_checkpoint_ui_restore_shows_new_session_id_link_and_warnings() -> None:
