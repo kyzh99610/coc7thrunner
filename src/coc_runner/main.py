@@ -8,6 +8,7 @@ from fastapi.exceptions import RequestValidationError
 from coc_runner.api.exception_handlers import request_validation_exception_handler
 from coc_runner.api.routes.health import router as health_router
 from coc_runner.api.routes.knowledge import router as knowledge_router
+from coc_runner.api.routes.playtest import router as playtest_router
 from coc_runner.api.routes.rules import router as rules_router
 from coc_runner.api.routes.sessions import router as sessions_router
 from coc_runner.application.knowledge_service import KnowledgeService
@@ -47,6 +48,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     )
     app.include_router(health_router)
     app.include_router(sessions_router)
+    app.include_router(playtest_router)
     app.include_router(knowledge_router)
     app.include_router(rules_router)
     return app
