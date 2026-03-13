@@ -336,6 +336,104 @@ def _render_checkpoint_import_result(import_result: dict[str, Any] | None) -> st
     )
 
 
+def _render_playtest_launcher_page(
+    *,
+    session_id: str,
+    session_snapshot: dict[str, Any] | None,
+    detail: dict[str, Any] | str | None = None,
+    status_code: int = status.HTTP_200_OK,
+) -> HTMLResponse:
+    snapshot = session_snapshot or {}
+    scenario = snapshot.get("scenario") or {}
+    progress_state = snapshot.get("progress_state") or {}
+    current_scene = snapshot.get("current_scene") or {}
+    current_beat_id = progress_state.get("current_beat")
+    beats_by_id = {
+        str(beat.get("beat_id")): beat
+        for beat in scenario.get("beats") or []
+        if isinstance(beat, dict) and beat.get("beat_id")
+    }
+    current_beat_title = (
+        (beats_by_id.get(str(current_beat_id)) or {}).get("title")
+        if current_beat_id is not None
+        else None
+    )
+    investigator_entries = [
+        participant
+        for participant in snapshot.get("participants") or []
+        if isinstance(participant, dict)
+        and participant.get("kind") == "human"
+        and participant.get("actor_id") != snapshot.get("keeper_id")
+    ]
+    investigator_list = (
+        "".join(
+            f"""
+            <article class="attention-card">
+              <h3>{escape(str(participant.get("display_name") or participant.get("actor_id") or "调查员"))}</h3>
+              <p class="meta-line">actor_id: <code>{escape(str(participant.get("actor_id", "")))}</code></p>
+              <a class="action-link" href="/playtest/sessions/{escape(session_id)}/investigator/{escape(str(participant.get("actor_id", "")))}">打开调查员页面</a>
+            </article>
+            """
+            for participant in investigator_entries
+        )
+        if investigator_entries
+        else '<p class="empty-state">当前没有可进入的调查员页面。</p>'
+    )
+
+    body = f"""
+      <section class="hero">
+        <h1>Playtest 入口</h1>
+        <div class="hero-meta">
+          <span>session_id: <code>{escape(session_id)}</code></span>
+          <span>场景：{escape(str(scenario.get('title', '未知会话')))}</span>
+          <span>KP：{escape(str(snapshot.get('keeper_name', 'KP')))}</span>
+          <span>keeper_id: <code>{escape(str(snapshot.get('keeper_id', '—')))}</code></span>
+        </div>
+      </section>
+      {_render_detail(detail)}
+      <section class="panel">
+        <h2>会话摘要</h2>
+        <div class="summary-grid">
+          <article class="summary-card">
+            <h3>当前进度</h3>
+            <ul>
+              <li>当前场景：{escape(str(current_scene.get('title', '未知场景')))}</li>
+              <li>当前 beat：{escape(str(current_beat_id or '无'))}</li>
+              <li>当前 beat 标题：{escape(str(current_beat_title or '无'))}</li>
+              <li>状态版本：{escape(str(snapshot.get('state_version', '—')))}</li>
+            </ul>
+          </article>
+          <article class="summary-card">
+            <h3>使用说明</h3>
+            <ul>
+              <li>主持人处理推进与审阅，请进入主持人工作台。</li>
+              <li>调查员只应打开自己的调查员页面。</li>
+              <li>检查点页面用于存档、恢复与导出导入。</li>
+            </ul>
+          </article>
+        </div>
+      </section>
+      <section class="panel">
+        <h2>主要入口</h2>
+        <div class="quick-actions">
+          <a class="action-link" href="/playtest/sessions/{escape(session_id)}/keeper">打开主持人工作台</a>
+          <a class="action-link" href="/playtest/sessions/{escape(session_id)}">打开检查点页面</a>
+        </div>
+      </section>
+      <section class="panel">
+        <h2>调查员入口</h2>
+        <div class="attention-grid">
+          {investigator_list}
+        </div>
+      </section>
+    """
+    return _render_shell(
+        title=f"Session {session_id} Playtest Home",
+        body=body,
+        status_code=status_code,
+    )
+
+
 def _render_notice(notice: str | None) -> str:
     if not notice:
         return ""
@@ -1212,6 +1310,34 @@ def _render_checkpoint_page_from_service(
     )
 
 
+def _render_playtest_launcher_from_service(
+    *,
+    service: SessionService,
+    session_id: str,
+    detail: dict[str, Any] | str | None = None,
+    status_code: int = status.HTTP_200_OK,
+) -> HTMLResponse:
+    try:
+        snapshot = service.snapshot_session(session_id)
+    except LookupError as exc:
+        return _render_playtest_launcher_page(
+            session_id=session_id,
+            session_snapshot=None,
+            detail=detail or extract_error_detail(exc),
+            status_code=(
+                status_code
+                if status_code != status.HTTP_200_OK
+                else status.HTTP_404_NOT_FOUND
+            ),
+        )
+    return _render_playtest_launcher_page(
+        session_id=session_id,
+        session_snapshot=snapshot,
+        detail=detail,
+        status_code=status_code,
+    )
+
+
 def _render_checkpoint_export_page(
     *,
     session_id: str,
@@ -1527,6 +1653,14 @@ def session_checkpoint_page(
     service: SessionService = Depends(get_session_service),
 ) -> HTMLResponse:
     return _render_checkpoint_page_from_service(service=service, session_id=session_id)
+
+
+@router.get("/sessions/{session_id}/home", response_class=HTMLResponse)
+def playtest_launcher_page(
+    session_id: str,
+    service: SessionService = Depends(get_session_service),
+) -> HTMLResponse:
+    return _render_playtest_launcher_from_service(service=service, session_id=session_id)
 
 
 @router.get("/sessions/{session_id}/keeper", response_class=HTMLResponse)
