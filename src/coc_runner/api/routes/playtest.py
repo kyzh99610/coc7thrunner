@@ -14,10 +14,12 @@ from coc_runner.application.session_service import SessionService
 from coc_runner.domain.errors import ConflictError
 from coc_runner.domain.models import (
     CreateCheckpointRequest,
+    PlayerActionRequest,
     ReviewDraftRequest,
     RestoreCheckpointRequest,
     UpdateCheckpointRequest,
     UpdateKeeperPromptRequest,
+    ViewerRole,
 )
 from coc_runner.error_details import (
     build_structured_error_detail,
@@ -1245,6 +1247,183 @@ def _render_checkpoint_export_page(
     )
 
 
+def _render_list_or_empty(
+    items: list[str],
+    *,
+    empty_text: str,
+) -> str:
+    if not items:
+        return f'<p class="empty-state">{escape(empty_text)}</p>'
+    return "<ul>" + "".join(f"<li>{escape(str(item))}</li>" for item in items) + "</ul>"
+
+
+def _render_investigator_action_result(action_result: dict[str, Any] | None) -> str:
+    if action_result is None:
+        return ""
+    lines = [
+        "<h2>最近一次提交结果</h2>",
+        f"<p>{escape(str(action_result.get('message', '已提交行动。')))}</p>",
+    ]
+    authoritative_event = action_result.get("authoritative_event")
+    draft_action = action_result.get("draft_action")
+    if isinstance(authoritative_event, dict) and authoritative_event.get("text"):
+        lines.append(
+            f"<p>结果：{escape(str(authoritative_event['text']))}</p>"
+        )
+    elif isinstance(draft_action, dict) and draft_action.get("draft_text"):
+        lines.append(
+            f"<p>结果：{escape(str(draft_action['draft_text']))}</p>"
+        )
+
+    review_summary = None
+    if isinstance(authoritative_event, dict):
+        rules_grounding = authoritative_event.get("rules_grounding")
+        if isinstance(rules_grounding, dict):
+            review_summary = rules_grounding.get("review_summary")
+    warning_block = ""
+    if action_result.get("grounding_degraded"):
+        warning_block = (
+            '<div class="warning-box"><h3>规则依据降级</h3>'
+            f"<p>{escape(str(review_summary or '当前环境缺少外部知识源，未命中可用规则依据。'))}</p>"
+            "</div>"
+        )
+    return (
+        '<section class="feedback feedback-success">'
+        + "".join(lines)
+        + warning_block
+        + "</section>"
+    )
+
+
+def _render_investigator_recent_events(visible_events: list[dict[str, Any]]) -> str:
+    recent_events = list(reversed(visible_events[-5:]))
+    if not recent_events:
+        return '<p class="empty-state">还没有你可见的近期事件。</p>'
+    items: list[str] = []
+    for event in recent_events:
+        created_at = _format_datetime(event.get("created_at", ""))
+        event_type = event.get("event_type", "event")
+        text = event.get("text", "")
+        items.append(
+            f"""
+            <article class="activity-item">
+              <div class="activity-header">
+                <h3>{escape(str(text))}</h3>
+                <span class="activity-meta">{escape(str(created_at))}</span>
+              </div>
+              <p class="muted">event_type: {escape(str(event_type))}</p>
+            </article>
+            """
+        )
+    return "".join(items)
+
+
+def _render_investigator_page(
+    *,
+    session_id: str,
+    viewer_id: str,
+    investigator_view: dict[str, Any] | None,
+    notice: str | None = None,
+    detail: dict[str, Any] | str | None = None,
+    action_result: dict[str, Any] | None = None,
+    action_text: str | None = None,
+    status_code: int = status.HTTP_200_OK,
+) -> HTMLResponse:
+    view = investigator_view or {}
+    participants = view.get("participants", [])
+    viewer_summary = next(
+        (participant for participant in participants if participant.get("actor_id") == viewer_id),
+        None,
+    )
+    viewer_name = (
+        viewer_summary.get("display_name")
+        if isinstance(viewer_summary, dict)
+        else viewer_id
+    ) or viewer_id
+    own_character_state = view.get("own_character_state") or {}
+    own_private_state = view.get("own_private_state") or {}
+    visible_clues = [
+        clue.get("title")
+        for clue in view.get("scenario", {}).get("clues", [])
+        if isinstance(clue, dict) and clue.get("title")
+    ]
+    scene_title = view.get("current_scene", {}).get("title", "未知场景")
+    state_version = view.get("state_version", "—")
+    action_form_value = escape(action_text or "")
+
+    body = f"""
+      <section class="hero">
+        <h1>{escape(str(viewer_name))} 的调查页面</h1>
+        <div class="hero-meta">
+          <span>session_id: <code>{escape(session_id)}</code></span>
+          <span>viewer_id: <code>{escape(viewer_id)}</code></span>
+          <span>当前场景：{escape(str(scene_title))}</span>
+          <span>版本：{escape(str(state_version))}</span>
+        </div>
+      </section>
+      {_render_notice(notice)}
+      {_render_detail(detail)}
+      {_render_investigator_action_result(action_result)}
+      <section class="panel">
+        <h2>我的摘要</h2>
+        <div class="summary-grid">
+          <article class="summary-card">
+            <h3>当前状态</h3>
+            <ul>
+              <li>角色：{escape(str(viewer_name))}</li>
+              <li>当前场景：{escape(str(scene_title))}</li>
+              <li>HP：{escape(str(own_character_state.get('current_hit_points', '—')))}</li>
+              <li>MP：{escape(str(own_character_state.get('current_magic_points', '—')))}</li>
+              <li>SAN：{escape(str(own_character_state.get('current_sanity', '—')))}</li>
+            </ul>
+          </article>
+          <article class="summary-card">
+            <h3>可见线索</h3>
+            {_render_list_or_empty(visible_clues, empty_text="当前还没有你可见的线索。")}
+          </article>
+          <article class="summary-card">
+            <h3>状态与条件</h3>
+            {_render_list_or_empty(
+                list(own_character_state.get("status_effects", []))
+                + list(own_character_state.get("temporary_conditions", [])),
+                empty_text="当前没有可见的状态效果或临时条件。",
+            )}
+          </article>
+          <article class="summary-card">
+            <h3>我的备注</h3>
+            {_render_list_or_empty(
+                list(own_character_state.get("private_notes", []))
+                + list(own_private_state.get("private_notes", [])),
+                empty_text="当前没有你的私有备注。",
+            )}
+          </article>
+        </div>
+      </section>
+      <section class="panel">
+        <h2>提交玩家行动</h2>
+        <form method="post" action="/playtest/sessions/{escape(session_id)}/investigator/{escape(viewer_id)}/actions" data-submit-label="提交中...">
+          <label>
+            action_text
+            <textarea name="action_text" rows="4" placeholder="例如：我检查门缝后的低语来源。" required>{action_form_value}</textarea>
+          </label>
+          <button type="submit">提交行动</button>
+        </form>
+      </section>
+      <section class="panel">
+        <h2>最近可见事件</h2>
+        <div class="recent-list">
+          {_render_investigator_recent_events(list(view.get("visible_events", [])))}
+        </div>
+      </section>
+    """
+    return _render_shell(
+        title=f"Session {session_id} Investigator {viewer_id}",
+        body=body,
+        status_code=status_code,
+        include_form_script=True,
+    )
+
+
 def _render_keeper_dashboard_from_service(
     *,
     service: SessionService,
@@ -1285,6 +1464,63 @@ def _render_keeper_dashboard_from_service(
     )
 
 
+def _load_investigator_page_context(
+    service: SessionService,
+    session_id: str,
+    viewer_id: str,
+) -> dict[str, Any]:
+    return service.get_session_view(
+        session_id,
+        viewer_id=viewer_id,
+        viewer_role=ViewerRole.INVESTIGATOR,
+    ).model_dump(mode="json")
+
+
+def _render_investigator_page_from_service(
+    *,
+    service: SessionService,
+    session_id: str,
+    viewer_id: str,
+    notice: str | None = None,
+    detail: dict[str, Any] | str | None = None,
+    action_result: dict[str, Any] | None = None,
+    action_text: str | None = None,
+    status_code: int = status.HTTP_200_OK,
+) -> HTMLResponse:
+    try:
+        investigator_view = _load_investigator_page_context(service, session_id, viewer_id)
+    except (LookupError, ValueError) as exc:
+        fallback_detail = detail or extract_error_detail(exc)
+        return _render_investigator_page(
+            session_id=session_id,
+            viewer_id=viewer_id,
+            investigator_view=None,
+            notice=notice,
+            detail=fallback_detail,
+            action_result=action_result,
+            action_text=action_text,
+            status_code=(
+                status_code
+                if status_code != status.HTTP_200_OK
+                else (
+                    status.HTTP_404_NOT_FOUND
+                    if isinstance(exc, LookupError)
+                    else status.HTTP_400_BAD_REQUEST
+                )
+            ),
+        )
+    return _render_investigator_page(
+        session_id=session_id,
+        viewer_id=viewer_id,
+        investigator_view=investigator_view,
+        notice=notice,
+        detail=detail,
+        action_result=action_result,
+        action_text=action_text,
+        status_code=status_code,
+    )
+
+
 @router.get("/sessions/{session_id}", response_class=HTMLResponse)
 def session_checkpoint_page(
     session_id: str,
@@ -1299,6 +1535,81 @@ def keeper_dashboard_page(
     service: SessionService = Depends(get_session_service),
 ) -> HTMLResponse:
     return _render_keeper_dashboard_from_service(service=service, session_id=session_id)
+
+
+@router.get("/sessions/{session_id}/investigator/{viewer_id}", response_class=HTMLResponse)
+def investigator_playtest_page(
+    session_id: str,
+    viewer_id: str,
+    service: SessionService = Depends(get_session_service),
+) -> HTMLResponse:
+    return _render_investigator_page_from_service(
+        service=service,
+        session_id=session_id,
+        viewer_id=viewer_id,
+    )
+
+
+@router.post("/sessions/{session_id}/investigator/{viewer_id}/actions", response_class=HTMLResponse)
+async def submit_player_action_via_investigator_ui(
+    session_id: str,
+    viewer_id: str,
+    request: Request,
+    service: SessionService = Depends(get_session_service),
+) -> HTMLResponse:
+    form = await _read_form_payload(request)
+    action_text = _normalize_form_text(form.get("action_text")) or ""
+    try:
+        response = service.submit_player_action(
+            session_id,
+            PlayerActionRequest(
+                actor_id=viewer_id,
+                action_text=action_text,
+            ),
+        )
+        return _render_investigator_page_from_service(
+            service=service,
+            session_id=session_id,
+            viewer_id=viewer_id,
+            notice=response.message,
+            action_result=response.model_dump(mode="json"),
+        )
+    except ValidationError as exc:
+        return _render_investigator_page_from_service(
+            service=service,
+            session_id=session_id,
+            viewer_id=viewer_id,
+            detail=_build_validation_detail(exc),
+            action_text=action_text,
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+        )
+    except LookupError as exc:
+        return _render_investigator_page_from_service(
+            service=service,
+            session_id=session_id,
+            viewer_id=viewer_id,
+            detail=extract_error_detail(exc),
+            action_text=action_text,
+            status_code=status.HTTP_404_NOT_FOUND,
+        )
+    except ConflictError as exc:
+        return _render_investigator_page_from_service(
+            service=service,
+            session_id=session_id,
+            viewer_id=viewer_id,
+            detail=extract_error_detail(exc),
+            action_text=action_text,
+            status_code=status.HTTP_409_CONFLICT,
+        )
+    except ValueError as exc:
+        return _render_investigator_page_from_service(
+            service=service,
+            session_id=session_id,
+            viewer_id=viewer_id,
+            detail=extract_error_detail(exc),
+            action_text=action_text,
+            status_code=status.HTTP_400_BAD_REQUEST,
+        )
 
 
 @router.post("/sessions/{session_id}/keeper/prompts/{prompt_id}/status", response_class=HTMLResponse)
