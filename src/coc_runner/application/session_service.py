@@ -1844,6 +1844,7 @@ class SessionService:
                         "decision": request.decision.value,
                         "review_status": reviewed_action.review_status.value,
                         "learn_from_final": reviewed_action.learn_from_final,
+                        "editor_notes": request.editor_notes,
                     },
                 )
                 self._save_session(
@@ -1880,7 +1881,12 @@ class SessionService:
                     actor_id=request.reviewer_id,
                     subject_id=draft_action.draft_id,
                     current_time=current_time,
-                    details={"decision": request.decision.value, "review_status": ReviewStatus.REJECTED.value},
+                    details={
+                        "draft_id": draft_action.draft_id,
+                        "decision": request.decision.value,
+                        "review_status": ReviewStatus.REJECTED.value,
+                        "editor_notes": request.editor_notes,
+                    },
                 )
                 self._save_session(
                     session,

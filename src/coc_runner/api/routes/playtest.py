@@ -717,6 +717,190 @@ def _render_recent_activity(events: list[dict[str, Any]]) -> str:
     return "".join(items)
 
 
+def _build_prompt_result_timestamp(prompt: dict[str, Any]) -> str:
+    return str(
+        prompt.get("completed_at")
+        or prompt.get("dismissed_at")
+        or prompt.get("acknowledged_at")
+        or prompt.get("updated_at")
+        or prompt.get("created_at")
+        or ""
+    )
+
+
+def _build_rejected_draft_audit_map(session_snapshot: dict[str, Any]) -> dict[str, dict[str, Any]]:
+    rejected_details_by_draft: dict[str, dict[str, Any]] = {}
+    for entry in reversed(session_snapshot.get("audit_log") or []):
+        if entry.get("action") != "review_decision":
+            continue
+        details = entry.get("details") or {}
+        if details.get("review_status") != "rejected":
+            continue
+        draft_id = details.get("draft_id") or entry.get("subject_id")
+        if not draft_id or draft_id in rejected_details_by_draft:
+            continue
+        rejected_details_by_draft[str(draft_id)] = {
+            "editor_notes": details.get("editor_notes"),
+            "decision": details.get("decision"),
+            "review_status": details.get("review_status"),
+            "created_at": entry.get("created_at"),
+        }
+    return rejected_details_by_draft
+
+
+def _render_recent_result_panel(
+    *,
+    session_snapshot: dict[str, Any],
+    keeper_view: dict[str, Any],
+) -> str:
+    progress_state = keeper_view.get("progress_state") or {}
+    prompt_results = [
+        prompt
+        for prompt in progress_state.get("queued_kp_prompts") or []
+        if prompt.get("status") not in {None, "pending"}
+    ]
+    prompt_results.sort(key=_build_prompt_result_timestamp, reverse=True)
+
+    visible_reviewed = sorted(
+        keeper_view.get("visible_reviewed_actions") or [],
+        key=lambda reviewed: str(reviewed.get("created_at") or ""),
+        reverse=True,
+    )
+    authoritative_by_review_id = {
+        str(action.get("review_id")): action
+        for action in keeper_view.get("visible_authoritative_actions") or []
+        if action.get("review_id")
+    }
+    rejected_audit_by_draft = _build_rejected_draft_audit_map(session_snapshot)
+    rejected_outcomes: list[dict[str, Any]] = []
+    for draft in keeper_view.get("visible_draft_actions") or []:
+        if draft.get("review_status") != "rejected":
+            continue
+        draft_id = str(draft.get("draft_id"))
+        audit_details = rejected_audit_by_draft.get(draft_id, {})
+        rejected_outcomes.append(
+            {
+                "draft_id": draft_id,
+                "draft_text": draft.get("draft_text", "未命名草稿"),
+                "editor_notes": audit_details.get("editor_notes"),
+                "decision": audit_details.get("decision") or "reject",
+                "created_at": str(audit_details.get("created_at") or draft.get("created_at") or ""),
+            }
+        )
+    rejected_outcomes.sort(key=lambda outcome: outcome["created_at"], reverse=True)
+
+    if not prompt_results and not visible_reviewed and not rejected_outcomes:
+        return (
+            '<section class="panel" id="recent-results">'
+            "<h2>最近处理结果</h2>"
+            '<p class="empty-state">还没有最近处理结果。</p>'
+            "</section>"
+        )
+
+    if prompt_results:
+        prompt_items = []
+        for prompt in prompt_results[:3]:
+            note_lines = prompt.get("notes") or []
+            note_display = " / ".join(escape(str(note)) for note in note_lines) if note_lines else "当前没有备注。"
+            prompt_items.append(
+                f"""
+                <article class="activity-item">
+                  <div class="activity-header">
+                    <h3>{escape(str(prompt.get('prompt_text', '未命名提示')))}</h3>
+                    <span class="activity-meta">{escape(_build_prompt_result_timestamp(prompt))}</span>
+                  </div>
+                  <p class="meta-line">结果：<span class="mono">{escape(str(prompt.get('status', 'pending')))}</span></p>
+                  <p>{note_display}</p>
+                </article>
+                """
+            )
+        prompt_block = "".join(prompt_items)
+    else:
+        prompt_block = '<p class="empty-state">还没有已处理的提示。</p>'
+
+    draft_cards: list[tuple[str, str]] = []
+    for reviewed in visible_reviewed[:3]:
+        review_id = str(reviewed.get("review_id", "review"))
+        authoritative = authoritative_by_review_id.get(review_id)
+        summary_text = (
+            reviewed.get("execution_summary")
+            or reviewed.get("review_summary")
+            or (authoritative or {}).get("execution_summary")
+            or (authoritative or {}).get("review_summary")
+            or "已生成 reviewed / authoritative 结果。"
+        )
+        editor_notes = ((reviewed.get("decision") or {}).get("editor_notes")) or ""
+        created_at = str(reviewed.get("created_at") or "")
+        draft_cards.append(
+            (
+                created_at,
+                f"""
+                <article class="activity-item">
+                  <div class="activity-header">
+                    <h3>{escape(str(reviewed.get('final_text', '未命名落地结果')))}</h3>
+                    <span class="activity-meta">{escape(created_at)}</span>
+                  </div>
+                  <p class="meta-line">
+                    decision: <span class="mono">{escape(str((reviewed.get('decision') or {}).get('decision') or reviewed.get('review_status') or 'approved'))}</span>
+                    · 已写入权威历史
+                  </p>
+                  <p>落地摘要：{escape(str(summary_text))}</p>
+                  {
+                      f'<p class="meta-line">审阅说明：{escape(str(editor_notes))}</p>'
+                      if editor_notes
+                      else ''
+                  }
+                </article>
+                """,
+            )
+        )
+    for rejected in rejected_outcomes[:3]:
+        draft_cards.append(
+            (
+                rejected["created_at"],
+                f"""
+                <article class="activity-item">
+                  <div class="activity-header">
+                    <h3>{escape(str(rejected['draft_text']))}</h3>
+                    <span class="activity-meta">{escape(str(rejected['created_at']))}</span>
+                  </div>
+                  <p class="meta-line">
+                    decision: <span class="mono">{escape(str(rejected['decision']))}</span>
+                    · 未写入权威历史
+                  </p>
+                  {
+                      f'<p class="meta-line">审阅说明：{escape(str(rejected["editor_notes"]))}</p>'
+                      if rejected.get("editor_notes")
+                      else '<p class="muted">该驳回结果没有额外审阅说明。</p>'
+                  }
+                </article>
+                """,
+            )
+        )
+    draft_cards.sort(key=lambda item: item[0], reverse=True)
+    draft_block = (
+        "".join(card for _, card in draft_cards[:4])
+        if draft_cards
+        else '<p class="empty-state">还没有最近草稿结果。</p>'
+    )
+
+    return f"""
+      <section class="panel" id="recent-results">
+        <h2>最近处理结果</h2>
+        <div class="summary-grid">
+          <article class="summary-card">
+            <h3>最近提示结果</h3>
+            <div class="recent-list">{prompt_block}</div>
+          </article>
+          <article class="summary-card">
+            <h3>最近草稿结果</h3>
+            <div class="recent-list">{draft_block}</div>
+          </article>
+        </div>
+      </section>
+    """
+
+
 def _render_checkpoint_summary(checkpoints: list[dict[str, Any]], *, session_id: str) -> str:
     if not checkpoints:
         summary_list = '<p class="empty-state">还没有检查点。先去创建一个用于回放或分支。</p>'
@@ -863,6 +1047,7 @@ def _render_keeper_dashboard_page(
           {_render_attention_block(title='未完成目标', items=objective_items, empty_text='当前没有未完成目标。')}
         </div>
       </section>
+      {_render_recent_result_panel(session_snapshot=snapshot, keeper_view=current_view)}
       {_render_prompt_jump_targets(active_prompts, session_id=session_id, operator_id=keeper_id)}
       {_render_draft_jump_targets(pending_drafts, session_id=session_id, reviewer_id=keeper_id)}
       <section class="panel" id="recent-activity">

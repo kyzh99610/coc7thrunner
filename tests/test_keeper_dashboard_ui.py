@@ -219,6 +219,76 @@ def test_keeper_dashboard_prompt_target_still_supports_submission_without_note(
     assert "acknowledged" in html
 
 
+def test_keeper_dashboard_recent_results_persist_acknowledged_prompt_note_after_refresh(
+    client: TestClient,
+) -> None:
+    session_id = _start_keeper_dashboard_session(client)
+    prompt_id, _ = _advance_keeper_dashboard_session(client, session_id)
+    note = "先记为已知风险，等调查员继续施压时再处理。"
+
+    update_response = client.post(
+        f"/playtest/sessions/{session_id}/keeper/prompts/{prompt_id}/status",
+        data={"operator_id": KEEPER_ID, "status": "acknowledged", "note": note},
+    )
+    assert update_response.status_code == 200
+
+    refreshed = client.get(f"/playtest/sessions/{session_id}/keeper")
+    assert refreshed.status_code == 200
+    html = refreshed.text
+    assert "最近处理结果" in html
+    assert "最近提示结果" in html
+    assert "KP：秦老板看到调查员翻出旧图纸时，应表现出短暂失态。" in html
+    assert "acknowledged" in html
+    assert note in html
+
+
+def test_keeper_dashboard_recent_results_persist_completed_prompt_note_after_refresh(
+    client: TestClient,
+) -> None:
+    session_id = _start_keeper_dashboard_session(client)
+    prompt_id, _ = _advance_keeper_dashboard_session(client, session_id)
+    note = "提示已处理完毕，直接进入下一个应对分支。"
+
+    update_response = client.post(
+        f"/playtest/sessions/{session_id}/keeper/prompts/{prompt_id}/status",
+        data={"operator_id": KEEPER_ID, "status": "completed", "note": note},
+    )
+    assert update_response.status_code == 200
+
+    refreshed = client.get(f"/playtest/sessions/{session_id}/keeper")
+    assert refreshed.status_code == 200
+    html = refreshed.text
+    assert "最近处理结果" in html
+    assert "最近提示结果" in html
+    assert "KP：秦老板看到调查员翻出旧图纸时，应表现出短暂失态。" in html
+    assert "completed" in html
+    assert note in html
+    assert f'id="prompt-{prompt_id}"' not in html
+
+
+def test_keeper_dashboard_recent_results_persist_dismissed_prompt_note_after_refresh(
+    client: TestClient,
+) -> None:
+    session_id = _start_keeper_dashboard_session(client)
+    prompt_id, _ = _advance_keeper_dashboard_session(client, session_id)
+    note = "这条提示先关闭，由 KP 自行演绎处理。"
+
+    update_response = client.post(
+        f"/playtest/sessions/{session_id}/keeper/prompts/{prompt_id}/status",
+        data={"operator_id": KEEPER_ID, "status": "dismissed", "note": note},
+    )
+    assert update_response.status_code == 200
+
+    refreshed = client.get(f"/playtest/sessions/{session_id}/keeper")
+    assert refreshed.status_code == 200
+    html = refreshed.text
+    assert "最近处理结果" in html
+    assert "最近提示结果" in html
+    assert "KP：秦老板看到调查员翻出旧图纸时，应表现出短暂失态。" in html
+    assert "dismissed" in html
+    assert note in html
+
+
 def test_keeper_dashboard_prompt_update_failure_renders_structured_error(
     client: TestClient,
 ) -> None:
@@ -323,6 +393,55 @@ def test_keeper_dashboard_draft_target_still_supports_review_without_editor_note
     assert "当前没有待审草稿。" in html
 
 
+def test_keeper_dashboard_recent_results_show_approved_draft_outcome_and_editor_notes_after_refresh(
+    client: TestClient,
+) -> None:
+    session_id = _start_keeper_dashboard_session(client)
+    _, draft_id = _advance_keeper_dashboard_session(client, session_id)
+    note = "这条建议已转为正式落地结果，可作为后续口风。"
+
+    review_response = client.post(
+        f"/playtest/sessions/{session_id}/draft-actions/{draft_id}/review",
+        data={"reviewer_id": KEEPER_ID, "decision": "approve", "editor_notes": note},
+    )
+    assert review_response.status_code == 200
+
+    refreshed = client.get(f"/playtest/sessions/{session_id}/keeper")
+    assert refreshed.status_code == 200
+    html = refreshed.text
+    assert "最近处理结果" in html
+    assert "最近草稿结果" in html
+    assert "KP 草稿：若调查员继续追问秦老板，应准备对话压力。" in html
+    assert "approve" in html
+    assert "已写入权威历史" in html
+    assert note in html
+    assert "落地摘要：" in html
+
+
+def test_keeper_dashboard_recent_results_show_rejected_draft_outcome_and_editor_notes_after_refresh(
+    client: TestClient,
+) -> None:
+    session_id = _start_keeper_dashboard_session(client)
+    _, draft_id = _advance_keeper_dashboard_session(client, session_id)
+    note = "先不要采用这条草稿，等更多线索落地后再说。"
+
+    review_response = client.post(
+        f"/playtest/sessions/{session_id}/draft-actions/{draft_id}/review",
+        data={"reviewer_id": KEEPER_ID, "decision": "reject", "editor_notes": note},
+    )
+    assert review_response.status_code == 200
+
+    refreshed = client.get(f"/playtest/sessions/{session_id}/keeper")
+    assert refreshed.status_code == 200
+    html = refreshed.text
+    assert "最近处理结果" in html
+    assert "最近草稿结果" in html
+    assert "KP 草稿：若调查员继续追问秦老板，应准备对话压力。" in html
+    assert "reject" in html
+    assert "未写入权威历史" in html
+    assert note in html
+
+
 def test_keeper_dashboard_shows_natural_empty_states_without_optional_data(
     client: TestClient,
 ) -> None:
@@ -336,6 +455,7 @@ def test_keeper_dashboard_shows_natural_empty_states_without_optional_data(
     assert "当前没有待处理的 KP 提示。" in html
     assert "当前没有待审草稿。" in html
     assert "当前没有未完成目标。" in html
+    assert "还没有最近处理结果。" in html
     assert "还没有检查点。先去创建一个用于回放或分支。" in html
     assert "当前环境缺少外部知识源" not in html
     assert 'href="#prompt-' not in html
