@@ -1032,6 +1032,33 @@ def test_cross_environment_missing_character_import_source_refresh_fails_without
         shutil.rmtree(run_dir, ignore_errors=True)
 
 
+def test_apply_character_import_missing_session_returns_structured_404_without_creating_session(
+    client: TestClient,
+) -> None:
+    session_count_before_apply = _count_session_records(client)
+
+    apply_response = client.post(
+        "/sessions/missing-character-import-session/apply-character-import",
+        json={
+            "operator_id": "keeper-1",
+            "actor_id": "investigator-1",
+            "source_id": "character-sheet-template-missing-session",
+            "sync_policy": "refresh_with_merge",
+        },
+    )
+
+    assert apply_response.status_code == 404
+    assert apply_response.json()["detail"] == {
+        "code": "character_import_session_not_found",
+        "message": "未找到会话 missing-character-import-session",
+        "source_id": "character-sheet-template-missing-session",
+        "session_id": "missing-character-import-session",
+        "actor_id": "investigator-1",
+        "scope": "character_import_session",
+    }
+    assert _count_session_records(client) == session_count_before_apply
+
+
 def test_apply_character_import_missing_extraction_returns_structured_400_without_mutating_session(
     client: TestClient,
 ) -> None:

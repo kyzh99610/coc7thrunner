@@ -1178,16 +1178,32 @@ class SessionService:
         request: ApplyCharacterImportRequest,
     ) -> ApplyCharacterImportResponse:
         error_language = self._resolve_language(request.language_preference)
-        session = self._load_session(session_id, language=error_language)
+        error_context = {
+            "source_id": request.source_id,
+            "session_id": session_id,
+            "actor_id": request.actor_id,
+        }
+        try:
+            session = self._load_session(session_id, language=error_language)
+        except LookupError as exc:
+            message = exc.args[0] if exc.args and isinstance(exc.args[0], str) else self._message(
+                "session_not_found",
+                error_language,
+                session_id=session_id,
+            )
+            raise LookupError(
+                build_character_import_error_detail(
+                    code="character_import_session_not_found",
+                    message=message,
+                    scope="character_import_session",
+                    **error_context,
+                )
+            ) from exc
         effective_language = self._resolve_language(
             request.language_preference,
             session.language_preference,
         )
-        error_context = {
-            "source_id": request.source_id,
-            "session_id": session.session_id,
-            "actor_id": request.actor_id,
-        }
+        error_context["session_id"] = session.session_id
         self._authorize_operator(
             session,
             operator_id=request.operator_id,
