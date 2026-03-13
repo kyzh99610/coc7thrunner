@@ -13,6 +13,7 @@ from coc_runner.domain.models import (
     ApplyCharacterImportResponse,
     CreateCheckpointRequest,
     CreateCheckpointResponse,
+    DeleteCheckpointResponse,
     InvestigatorView,
     KPDraftRequest,
     LanguagePreference,
@@ -29,6 +30,8 @@ from coc_runner.domain.models import (
     SessionImportResponse,
     SessionStartRequest,
     SessionStartResponse,
+    UpdateCheckpointRequest,
+    UpdateCheckpointResponse,
     UpdateKeeperPromptRequest,
     UpdateKeeperPromptResponse,
     ViewerRole,
@@ -405,6 +408,68 @@ def list_checkpoints(
     try:
         return service.list_checkpoints(
             session_id,
+            language_preference=language_preference,
+        )
+    except LookupError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=extract_error_detail(exc),
+        ) from exc
+    except ConflictError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=extract_error_detail(exc),
+        ) from exc
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=extract_error_detail(exc),
+        ) from exc
+
+
+@router.patch(
+    "/{session_id}/checkpoints/{checkpoint_id}",
+    response_model=UpdateCheckpointResponse,
+)
+def update_checkpoint(
+    session_id: str,
+    checkpoint_id: str,
+    request: UpdateCheckpointRequest,
+    service: SessionService = Depends(get_session_service),
+) -> UpdateCheckpointResponse:
+    try:
+        return service.update_checkpoint(session_id, checkpoint_id, request)
+    except LookupError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=extract_error_detail(exc),
+        ) from exc
+    except ConflictError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=extract_error_detail(exc),
+        ) from exc
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=extract_error_detail(exc),
+        ) from exc
+
+
+@router.delete(
+    "/{session_id}/checkpoints/{checkpoint_id}",
+    response_model=DeleteCheckpointResponse,
+)
+def delete_checkpoint(
+    session_id: str,
+    checkpoint_id: str,
+    language_preference: LanguagePreference | None = Query(default=None),
+    service: SessionService = Depends(get_session_service),
+) -> DeleteCheckpointResponse:
+    try:
+        return service.delete_checkpoint(
+            session_id,
+            checkpoint_id,
             language_preference=language_preference,
         )
     except LookupError as exc:

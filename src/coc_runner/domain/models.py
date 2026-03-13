@@ -1718,6 +1718,36 @@ class CreateCheckpointResponse(BaseModel):
     checkpoint: SessionCheckpointSummary
 
 
+class UpdateCheckpointRequest(BaseModel):
+    label: str | None = Field(default=None, min_length=1, max_length=80)
+    note: str | None = None
+    operator_id: str | None = Field(default=None, min_length=1, max_length=80)
+    language_preference: LanguagePreference | None = None
+
+    @field_validator("label")
+    @classmethod
+    def _normalize_label(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("label must not be empty")
+        return normalized
+
+    @field_validator("note")
+    @classmethod
+    def _normalize_note(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        return value.strip()
+
+
+class UpdateCheckpointResponse(BaseModel):
+    message: str
+    session_id: str
+    checkpoint: SessionCheckpointSummary
+
+
 class ListCheckpointsResponse(BaseModel):
     session_id: str
     checkpoints: list[SessionCheckpointSummary] = Field(default_factory=list)
@@ -1733,6 +1763,12 @@ class RestoreCheckpointResponse(BaseModel):
     new_session_id: str
     state_version: int
     warnings: list[SessionImportWarning] = Field(default_factory=list)
+
+
+class DeleteCheckpointResponse(BaseModel):
+    message: str
+    session_id: str
+    checkpoint_id: str
 
 
 SessionEvent.model_rebuild()

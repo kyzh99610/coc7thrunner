@@ -157,6 +157,11 @@ def _count_session_records(client: TestClient) -> int:
         return db.execute(select(func.count()).select_from(SessionRecord)).scalar_one()
 
 
+def _parse_iso_datetime(value: str) -> datetime:
+    parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    return parsed if parsed.tzinfo is not None else parsed.replace(tzinfo=timezone.utc)
+
+
 def _count_checkpoint_records(client: TestClient) -> int:
     repository = client.app.state.session_service.repository
     with repository.session_factory() as db:
@@ -184,6 +189,45 @@ def _create_checkpoint(
             "note": note,
             "operator_id": operator_id,
         },
+    )
+    assert response.status_code == 201
+    return response.json()
+
+
+def _list_checkpoints(client: TestClient, session_id: str) -> dict:
+    response = client.get(f"/sessions/{session_id}/checkpoints")
+    assert response.status_code == 200
+    return response.json()
+
+
+def _update_checkpoint(
+    client: TestClient,
+    session_id: str,
+    checkpoint_id: str,
+    *,
+    label: str | None = None,
+    note: str | None = None,
+    operator_id: str | None = None,
+) -> dict:
+    payload: dict[str, str | None] = {}
+    if label is not None:
+        payload["label"] = label
+    if note is not None:
+        payload["note"] = note
+    if operator_id is not None:
+        payload["operator_id"] = operator_id
+    response = client.patch(
+        f"/sessions/{session_id}/checkpoints/{checkpoint_id}",
+        json=payload,
+    )
+    assert response.status_code == 200
+    return response.json()
+
+
+def _restore_checkpoint(client: TestClient, session_id: str, checkpoint_id: str) -> dict:
+    response = client.post(
+        f"/sessions/{session_id}/checkpoints/{checkpoint_id}/restore",
+        json={},
     )
     assert response.status_code == 201
     return response.json()
@@ -747,6 +791,160 @@ def test_restore_checkpoint_inherits_import_warnings_for_missing_external_source
         shutil.rmtree(run_dir, ignore_errors=True)
 
 
+def test_update_checkpoint_label_only_preserves_other_metadata_and_list_view(
+    client: TestClient,
+) -> None:
+    session_id = _start_snapshot_session(client)
+    checkpoint = _create_checkpoint(
+        client,
+        session_id,
+        label="前厅保留点",
+        note="旧备注",
+        operator_id=KEEPER_ID,
+    )["checkpoint"]
+
+    update_payload = _update_checkpoint(
+        client,
+        session_id,
+        checkpoint["checkpoint_id"],
+        label="档案室前",
+        operator_id=KEEPER_ID,
+    )
+
+    updated = update_payload["checkpoint"]
+    assert update_payload["message"] == "检查点已更新"
+    assert updated["checkpoint_id"] == checkpoint["checkpoint_id"]
+    assert updated["source_session_id"] == checkpoint["source_session_id"]
+    assert updated["source_session_version"] == checkpoint["source_session_version"]
+    assert _parse_iso_datetime(updated["created_at"]) == _parse_iso_datetime(checkpoint["created_at"])
+    assert updated["created_by"] == checkpoint["created_by"]
+    assert updated["label"] == "档案室前"
+    assert updated["note"] == checkpoint["note"]
+
+    listed = _list_checkpoints(client, session_id)["checkpoints"][0]
+    assert listed["label"] == "档案室前"
+    assert listed["note"] == "旧备注"
+
+
+def test_update_checkpoint_note_only_preserves_other_metadata(
+    client: TestClient,
+) -> None:
+    session_id = _start_snapshot_session(client)
+    checkpoint = _create_checkpoint(
+        client,
+        session_id,
+        label="发现纸条后",
+        note="原始备注",
+        operator_id=KEEPER_ID,
+    )["checkpoint"]
+
+    update_payload = _update_checkpoint(
+        client,
+        session_id,
+        checkpoint["checkpoint_id"],
+        note="只更新备注，不改名称。",
+        operator_id=KEEPER_ID,
+    )
+
+    updated = update_payload["checkpoint"]
+    assert updated["checkpoint_id"] == checkpoint["checkpoint_id"]
+    assert updated["label"] == checkpoint["label"]
+    assert updated["note"] == "只更新备注，不改名称。"
+    assert updated["source_session_id"] == checkpoint["source_session_id"]
+    assert updated["source_session_version"] == checkpoint["source_session_version"]
+
+
+def test_update_checkpoint_label_and_note_still_restores_original_snapshot(
+    client: TestClient,
+) -> None:
+    session_id = _start_snapshot_session(client)
+    _discover_note_and_queue_prompt(client, session_id)
+    checkpoint = _create_checkpoint(
+        client,
+        session_id,
+        label="发现纸条后",
+        note="原备注",
+        operator_id=KEEPER_ID,
+    )["checkpoint"]
+    checkpoint_snapshot = _get_snapshot(client, session_id)
+    _move_to_archive(client, session_id)
+
+    update_payload = _update_checkpoint(
+        client,
+        session_id,
+        checkpoint["checkpoint_id"],
+        label="改名后的分支点",
+        note="改名且更新备注。",
+        operator_id=KEEPER_ID,
+    )
+    assert update_payload["checkpoint"]["label"] == "改名后的分支点"
+    assert update_payload["checkpoint"]["note"] == "改名且更新备注。"
+
+    restore_payload = _restore_checkpoint(client, session_id, checkpoint["checkpoint_id"])
+    restored_snapshot = _get_snapshot(client, restore_payload["new_session_id"])
+    restored_event_texts = [event["text"] for event in restored_snapshot["timeline"]]
+
+    assert restored_snapshot["current_scene"]["scene_id"] == checkpoint_snapshot["current_scene"]["scene_id"]
+    assert "我顺着纸条指向前往档案室继续调查。" not in restored_event_texts
+
+
+def test_delete_checkpoint_removes_it_without_affecting_original_or_restored_sessions(
+    client: TestClient,
+) -> None:
+    session_id = _start_snapshot_session(client)
+    _discover_note_and_queue_prompt(client, session_id)
+    checkpoint = _create_checkpoint(
+        client,
+        session_id,
+        label="删除前分支点",
+        operator_id=KEEPER_ID,
+    )["checkpoint"]
+    source_snapshot_before_delete = _get_snapshot(client, session_id)
+    restore_payload = _restore_checkpoint(client, session_id, checkpoint["checkpoint_id"])
+    restored_session_id = restore_payload["new_session_id"]
+    restored_snapshot_before_delete = _get_snapshot(client, restored_session_id)
+
+    delete_response = client.delete(
+        f"/sessions/{session_id}/checkpoints/{checkpoint['checkpoint_id']}",
+    )
+
+    assert delete_response.status_code == 200
+    delete_payload = delete_response.json()
+    assert delete_payload == {
+        "message": "检查点已删除",
+        "session_id": session_id,
+        "checkpoint_id": checkpoint["checkpoint_id"],
+    }
+    assert _list_checkpoints(client, session_id)["checkpoints"] == []
+
+    missing_restore_response = client.post(
+        f"/sessions/{session_id}/checkpoints/{checkpoint['checkpoint_id']}/restore",
+        json={},
+    )
+    assert missing_restore_response.status_code == 404
+    assert missing_restore_response.json()["detail"] == {
+        "code": "session_checkpoint_not_found",
+        "message": f"未找到检查点 {checkpoint['checkpoint_id']}",
+        "scope": "session_checkpoint_record",
+        "session_id": session_id,
+        "checkpoint_id": checkpoint["checkpoint_id"],
+        "source_session_id": session_id,
+    }
+
+    assert _get_snapshot(client, session_id) == source_snapshot_before_delete
+    assert _get_snapshot(client, restored_session_id) == restored_snapshot_before_delete
+
+    player_action_response = client.post(
+        f"/sessions/{restored_session_id}/player-action",
+        json={
+            "actor_id": "investigator-1",
+            "action_text": "我在已经恢复出的分支里继续调查。",
+            "structured_action": {"type": "continue_after_checkpoint_delete"},
+        },
+    )
+    assert player_action_response.status_code == 202
+
+
 def test_create_checkpoint_missing_session_returns_structured_404_without_creating_record(
     client: TestClient,
 ) -> None:
@@ -790,6 +988,149 @@ def test_restore_checkpoint_missing_checkpoint_returns_structured_404_without_mu
     assert detail["source_session_id"] == session_id
     assert isinstance(detail["message"], str) and detail["message"]
     assert _get_snapshot(client, session_id) == snapshot_before_restore
+
+
+def test_update_checkpoint_missing_session_returns_structured_404_without_mutating_records(
+    client: TestClient,
+) -> None:
+    session_id = _start_snapshot_session(client)
+    checkpoint = _create_checkpoint(
+        client,
+        session_id,
+        label="更新前检查点",
+        operator_id=KEEPER_ID,
+    )["checkpoint"]
+    checkpoints_before_failure = _list_checkpoints(client, session_id)
+
+    response = client.patch(
+        f"/sessions/session-missing/checkpoints/{checkpoint['checkpoint_id']}",
+        json={"label": "不会成功"},
+    )
+
+    assert response.status_code == 404
+    assert response.json()["detail"] == {
+        "code": "session_checkpoint_session_not_found",
+        "message": "未找到会话 session-missing",
+        "scope": "session_checkpoint_session",
+        "session_id": "session-missing",
+    }
+    assert _list_checkpoints(client, session_id) == checkpoints_before_failure
+
+
+def test_update_checkpoint_missing_checkpoint_returns_structured_404_without_mutating_records(
+    client: TestClient,
+) -> None:
+    session_id = _start_snapshot_session(client)
+    checkpoint = _create_checkpoint(
+        client,
+        session_id,
+        label="保留点",
+        note="原备注",
+        operator_id=KEEPER_ID,
+    )["checkpoint"]
+    checkpoints_before_failure = _list_checkpoints(client, session_id)
+
+    response = client.patch(
+        f"/sessions/{session_id}/checkpoints/checkpoint-missing",
+        json={"label": "不会成功"},
+    )
+
+    assert response.status_code == 404
+    assert response.json()["detail"] == {
+        "code": "session_checkpoint_not_found",
+        "message": "未找到检查点 checkpoint-missing",
+        "scope": "session_checkpoint_record",
+        "session_id": session_id,
+        "checkpoint_id": "checkpoint-missing",
+        "source_session_id": session_id,
+    }
+    assert _list_checkpoints(client, session_id) == checkpoints_before_failure
+    assert _list_checkpoints(client, session_id)["checkpoints"][0]["label"] == checkpoint["label"]
+
+
+def test_update_checkpoint_without_mutations_returns_structured_400_without_mutating_record(
+    client: TestClient,
+) -> None:
+    session_id = _start_snapshot_session(client)
+    checkpoint = _create_checkpoint(
+        client,
+        session_id,
+        label="保留点",
+        note="原备注",
+        operator_id=KEEPER_ID,
+    )["checkpoint"]
+    checkpoints_before_failure = _list_checkpoints(client, session_id)
+
+    response = client.patch(
+        f"/sessions/{session_id}/checkpoints/{checkpoint['checkpoint_id']}",
+        json={"operator_id": KEEPER_ID},
+    )
+
+    assert response.status_code == 400
+    assert response.json()["detail"] == {
+        "code": "session_checkpoint_update_invalid",
+        "message": "检查点更新请求至少要提供 label 或 note。",
+        "scope": "session_checkpoint_update",
+        "session_id": session_id,
+        "checkpoint_id": checkpoint["checkpoint_id"],
+        "source_session_id": session_id,
+        "operator_id": KEEPER_ID,
+    }
+    assert _list_checkpoints(client, session_id) == checkpoints_before_failure
+
+
+def test_delete_checkpoint_missing_session_returns_structured_404_without_mutating_records(
+    client: TestClient,
+) -> None:
+    session_id = _start_snapshot_session(client)
+    checkpoint = _create_checkpoint(
+        client,
+        session_id,
+        label="待删除检查点",
+        operator_id=KEEPER_ID,
+    )["checkpoint"]
+    checkpoints_before_failure = _list_checkpoints(client, session_id)
+
+    response = client.delete(
+        f"/sessions/session-missing/checkpoints/{checkpoint['checkpoint_id']}",
+    )
+
+    assert response.status_code == 404
+    assert response.json()["detail"] == {
+        "code": "session_checkpoint_session_not_found",
+        "message": "未找到会话 session-missing",
+        "scope": "session_checkpoint_session",
+        "session_id": "session-missing",
+    }
+    assert _list_checkpoints(client, session_id) == checkpoints_before_failure
+
+
+def test_delete_checkpoint_missing_checkpoint_returns_structured_404_without_mutating_records(
+    client: TestClient,
+) -> None:
+    session_id = _start_snapshot_session(client)
+    _create_checkpoint(
+        client,
+        session_id,
+        label="仍应保留",
+        operator_id=KEEPER_ID,
+    )
+    checkpoints_before_failure = _list_checkpoints(client, session_id)
+
+    response = client.delete(
+        f"/sessions/{session_id}/checkpoints/checkpoint-missing",
+    )
+
+    assert response.status_code == 404
+    assert response.json()["detail"] == {
+        "code": "session_checkpoint_not_found",
+        "message": "未找到检查点 checkpoint-missing",
+        "scope": "session_checkpoint_record",
+        "session_id": session_id,
+        "checkpoint_id": "checkpoint-missing",
+        "source_session_id": session_id,
+    }
+    assert _list_checkpoints(client, session_id) == checkpoints_before_failure
 
 
 def test_same_environment_import_with_existing_sources_keeps_warnings_empty(client: TestClient) -> None:

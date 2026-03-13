@@ -367,6 +367,43 @@ def test_request_validation_body_errors_use_structured_422_detail_for_checkpoint
     )
 
 
+def test_request_validation_body_errors_use_structured_422_detail_for_checkpoint_update_endpoint(
+    client: TestClient,
+) -> None:
+    start_response = client.post(
+        "/sessions/start",
+        json={
+            "keeper_name": "KP",
+            "scenario": make_scenario(),
+            "participants": [make_participant("investigator-1", "占位调查员")],
+        },
+    )
+    assert start_response.status_code == 201
+    session_id = start_response.json()["session_id"]
+    checkpoint_response = client.post(
+        f"/sessions/{session_id}/checkpoints",
+        json={"label": "起始点"},
+    )
+    assert checkpoint_response.status_code == 201
+    checkpoint_id = checkpoint_response.json()["checkpoint"]["checkpoint_id"]
+
+    response = client.patch(
+        f"/sessions/{session_id}/checkpoints/{checkpoint_id}",
+        json={"label": ["bad-type"]},
+    )
+
+    assert response.status_code == 422
+    detail = response.json()["detail"]
+    assert detail["code"] == "request_validation_failed"
+    assert detail["scope"] == "request_validation"
+    assert any(
+        error["loc"] == ["body", "label"]
+        and error["type"] == "string_type"
+        and error["input"] == ["bad-type"]
+        for error in detail["errors"]
+    )
+
+
 def test_request_validation_body_errors_use_structured_422_detail_for_rules_endpoint(
     client: TestClient,
 ) -> None:

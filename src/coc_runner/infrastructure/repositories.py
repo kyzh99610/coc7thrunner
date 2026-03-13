@@ -48,6 +48,12 @@ class SessionRepository(Protocol):
     def get_checkpoint(self, source_session_id: str, checkpoint_id: str) -> SessionCheckpoint | None:
         ...
 
+    def save_checkpoint_metadata(self, checkpoint: SessionCheckpoint) -> None:
+        ...
+
+    def delete_checkpoint(self, source_session_id: str, checkpoint_id: str) -> None:
+        ...
+
 
 class SqlAlchemySessionRepository:
     def __init__(self, session_factory) -> None:
@@ -222,6 +228,37 @@ class SqlAlchemySessionRepository:
                 created_at=record.created_at,
                 snapshot_payload=json.loads(record.snapshot_json),
             )
+
+    def save_checkpoint_metadata(self, checkpoint: SessionCheckpoint) -> None:
+        with self.session_factory.begin() as db:
+            statement = (
+                select(SessionCheckpointRecord)
+                .where(
+                    SessionCheckpointRecord.source_session_id == checkpoint.source_session_id,
+                    SessionCheckpointRecord.checkpoint_id == checkpoint.checkpoint_id,
+                )
+                .limit(1)
+            )
+            record = db.execute(statement).scalar_one_or_none()
+            if record is None:
+                raise LookupError(f"checkpoint {checkpoint.checkpoint_id} was not found")
+            record.label = checkpoint.label
+            record.note = checkpoint.note
+
+    def delete_checkpoint(self, source_session_id: str, checkpoint_id: str) -> None:
+        with self.session_factory.begin() as db:
+            statement = (
+                select(SessionCheckpointRecord)
+                .where(
+                    SessionCheckpointRecord.source_session_id == source_session_id,
+                    SessionCheckpointRecord.checkpoint_id == checkpoint_id,
+                )
+                .limit(1)
+            )
+            record = db.execute(statement).scalar_one_or_none()
+            if record is None:
+                raise LookupError(f"checkpoint {checkpoint_id} was not found")
+            db.delete(record)
 
     @staticmethod
     def _serialize_session(session: SessionState) -> str:
