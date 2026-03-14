@@ -731,6 +731,7 @@ def _render_playtest_session_create_page(
         </div>
         <div class="nav-links">
           {_render_session_index_link()}
+          {_render_knowledge_index_link("先看准备资料")}
         </div>
       </section>
       {_render_detail(detail)}

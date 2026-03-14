@@ -15,6 +15,8 @@ def test_playtest_session_create_page_displays_minimal_setup_form(
     assert response.status_code == 200
     html = response.text
     assert "创建新局" in html
+    assert 'href="/playtest/knowledge"' in html
+    assert "先看准备资料" in html
     assert 'action="/playtest/sessions/create"' in html
     assert 'name="keeper_name"' in html
     assert 'type="radio"' in html
