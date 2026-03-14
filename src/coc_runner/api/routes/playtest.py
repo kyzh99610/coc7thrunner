@@ -3,14 +3,15 @@ from __future__ import annotations
 import json
 from html import escape
 from typing import Any, Callable
-from urllib.parse import parse_qsl
+from urllib.parse import parse_qsl, urlencode
 
 from fastapi import APIRouter, Depends, Request, status
 from fastapi.responses import HTMLResponse, RedirectResponse
 from pydantic import ValidationError
 
-from coc_runner.api.dependencies import get_session_service
+from coc_runner.api.dependencies import get_knowledge_service, get_session_service
 from coc_runner.api.playtest_layout import render_playtest_shell
+from coc_runner.application.knowledge_service import KnowledgeService
 from coc_runner.application.session_service import SessionService
 from coc_runner.domain.scenario_examples import (
     blackout_clinic_payload,
@@ -36,6 +37,7 @@ from coc_runner.error_details import (
     extract_error_detail,
     shape_validation_error_items,
 )
+from knowledge.schemas import RuleQueryRequest
 
 
 router = APIRouter(prefix="/playtest", tags=["playtest"])
@@ -1583,10 +1585,18 @@ def _render_checkpoint_summary(checkpoints: list[dict[str, Any]], *, session_id:
 
 def _render_keeper_runtime_assistance_panel(
     runtime_assistance: dict[str, list[dict[str, Any]]] | None,
+    *,
+    session_id: str,
 ) -> str:
     assistance = runtime_assistance or {}
     rule_hints = assistance.get("rule_hints") or []
     knowledge_hints = assistance.get("knowledge_hints") or []
+    default_query_text = str(rule_hints[0].get("title") or "").strip() if rule_hints else ""
+    rules_query_href = (
+        f"/playtest/sessions/{escape(session_id)}/rules?{escape(urlencode({'query_text': default_query_text}), quote=True)}"
+        if default_query_text
+        else f"/playtest/sessions/{escape(session_id)}/rules"
+    )
 
     if rule_hints:
         rule_items: list[str] = []
@@ -1643,7 +1653,10 @@ def _render_keeper_runtime_assistance_panel(
 
     return f"""
       <section class="panel" id="runtime-assistance">
-        <h2>规则与知识辅助</h2>
+        <div class="checkpoint-summary-header">
+          <h2>规则与知识辅助</h2>
+          <a class="action-link" href="{rules_query_href}">更多规则查询</a>
+        </div>
         <div class="summary-grid">
           <article class="summary-card">
             <h3>当前相关规则提示</h3>
@@ -1787,7 +1800,7 @@ def _render_keeper_dashboard_page(
           session_id=session_id,
           operator_id=keeper_id,
       )}
-      {_render_keeper_runtime_assistance_panel(runtime_assistance)}
+      {_render_keeper_runtime_assistance_panel(runtime_assistance, session_id=session_id)}
       {_render_recent_result_panel(session_snapshot=snapshot, keeper_view=current_view)}
       {_render_prompt_jump_targets(active_prompts, session_id=session_id, operator_id=keeper_id)}
       {_render_draft_jump_targets(pending_drafts, session_id=session_id, reviewer_id=keeper_id)}
@@ -1855,6 +1868,95 @@ def _render_playtest_exception(
         detail=detail,
         status_code=_playtest_status_for_exception(exc),
         **render_kwargs,
+    )
+
+
+def _render_rules_query_results(result: dict[str, Any] | None) -> str:
+    if result is None:
+        return '<p class="empty-state">输入一条当前想确认的规则问题，再继续查询。</p>'
+    matched_chunks = result.get("matched_chunks") or []
+    if not matched_chunks:
+        return '<p class="empty-state">当前查询没有命中规则摘要。</p>'
+
+    answer_draft = result.get("chinese_answer_draft")
+    citations = result.get("citations") or []
+    cards: list[str] = []
+    for chunk in matched_chunks[:4]:
+        cards.append(
+            f"""
+            <article class="activity-item">
+              <div class="activity-header">
+                <h3>{escape(str(chunk.get('resolved_topic') or chunk.get('topic_key') or '规则命中'))}</h3>
+              </div>
+              <p>{escape(str(chunk.get('text') or ''))}</p>
+              {
+                  f"<p class=\"meta-line\">引用：{escape(str(chunk.get('short_citation')))}</p>"
+                  if chunk.get("short_citation")
+                  else ""
+              }
+            </article>
+            """
+        )
+    citation_block = (
+        f'<p class="feedback-code">引用：{escape("；".join(str(citation) for citation in citations))}</p>'
+        if citations
+        else ""
+    )
+    answer_block = (
+        f'<section class="feedback feedback-success"><h2>规则查询结果</h2><p>{escape(str(answer_draft))}</p>{citation_block}</section>'
+        if answer_draft
+        else '<section class="feedback feedback-success"><h2>规则查询结果</h2></section>'
+    )
+    return answer_block + '<div class="recent-list">' + "".join(cards) + "</div>"
+
+
+def _render_playtest_rules_query_page(
+    *,
+    session_id: str,
+    session_snapshot: dict[str, Any] | None,
+    query_text: str | None = None,
+    query_result: dict[str, Any] | None = None,
+    detail: dict[str, Any] | str | None = None,
+    status_code: int = status.HTTP_200_OK,
+) -> HTMLResponse:
+    snapshot = session_snapshot or {}
+    current_scene = snapshot.get("current_scene") or {}
+    progress_state = snapshot.get("progress_state") or {}
+    session_status = snapshot.get("status") or SessionStatus.PLANNED.value
+    body = f"""
+      <section class="hero">
+        <h1>规则查询</h1>
+        <div class="hero-meta">
+          <span>session_id: <code>{escape(session_id)}</code></span>
+          <span>当前场景：{escape(str(current_scene.get('title', '未知场景')))}</span>
+          <span>当前 beat：{escape(str(progress_state.get('current_beat') or '无'))}</span>
+          <span>当前状态：{_render_session_status_display(session_status)}</span>
+        </div>
+        <div class="nav-links">
+          {_render_session_index_link()}
+          {_render_launcher_link(session_id)}
+          <a href="/playtest/sessions/{escape(session_id)}/keeper">返回主持人工作台</a>
+        </div>
+      </section>
+      {_render_detail(detail)}
+      <section class="panel">
+        <h2>继续查规则</h2>
+        <form method="post" action="/playtest/sessions/{escape(session_id)}/rules" data-submit-label="查询中...">
+          <label for="query_text">query_text</label>
+          <input id="query_text" name="query_text" type="text" value="{escape(query_text or '', quote=True)}" placeholder="例如：侦察能发现隐藏线索吗" />
+          <button type="submit">查询规则</button>
+        </form>
+      </section>
+      <section class="panel">
+        <h2>命中摘要</h2>
+        {_render_rules_query_results(query_result)}
+      </section>
+    """
+    return _render_shell(
+        title=f"会话 {session_id} 规则查询",
+        body=body,
+        status_code=status_code,
+        include_form_script=True,
     )
 
 
@@ -1959,6 +2061,65 @@ def _render_playtest_launcher_from_service(
     return _render_playtest_launcher_page(
         session_id=session_id,
         session_snapshot=snapshot,
+        detail=detail,
+        status_code=status_code,
+    )
+
+
+def _render_playtest_rules_query_from_service(
+    *,
+    service: SessionService,
+    knowledge_service: KnowledgeService,
+    session_id: str,
+    query_text: str | None = None,
+    query_result: dict[str, Any] | None = None,
+    detail: dict[str, Any] | str | None = None,
+    status_code: int = status.HTTP_200_OK,
+) -> HTMLResponse:
+    try:
+        snapshot = service.snapshot_session(session_id)
+    except LookupError as exc:
+        return _render_playtest_rules_query_page(
+            session_id=session_id,
+            session_snapshot=None,
+            query_text=query_text,
+            query_result=query_result,
+            detail=detail or extract_error_detail(exc),
+            status_code=(
+                status_code
+                if status_code != status.HTTP_200_OK
+                else status.HTTP_404_NOT_FOUND
+            ),
+        )
+
+    if query_result is None and query_text is not None and query_text.strip():
+        try:
+            result = knowledge_service.query_rules(
+                RuleQueryRequest(
+                    query_text=query_text.strip(),
+                    viewer_role=ViewerRole.KEEPER.value,
+                )
+            )
+            query_result = result.model_dump(mode="json")
+        except (ValidationError, LookupError, ValueError) as exc:
+            return _render_playtest_rules_query_page(
+                session_id=session_id,
+                session_snapshot=snapshot,
+                query_text=query_text,
+                query_result=None,
+                detail=(
+                    _build_validation_detail(exc)
+                    if isinstance(exc, ValidationError)
+                    else extract_error_detail(exc)
+                ),
+                status_code=_playtest_status_for_exception(exc),
+            )
+
+    return _render_playtest_rules_query_page(
+        session_id=session_id,
+        session_snapshot=snapshot,
+        query_text=query_text,
+        query_result=query_result,
         detail=detail,
         status_code=status_code,
     )
@@ -2370,6 +2531,54 @@ def keeper_dashboard_page(
     service: SessionService = Depends(get_session_service),
 ) -> HTMLResponse:
     return _render_keeper_dashboard_from_service(service=service, session_id=session_id)
+
+
+@router.get("/sessions/{session_id}/rules", response_class=HTMLResponse)
+def playtest_rules_query_page(
+    session_id: str,
+    query_text: str | None = None,
+    service: SessionService = Depends(get_session_service),
+    knowledge_service: KnowledgeService = Depends(get_knowledge_service),
+) -> HTMLResponse:
+    return _render_playtest_rules_query_from_service(
+        service=service,
+        knowledge_service=knowledge_service,
+        session_id=session_id,
+        query_text=query_text,
+    )
+
+
+@router.post("/sessions/{session_id}/rules", response_class=HTMLResponse)
+async def submit_playtest_rules_query(
+    session_id: str,
+    request: Request,
+    service: SessionService = Depends(get_session_service),
+    knowledge_service: KnowledgeService = Depends(get_knowledge_service),
+) -> HTMLResponse:
+    form = await _read_form_payload(request)
+    query_text = _normalize_form_text(form.get("query_text")) or ""
+    try:
+        query_request = RuleQueryRequest(
+            query_text=query_text,
+            viewer_role=ViewerRole.KEEPER.value,
+        )
+        result = knowledge_service.query_rules(query_request)
+        return _render_playtest_rules_query_from_service(
+            service=service,
+            knowledge_service=knowledge_service,
+            session_id=session_id,
+            query_text=query_text,
+            query_result=result.model_dump(mode="json"),
+        )
+    except (ValidationError, LookupError, ValueError) as exc:
+        return _render_playtest_exception(
+            _render_playtest_rules_query_from_service,
+            exc=exc,
+            service=service,
+            knowledge_service=knowledge_service,
+            session_id=session_id,
+            query_text=query_text,
+        )
 
 
 @router.post("/sessions/{session_id}/keeper/lifecycle", response_class=HTMLResponse)
