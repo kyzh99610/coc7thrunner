@@ -1931,7 +1931,9 @@ def test_apply_character_import_missing_session_returns_structured_404_without_c
     )
 
     assert apply_response.status_code == 404
-    assert apply_response.json()["detail"] == {
+    detail = apply_response.json()["detail"]
+    assert isinstance(detail, dict)
+    assert detail == {
         "code": "character_import_session_not_found",
         "message": "未找到会话 missing-character-import-session",
         "source_id": "character-sheet-template-missing-session",

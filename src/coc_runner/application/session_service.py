@@ -1887,6 +1887,19 @@ class SessionService:
                 **error_context,
             ),
         )
+        if session.status == SessionStatus.COMPLETED:
+            raise ValueError(
+                build_session_action_error_detail(
+                    code="keeper_live_control_invalid",
+                    message=self._message(
+                        "keeper_live_control_completed",
+                        effective_language,
+                    ),
+                    scope="keeper_live_control_session",
+                    session_status=session.status.value,
+                    **error_context,
+                )
+            )
         return session, effective_language, error_context
 
     def _load_keeper_lifecycle_context(
@@ -6639,6 +6652,7 @@ class SessionService:
             "scene_not_found": "未找到场景 {scene_id}",
             "scene_already_revealed": "场景“{title}”已公开",
             "clue_already_revealed": "线索“{title}”已公开",
+            "keeper_live_control_completed": "当前会话已完成，不能继续执行实时控场操作。",
             "state_conflict": "会话状态版本冲突，请重新加载后再试",
             "draft_stale": "草稿 {draft_id} 已过期，当前版本 {current_version} 与草稿版本 {created_at_version} 差距过大",
             "draft_superseded": "草稿 {draft_id} 已被后续草稿取代，不能再生成权威结果",
@@ -6751,6 +6765,7 @@ class SessionService:
             "scene_not_found": "Scene {scene_id} was not found",
             "scene_already_revealed": "Scene {title} is already revealed",
             "clue_already_revealed": "Clue {title} is already revealed",
+            "keeper_live_control_completed": "This session is completed and no longer accepts keeper live control actions.",
             "state_conflict": "Session state version conflict, reload and try again",
             "draft_stale": "Draft {draft_id} is stale because current version {current_version} is too far from draft version {created_at_version}",
             "draft_superseded": "Draft {draft_id} was superseded and cannot create another canonical outcome",

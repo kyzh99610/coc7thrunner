@@ -1,0 +1,88 @@
+from __future__ import annotations
+
+from fastapi.testclient import TestClient
+
+
+def _session_count(client: TestClient) -> int:
+    return len(client.app.state.session_service.list_sessions())
+
+
+def test_playtest_session_create_page_displays_minimal_setup_form(
+    client: TestClient,
+) -> None:
+    response = client.get("/playtest/sessions/create")
+
+    assert response.status_code == 200
+    html = response.text
+    assert "创建新局" in html
+    assert 'action="/playtest/sessions/create"' in html
+    assert 'name="keeper_name"' in html
+    assert 'name="scenario_template"' in html
+    assert 'name="investigator_1_name"' in html
+    assert 'name="investigator_4_name"' in html
+    assert "创建成功后会直接进入 launcher。" in html
+
+
+def test_playtest_session_setup_flow_creates_session_and_redirects_to_launcher(
+    client: TestClient,
+) -> None:
+    session_count_before_create = _session_count(client)
+
+    response = client.post(
+        "/playtest/sessions/create",
+        data={
+            "keeper_name": "新局 KP",
+            "scenario_template": "whispering_guesthouse",
+            "investigator_1_name": "林舟",
+            "investigator_2_name": "周岚",
+            "investigator_3_name": "",
+            "investigator_4_name": "",
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.history
+    assert response.history[0].status_code == 303
+    assert response.url.path.startswith("/playtest/sessions/")
+    assert response.url.path.endswith("/home")
+    new_session_id = response.url.path.split("/")[3]
+    html = response.text
+    assert "Playtest 入口" in html
+    assert f"session_id: <code>{new_session_id}</code>" in html
+    assert "KP：新局 KP" in html
+    assert "雾港旅店的低语" in html
+    assert "林舟" in html
+    assert "周岚" in html
+    assert _session_count(client) == session_count_before_create + 1
+
+    index_response = client.get("/playtest/sessions")
+    assert index_response.status_code == 200
+    assert new_session_id in index_response.text
+    assert f'/playtest/sessions/{new_session_id}/home"' in index_response.text
+
+
+def test_playtest_session_setup_flow_shows_error_without_creating_session_when_no_investigator_names(
+    client: TestClient,
+) -> None:
+    session_count_before_create = _session_count(client)
+
+    response = client.post(
+        "/playtest/sessions/create",
+        data={
+            "keeper_name": "新局 KP",
+            "scenario_template": "whispering_guesthouse",
+            "investigator_1_name": "",
+            "investigator_2_name": "",
+            "investigator_3_name": "",
+            "investigator_4_name": "",
+        },
+    )
+
+    assert response.status_code == 400
+    html = response.text
+    assert "操作失败" in html
+    assert "playtest_session_setup_invalid" in html
+    assert "至少需要填写 1 名调查员。" in html
+    assert 'name="keeper_name"' in html
+    assert "新局 KP" in html
+    assert _session_count(client) == session_count_before_create

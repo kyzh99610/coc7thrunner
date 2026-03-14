@@ -6,12 +6,17 @@ from typing import Any, Callable
 from urllib.parse import parse_qsl
 
 from fastapi import APIRouter, Depends, Request, status
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, RedirectResponse
 from pydantic import ValidationError
 
 from coc_runner.api.dependencies import get_session_service
 from coc_runner.api.playtest_layout import render_playtest_shell
 from coc_runner.application.session_service import SessionService
+from coc_runner.domain.scenario_examples import (
+    blackout_clinic_payload,
+    midnight_archive_payload,
+    whispering_guesthouse_payload,
+)
 from coc_runner.domain.errors import ConflictError
 from coc_runner.domain.models import (
     CreateCheckpointRequest,
@@ -19,6 +24,7 @@ from coc_runner.domain.models import (
     PlayerActionRequest,
     ReviewDraftRequest,
     RestoreCheckpointRequest,
+    SessionStartRequest,
     SessionStatus,
     UpdateSessionLifecycleRequest,
     UpdateCheckpointRequest,
@@ -117,6 +123,37 @@ def _render_launcher_link(session_id: str) -> str:
 
 def _render_session_index_link() -> str:
     return '<a href="/playtest/sessions">返回 session 列表</a>'
+
+
+def _render_session_create_link() -> str:
+    return '<a href="/playtest/sessions/create">创建新局</a>'
+
+
+def _playtest_scenario_templates() -> list[dict[str, Any]]:
+    return [
+        {
+            "template_id": "whispering_guesthouse",
+            "title": "雾港旅店的低语",
+            "builder": whispering_guesthouse_payload,
+        },
+        {
+            "template_id": "midnight_archive",
+            "title": "雨夜档案馆",
+            "builder": midnight_archive_payload,
+        },
+        {
+            "template_id": "blackout_clinic",
+            "title": "停电诊所",
+            "builder": blackout_clinic_payload,
+        },
+    ]
+
+
+def _get_playtest_scenario_template(template_id: str) -> dict[str, Any] | None:
+    for template in _playtest_scenario_templates():
+        if template["template_id"] == template_id:
+            return template
+    return None
 
 
 def _session_status_label(status_value: Any) -> str:
@@ -252,7 +289,7 @@ def _render_playtest_session_index_page(
     status_code: int = status.HTTP_200_OK,
 ) -> HTMLResponse:
     if not sessions:
-        session_cards = '<p class="empty-state">当前还没有 session。先通过 API 创建一局，再从这里进入。</p>'
+        session_cards = '<p class="empty-state">当前还没有 session。先创建一局，再从这里进入。</p>'
     else:
         cards: list[str] = []
         for session in sessions:
@@ -297,7 +334,10 @@ def _render_playtest_session_index_page(
         <h1>Playtest Sessions</h1>
         <div class="hero-meta">
           <span>当前已发现会话数：{escape(str(len(sessions)))}</span>
-          <span>入口只负责列出现有 session，不提供创建或归档操作。</span>
+          <span>可从这里进入已有 session，或创建一局新的 playtest。</span>
+        </div>
+        <div class="nav-links">
+          {_render_session_create_link()}
         </div>
       </section>
       <section class="panel">
@@ -311,6 +351,176 @@ def _render_playtest_session_index_page(
         title="Playtest Sessions",
         body=body,
         status_code=status_code,
+    )
+
+
+def _default_playtest_setup_form_values() -> dict[str, Any]:
+    return {
+        "keeper_name": "",
+        "scenario_template": "whispering_guesthouse",
+        "investigator_names": ["", "", "", ""],
+    }
+
+
+def _normalize_playtest_setup_form_values(form: dict[str, str]) -> dict[str, Any]:
+    values = _default_playtest_setup_form_values()
+    values["keeper_name"] = form.get("keeper_name", "")
+    values["scenario_template"] = form.get(
+        "scenario_template",
+        values["scenario_template"],
+    )
+    values["investigator_names"] = [
+        form.get(f"investigator_{index}_name", "")
+        for index in range(1, 5)
+    ]
+    return values
+
+
+def _build_playtest_setup_error_detail(
+    *,
+    message: str,
+    scenario_template: str | None = None,
+) -> dict[str, Any]:
+    detail_kwargs: dict[str, Any] = {}
+    if scenario_template:
+        detail_kwargs["scenario_template"] = scenario_template
+    return build_structured_error_detail(
+        code="playtest_session_setup_invalid",
+        message=message,
+        scope="playtest_session_setup",
+        **detail_kwargs,
+    )
+
+
+def _build_playtest_setup_character(name: str) -> dict[str, Any]:
+    return {
+        "name": name,
+        "occupation": "调查员",
+        "age": 28,
+        "language_preference": "zh-CN",
+        "attributes": {
+            "strength": 50,
+            "constitution": 55,
+            "size": 60,
+            "dexterity": 65,
+            "appearance": 45,
+            "intelligence": 70,
+            "power": 60,
+            "education": 75,
+        },
+        "skills": {
+            "图书馆使用": 70,
+            "侦查": 60,
+            "心理学": 50,
+        },
+    }
+
+
+def _build_playtest_setup_request(form_values: dict[str, Any]) -> SessionStartRequest:
+    scenario_template = str(form_values.get("scenario_template") or "whispering_guesthouse")
+    template = _get_playtest_scenario_template(scenario_template)
+    if template is None:
+        raise ValueError(
+            _build_playtest_setup_error_detail(
+                message=f"未找到会话模板 {scenario_template}",
+                scenario_template=scenario_template,
+            )
+        )
+    investigator_names = [
+        _normalize_form_text(str(value))
+        for value in form_values.get("investigator_names") or []
+    ]
+    filtered_names = [name for name in investigator_names if name]
+    if not filtered_names:
+        raise ValueError(
+            _build_playtest_setup_error_detail(
+                message="至少需要填写 1 名调查员。",
+                scenario_template=scenario_template,
+            )
+        )
+    participants = [
+        {
+            "actor_id": f"investigator-{index}",
+            "display_name": name,
+            "kind": "human",
+            "character": _build_playtest_setup_character(name),
+        }
+        for index, name in enumerate(filtered_names, start=1)
+    ]
+    return SessionStartRequest.model_validate(
+        {
+            "keeper_name": str(form_values.get("keeper_name") or ""),
+            "scenario": template["builder"](),
+            "participants": participants,
+        }
+    )
+
+
+def _render_playtest_session_create_page(
+    *,
+    form_values: dict[str, Any] | None = None,
+    detail: dict[str, Any] | str | None = None,
+    status_code: int = status.HTTP_200_OK,
+) -> HTMLResponse:
+    values = form_values or _default_playtest_setup_form_values()
+    selected_template = str(values.get("scenario_template") or "whispering_guesthouse")
+    template_options = "".join(
+        f'<option value="{escape(str(template["template_id"]))}"'
+        f'{" selected" if template["template_id"] == selected_template else ""}>'
+        f'{escape(str(template["title"]))}</option>'
+        for template in _playtest_scenario_templates()
+    )
+    investigator_inputs = "".join(
+        f"""
+        <label>
+          调查员 {index}
+          <input
+            type="text"
+            name="investigator_{index}_name"
+            value="{escape(str((values.get('investigator_names') or ["", "", "", ""])[index - 1] or ""))}"
+            {"required" if index == 1 else ""}
+          />
+        </label>
+        """
+        for index in range(1, 5)
+    )
+    body = f"""
+      <section class="hero">
+        <h1>创建新局</h1>
+        <div class="hero-meta">
+          <span>复用内置剧本模板创建 session，不提供 scenario 原始 JSON 编辑。</span>
+        </div>
+        <div class="nav-links">
+          {_render_session_index_link()}
+        </div>
+      </section>
+      {_render_detail(detail)}
+      <section class="panel">
+        <h2>最小 setup</h2>
+        <form method="post" action="/playtest/sessions/create" data-submit-label="创建中...">
+          <label>
+            keeper_name
+            <input type="text" name="keeper_name" value="{escape(str(values.get('keeper_name') or ''))}" required />
+          </label>
+          <label>
+            scenario_template
+            <select name="scenario_template">
+              {template_options}
+            </select>
+          </label>
+          <div class="summary-grid">
+            {investigator_inputs}
+          </div>
+          <p class="help">至少填写 1 名调查员。创建成功后会直接进入 launcher。</p>
+          <button type="submit">创建新局</button>
+        </form>
+      </section>
+    """
+    return _render_shell(
+        title="创建新局",
+        body=body,
+        status_code=status_code,
+        include_form_script=True,
     )
 
 
@@ -1406,6 +1616,7 @@ def _render_keeper_dashboard_page(
           </span>
         </div>
         <div class="nav-links">
+          {_render_session_index_link()}
           {_render_launcher_link(session_id)}
           <a href="/playtest/sessions/{escape(session_id)}">返回检查点页面</a>
           <a href="/sessions/{escape(session_id)}/snapshot">snapshot JSON</a>
@@ -1984,6 +2195,32 @@ def playtest_session_index_page(
     service: SessionService = Depends(get_session_service),
 ) -> HTMLResponse:
     return _render_playtest_session_index_from_service(service=service)
+
+
+@router.get("/sessions/create", response_class=HTMLResponse)
+def playtest_session_create_page() -> HTMLResponse:
+    return _render_playtest_session_create_page()
+
+
+@router.post("/sessions/create", response_class=HTMLResponse)
+async def submit_playtest_session_create(
+    request: Request,
+    service: SessionService = Depends(get_session_service),
+) -> HTMLResponse:
+    form = _normalize_playtest_setup_form_values(await _read_form_payload(request))
+    try:
+        start_request = _build_playtest_setup_request(form)
+        response = service.start_session(start_request)
+        return RedirectResponse(
+            url=f"/playtest/sessions/{response.session_id}/home",
+            status_code=status.HTTP_303_SEE_OTHER,
+        )
+    except (ValidationError, LookupError, ValueError) as exc:
+        return _render_playtest_exception(
+            _render_playtest_session_create_page,
+            exc=exc,
+            form_values=form,
+        )
 
 
 @router.get("/sessions/{session_id}", response_class=HTMLResponse)

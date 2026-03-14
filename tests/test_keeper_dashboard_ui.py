@@ -176,6 +176,7 @@ def test_keeper_dashboard_displays_summary_attention_activity_and_checkpoint_lin
     assert "KP：秦老板看到调查员翻出旧图纸时，应表现出短暂失态。" in html
     assert "KP 草稿：若调查员继续追问秦老板，应准备对话压力。" in html
     assert "账房保留点" in html
+    assert 'href="/playtest/sessions"' in html
     assert f'/playtest/sessions/{session_id}/home"' in html
     assert f'/playtest/sessions/{session_id}"' in html
     assert f'/sessions/{session_id}/snapshot"' in html
@@ -355,6 +356,71 @@ def test_keeper_dashboard_invalid_lifecycle_transition_renders_structured_error_
     assert "操作失败" in html
     assert "session_lifecycle_invalid" in html
     assert "会话状态不能从计划中切换为已暂停" in html
+
+    after_snapshot = _get_snapshot(client, session_id)
+    assert after_snapshot == before_snapshot
+
+
+def test_keeper_dashboard_completed_session_rejects_objective_control_without_mutating_state(
+    client: TestClient,
+) -> None:
+    session_id = _start_keeper_dashboard_session(client)
+    objective_id = "objective.lobby.observe_keeper"
+
+    activate_response = client.post(
+        f"/playtest/sessions/{session_id}/keeper/lifecycle",
+        data={"operator_id": KEEPER_ID, "target_status": "active"},
+    )
+    assert activate_response.status_code == 200
+    complete_response = client.post(
+        f"/playtest/sessions/{session_id}/keeper/lifecycle",
+        data={"operator_id": KEEPER_ID, "target_status": "completed"},
+    )
+    assert complete_response.status_code == 200
+    before_snapshot = _get_snapshot(client, session_id)
+
+    response = client.post(
+        f"/playtest/sessions/{session_id}/keeper/objectives/{objective_id}/complete",
+        data={"operator_id": KEEPER_ID},
+    )
+
+    assert response.status_code == 400
+    html = response.text
+    assert "操作失败" in html
+    assert "keeper_live_control_invalid" in html
+    assert "当前会话已完成，不能继续执行实时控场操作。" in html
+
+    after_snapshot = _get_snapshot(client, session_id)
+    assert after_snapshot == before_snapshot
+
+
+def test_keeper_dashboard_completed_session_rejects_beat_progression_without_mutating_state(
+    client: TestClient,
+) -> None:
+    session_id = _start_keeper_progression_session(client)
+
+    activate_response = client.post(
+        f"/playtest/sessions/{session_id}/keeper/lifecycle",
+        data={"operator_id": KEEPER_ID, "target_status": "active"},
+    )
+    assert activate_response.status_code == 200
+    complete_response = client.post(
+        f"/playtest/sessions/{session_id}/keeper/lifecycle",
+        data={"operator_id": KEEPER_ID, "target_status": "completed"},
+    )
+    assert complete_response.status_code == 200
+    before_snapshot = _get_snapshot(client, session_id)
+
+    response = client.post(
+        f"/playtest/sessions/{session_id}/keeper/beats/beat-beta/advance",
+        data={"operator_id": KEEPER_ID},
+    )
+
+    assert response.status_code == 400
+    html = response.text
+    assert "操作失败" in html
+    assert "keeper_live_control_invalid" in html
+    assert "当前会话已完成，不能继续执行实时控场操作。" in html
 
     after_snapshot = _get_snapshot(client, session_id)
     assert after_snapshot == before_snapshot
