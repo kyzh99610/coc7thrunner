@@ -106,3 +106,31 @@ def test_playtest_session_setup_flow_shows_error_without_creating_session_when_n
     assert "新局 KP" in html
     assert "当前选择：停电诊所" in html
     assert _session_count(client) == session_count_before_create
+
+
+def test_playtest_session_setup_flow_shows_structured_error_for_unknown_scenario_template(
+    client: TestClient,
+) -> None:
+    session_count_before_create = _session_count(client)
+
+    response = client.post(
+        "/playtest/sessions/create",
+        data={
+            "keeper_name": "新局 KP",
+            "playtest_group": "模板错误回归",
+            "scenario_template": "missing-template",
+            "investigator_1_name": "林舟",
+            "investigator_2_name": "",
+            "investigator_3_name": "",
+            "investigator_4_name": "",
+        },
+    )
+
+    assert response.status_code == 400
+    html = response.text
+    assert "操作失败" in html
+    assert "playtest_session_setup_invalid" in html
+    assert "未找到会话模板 missing-template" in html
+    assert "模板错误回归" in html
+    assert 'name="scenario_template"' in html
+    assert _session_count(client) == session_count_before_create

@@ -169,3 +169,15 @@ def test_playtest_rules_query_page_invalid_submission_shows_structured_error(
     assert "操作失败" in html
     assert "request_validation_failed" in html
     assert "规则查询" in html
+
+
+def test_playtest_rules_query_page_missing_session_renders_structured_error_page(
+    client: TestClient,
+) -> None:
+    response = client.get("/playtest/sessions/session-missing/rules")
+
+    assert response.status_code == 404
+    html = response.text
+    assert "规则查询" in html
+    assert "操作失败" in html
+    assert "session_snapshot_session_not_found" in html

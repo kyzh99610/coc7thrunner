@@ -2,22 +2,31 @@ from __future__ import annotations
 
 import json
 from html import escape
-from typing import Any, Callable
-from urllib.parse import parse_qsl, urlencode
+from typing import Any
+from urllib.parse import urlencode
 
 from fastapi import APIRouter, Depends, Request, status
-from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi.responses import HTMLResponse
 from pydantic import ValidationError
 
 from coc_runner.api.dependencies import get_knowledge_service, get_session_service
-from coc_runner.api.playtest_layout import render_playtest_shell
+from coc_runner.api.routes.playtest_knowledge import router as playtest_knowledge_router
+from coc_runner.api.routes.playtest_setup import router as playtest_setup_router
+from coc_runner.api.routes.playtest_shared import (
+    _build_validation_detail,
+    _format_datetime,
+    _normalize_form_text,
+    _playtest_status_for_exception,
+    _read_form_payload,
+    _render_detail,
+    _render_knowledge_index_link,
+    _render_playtest_exception,
+    _render_session_create_link,
+    _render_session_index_link,
+    _render_shell,
+)
 from coc_runner.application.knowledge_service import KnowledgeService
 from coc_runner.application.session_service import SessionService
-from coc_runner.domain.scenario_examples import (
-    blackout_clinic_payload,
-    midnight_archive_payload,
-    whispering_guesthouse_payload,
-)
 from coc_runner.domain.errors import ConflictError
 from coc_runner.domain.models import (
     CreateCheckpointRequest,
@@ -25,7 +34,6 @@ from coc_runner.domain.models import (
     PlayerActionRequest,
     ReviewDraftRequest,
     RestoreCheckpointRequest,
-    SessionStartRequest,
     SessionStatus,
     UpdateSessionLifecycleRequest,
     UpdateCheckpointRequest,
@@ -33,47 +41,15 @@ from coc_runner.domain.models import (
     ViewerRole,
 )
 from coc_runner.error_details import (
-    build_knowledge_error_detail,
     build_structured_error_detail,
     extract_error_detail,
-    shape_validation_error_items,
 )
 from knowledge.schemas import RuleQueryRequest
 
 
 router = APIRouter(prefix="/playtest", tags=["playtest"])
-
-
-def _render_detail(detail: dict[str, Any] | str | None) -> str:
-    if detail is None:
-        return ""
-    if isinstance(detail, str):
-        return (
-            '<section class="feedback feedback-error">'
-            "<h2>操作失败</h2>"
-            f"<p>{escape(detail)}</p>"
-            "</section>"
-        )
-
-    lines = [f"<p>{escape(detail.get('message', '操作失败'))}</p>"]
-    code = detail.get("code")
-    if code:
-        lines.append(f'<p class="feedback-code">code: {escape(str(code))}</p>')
-    for error in detail.get("errors", []):
-        message = error.get("message")
-        if message:
-            lines.append(f"<li>{escape(str(message))}</li>")
-    extra_list = "".join(
-        line for line in lines[2:]
-    )
-    return (
-        '<section class="feedback feedback-error">'
-        "<h2>操作失败</h2>"
-        f"{lines[0]}"
-        f"{lines[1] if len(lines) > 1 else ''}"
-        f"{f'<ul>{extra_list}</ul>' if extra_list else ''}"
-        "</section>"
-    )
+router.include_router(playtest_knowledge_router)
+router.include_router(playtest_setup_router)
 
 
 def _render_restore_result(restore_result: dict[str, Any] | None) -> str:
@@ -124,54 +100,6 @@ def _render_launcher_link(session_id: str) -> str:
     return f'<a href="/playtest/sessions/{escape(session_id)}/home">返回 playtest 入口</a>'
 
 
-def _render_session_index_link() -> str:
-    return '<a href="/playtest/sessions">返回 session 列表</a>'
-
-
-def _render_knowledge_index_link(label: str = "查看准备资料") -> str:
-    return f'<a href="/playtest/knowledge">{escape(label)}</a>'
-
-
-def _render_session_create_link() -> str:
-    return '<a href="/playtest/sessions/create">创建新局</a>'
-
-
-def _playtest_scenario_templates() -> list[dict[str, Any]]:
-    return [
-        {
-            "template_id": "whispering_guesthouse",
-            "title": "雾港旅店的低语",
-            "summary": "旅店老板封死地下储物间，调查员要在封闭空间里顺着低语与旧图纸找出真相。",
-            "experience_hint": "偏封闭空间调查",
-            "recommended_party": "推荐 1-2 名调查员",
-            "builder": whispering_guesthouse_payload,
-        },
-        {
-            "template_id": "midnight_archive",
-            "title": "雨夜档案馆",
-            "summary": "雨夜档案馆里散着烧焦便笺与借阅记录，适合沿文书与地下异常慢慢下探。",
-            "experience_hint": "偏档案探索",
-            "recommended_party": "推荐 1-3 名调查员",
-            "builder": midnight_archive_payload,
-        },
-        {
-            "template_id": "blackout_clinic",
-            "title": "停电诊所",
-            "summary": "停电诊所里的病历、封锁区与失控异变更强调压迫感与医疗现场推进。",
-            "experience_hint": "偏医疗异变",
-            "recommended_party": "推荐 2-4 名调查员",
-            "builder": blackout_clinic_payload,
-        },
-    ]
-
-
-def _get_playtest_scenario_template(template_id: str) -> dict[str, Any] | None:
-    for template in _playtest_scenario_templates():
-        if template["template_id"] == template_id:
-            return template
-    return None
-
-
 def _session_status_label(status_value: Any) -> str:
     normalized = str(status_value or SessionStatus.PLANNED.value)
     return {
@@ -185,43 +113,6 @@ def _session_status_label(status_value: Any) -> str:
 def _playtest_group_label(group_value: Any, *, empty_label: str = "未分组") -> str:
     normalized = str(group_value or "").strip()
     return normalized or empty_label
-
-
-def _knowledge_kind_label(kind_value: Any) -> str:
-    return {
-        "rulebook": "规则书",
-        "character_sheet": "人物卡",
-        "house_rule": "房规",
-        "module": "模组资料",
-        "campaign_note": "跑团笔记",
-    }.get(str(kind_value), str(kind_value or "未知"))
-
-
-def _knowledge_format_label(format_value: Any) -> str:
-    return {
-        "plain_text": "纯文本",
-        "markdown": "Markdown",
-        "pdf": "PDF",
-        "json": "JSON",
-        "csv": "CSV",
-        "xlsx": "XLSX",
-    }.get(str(format_value), str(format_value or "未知"))
-
-
-def _knowledge_ingest_status_label(status_value: Any) -> str:
-    return {
-        "registered": "已登记",
-        "ingested": "已入库",
-    }.get(str(status_value), str(status_value or "未知"))
-
-
-def _summarize_text_preview(text_value: Any, *, limit: int = 180) -> str:
-    text = " ".join(str(text_value or "").split())
-    if not text:
-        return ""
-    if len(text) <= limit:
-        return text
-    return text[: limit - 1].rstrip() + "…"
 
 
 def _render_session_status_display(status_value: Any) -> str:
@@ -436,379 +327,6 @@ def _render_playtest_session_index_page(
     )
 
 
-def _render_playtest_knowledge_index_page(
-    *,
-    sources: list[dict[str, Any]],
-    status_code: int = status.HTTP_200_OK,
-) -> HTMLResponse:
-    if not sources:
-        source_cards = '<p class="empty-state">当前还没有已登记的知识资料。</p>'
-    else:
-        cards: list[str] = []
-        for source in sources:
-            source_id = str(source.get("source_id") or "")
-            cards.append(
-                f"""
-                <article class="attention-card">
-                  <div class="activity-header">
-                    <h3>{escape(str(source.get('source_title_zh') or source_id or '未命名资料'))}</h3>
-                    <span class="activity-meta">{escape(_knowledge_ingest_status_label(source.get('ingest_status')))}</span>
-                  </div>
-                  <p class="meta-line">source_id: <code>{escape(source_id)}</code></p>
-                  <p class="meta-line">类型：{escape(_knowledge_kind_label(source.get('source_kind')))}</p>
-                  <p class="meta-line">格式：{escape(_knowledge_format_label(source.get('source_format')))}</p>
-                  <p class="meta-line">chunk_count：<span class="mono">{escape(str(source.get('chunk_count', 0)))}</span></p>
-                  <p class="meta-line">最后更新时间：{escape(_format_datetime(source.get('updated_at') or source.get('registered_at') or ''))}</p>
-                  {
-                      '<p class="meta-line">包含人物卡提取结果</p>'
-                      if source.get("character_sheet_extraction")
-                      else ''
-                  }
-                  <div class="quick-actions">
-                    <a class="action-link" href="/playtest/knowledge/{escape(source_id)}">查看资料详情</a>
-                  </div>
-                </article>
-                """
-            )
-        source_cards = "".join(cards)
-    body = f"""
-      <section class="hero">
-        <h1>准备资料</h1>
-        <div class="hero-meta">
-          <span>当前已登记资料数：{escape(str(len(sources)))}</span>
-          <span>这里列出当前可用于准备与跑团参考的知识资料。</span>
-        </div>
-        <div class="nav-links">
-          {_render_session_index_link()}
-        </div>
-      </section>
-      <section class="panel">
-        <h2>Knowledge Sources</h2>
-        <div class="attention-grid">
-          {source_cards}
-        </div>
-      </section>
-    """
-    return _render_shell(
-        title="准备资料",
-        body=body,
-        status_code=status_code,
-    )
-
-
-def _render_playtest_knowledge_source_page(
-    *,
-    source_id: str,
-    source: dict[str, Any] | None,
-    preview_chunks: list[dict[str, Any]],
-    detail: dict[str, Any] | str | None = None,
-    status_code: int = status.HTTP_200_OK,
-) -> HTMLResponse:
-    source_state = source or {}
-    normalized_text_preview = _summarize_text_preview(
-        source_state.get("normalized_text") or source_state.get("raw_text"),
-        limit=260,
-    )
-    extraction = source_state.get("character_sheet_extraction") or {}
-    summary_text = normalized_text_preview
-    if not summary_text and extraction:
-        investigator_name = extraction.get("investigator_name") or "未命名调查员"
-        occupation = extraction.get("occupation") or "未标注职业"
-        skill_count = len(extraction.get("skills") or {})
-        summary_text = (
-            f"人物卡提取：{investigator_name} / {occupation} / 已识别 {skill_count} 项技能。"
-        )
-    preview_cards: str
-    if preview_chunks:
-        cards: list[str] = []
-        for chunk in preview_chunks:
-            cards.append(
-                f"""
-                <article class="activity-item">
-                  <div class="activity-header">
-                    <h3>{escape(str(chunk.get('title_zh') or chunk.get('resolved_topic') or chunk.get('topic_key') or '资料片段'))}</h3>
-                  </div>
-                  <p>{escape(_summarize_text_preview(chunk.get('content') or chunk.get('text'), limit=180))}</p>
-                  {
-                      f'<p class="meta-line">引用：{escape(str(chunk.get("short_citation")))}</p>'
-                      if chunk.get("short_citation")
-                      else ''
-                  }
-                </article>
-                """
-            )
-        preview_cards = '<div class="recent-list">' + "".join(cards) + "</div>"
-    elif extraction:
-        preview_cards = f"""
-        <div class="recent-list">
-          <article class="activity-item">
-            <div class="activity-header">
-              <h3>人物卡提取结果</h3>
-            </div>
-            <p>调查员：{escape(str(extraction.get('investigator_name') or '未命名调查员'))}</p>
-            <p class="meta-line">职业：{escape(str(extraction.get('occupation') or '未标注职业'))}</p>
-            <p class="meta-line">技能数：<span class="mono">{escape(str(len(extraction.get('skills') or {})))}</span></p>
-          </article>
-        </div>
-        """
-    else:
-        preview_cards = '<p class="empty-state">当前资料还没有可展示的内容预览。</p>'
-    body = f"""
-      <section class="hero">
-        <h1>{escape(str(source_state.get('source_title_zh') or source_id or '资料详情'))}</h1>
-        <div class="hero-meta">
-          <span>source_id: <code>{escape(source_id)}</code></span>
-          <span>类型：{escape(_knowledge_kind_label(source_state.get('source_kind')))}</span>
-          <span>格式：{escape(_knowledge_format_label(source_state.get('source_format')))}</span>
-          <span>状态：{escape(_knowledge_ingest_status_label(source_state.get('ingest_status')))}</span>
-        </div>
-        <div class="nav-links">
-          {_render_session_index_link()}
-          {_render_knowledge_index_link("返回资料列表")}
-        </div>
-      </section>
-      {_render_detail(detail)}
-      <section class="panel">
-        <h2>资料摘要</h2>
-        <div class="summary-grid">
-          <article class="summary-card">
-            <h3>基本信息</h3>
-            <p class="meta-line">source_id: <code>{escape(source_id)}</code></p>
-            <p class="meta-line">类型：{escape(_knowledge_kind_label(source_state.get('source_kind')))}</p>
-            <p class="meta-line">格式：{escape(_knowledge_format_label(source_state.get('source_format')))}</p>
-            <p class="meta-line">规则集：<span class="mono">{escape(str(source_state.get('ruleset') or 'coc7e'))}</span></p>
-            <p class="meta-line">chunk_count：<span class="mono">{escape(str(source_state.get('chunk_count', 0)))}</span></p>
-            <p class="meta-line">最后更新时间：{escape(_format_datetime(source_state.get('updated_at') or source_state.get('registered_at') or ''))}</p>
-          </article>
-          <article class="summary-card">
-            <h3>摘要</h3>
-            {
-                f'<p>{escape(summary_text)}</p>'
-                if summary_text
-                else '<p class="empty-state">当前资料还没有可显示的摘要。</p>'
-            }
-          </article>
-        </div>
-      </section>
-      <section class="panel">
-        <h2>内容预览</h2>
-        {preview_cards}
-      </section>
-    """
-    return _render_shell(
-        title=f"知识资料 {source_id}",
-        body=body,
-        status_code=status_code,
-    )
-
-
-def _default_playtest_setup_form_values() -> dict[str, Any]:
-    return {
-        "keeper_name": "",
-        "playtest_group": "",
-        "scenario_template": "whispering_guesthouse",
-        "investigator_names": ["", "", "", ""],
-    }
-
-
-def _normalize_playtest_setup_form_values(form: dict[str, str]) -> dict[str, Any]:
-    values = _default_playtest_setup_form_values()
-    values["keeper_name"] = form.get("keeper_name", "")
-    values["playtest_group"] = form.get("playtest_group", "")
-    values["scenario_template"] = form.get(
-        "scenario_template",
-        values["scenario_template"],
-    )
-    values["investigator_names"] = [
-        form.get(f"investigator_{index}_name", "")
-        for index in range(1, 5)
-    ]
-    return values
-
-
-def _build_playtest_setup_error_detail(
-    *,
-    message: str,
-    scenario_template: str | None = None,
-) -> dict[str, Any]:
-    detail_kwargs: dict[str, Any] = {}
-    if scenario_template:
-        detail_kwargs["scenario_template"] = scenario_template
-    return build_structured_error_detail(
-        code="playtest_session_setup_invalid",
-        message=message,
-        scope="playtest_session_setup",
-        **detail_kwargs,
-    )
-
-
-def _build_playtest_setup_character(name: str) -> dict[str, Any]:
-    return {
-        "name": name,
-        "occupation": "调查员",
-        "age": 28,
-        "language_preference": "zh-CN",
-        "attributes": {
-            "strength": 50,
-            "constitution": 55,
-            "size": 60,
-            "dexterity": 65,
-            "appearance": 45,
-            "intelligence": 70,
-            "power": 60,
-            "education": 75,
-        },
-        "skills": {
-            "图书馆使用": 70,
-            "侦查": 60,
-            "心理学": 50,
-        },
-    }
-
-
-def _build_playtest_setup_request(form_values: dict[str, Any]) -> SessionStartRequest:
-    scenario_template = str(form_values.get("scenario_template") or "whispering_guesthouse")
-    template = _get_playtest_scenario_template(scenario_template)
-    if template is None:
-        raise ValueError(
-            _build_playtest_setup_error_detail(
-                message=f"未找到会话模板 {scenario_template}",
-                scenario_template=scenario_template,
-            )
-        )
-    investigator_names = [
-        _normalize_form_text(str(value))
-        for value in form_values.get("investigator_names") or []
-    ]
-    filtered_names = [name for name in investigator_names if name]
-    if not filtered_names:
-        raise ValueError(
-            _build_playtest_setup_error_detail(
-                message="至少需要填写 1 名调查员。",
-                scenario_template=scenario_template,
-            )
-        )
-    participants = [
-        {
-            "actor_id": f"investigator-{index}",
-            "display_name": name,
-            "kind": "human",
-            "character": _build_playtest_setup_character(name),
-        }
-        for index, name in enumerate(filtered_names, start=1)
-    ]
-    return SessionStartRequest.model_validate(
-        {
-            "keeper_name": str(form_values.get("keeper_name") or ""),
-            "playtest_group": _normalize_form_text(str(form_values.get("playtest_group") or "")),
-            "scenario": template["builder"](),
-            "participants": participants,
-        }
-    )
-
-
-def _render_playtest_session_create_page(
-    *,
-    form_values: dict[str, Any] | None = None,
-    detail: dict[str, Any] | str | None = None,
-    status_code: int = status.HTTP_200_OK,
-) -> HTMLResponse:
-    values = form_values or _default_playtest_setup_form_values()
-    selected_template = str(values.get("scenario_template") or "whispering_guesthouse")
-    selected_template_meta = _get_playtest_scenario_template(selected_template) or _playtest_scenario_templates()[0]
-    template_cards = "".join(
-        f"""
-        <label class="attention-card">
-          <input
-            type="radio"
-            name="scenario_template"
-            value="{escape(str(template["template_id"]))}"
-            {"checked" if template["template_id"] == selected_template else ""}
-          />
-          <h3>{escape(str(template["title"]))}</h3>
-          <p>{escape(str(template["summary"]))}</p>
-          <p class="meta-line">
-            {escape(str(template["experience_hint"]))}
-            · {escape(str(template["recommended_party"]))}
-          </p>
-          {
-              '<p class="meta-line"><strong>当前选择</strong></p>'
-              if template["template_id"] == selected_template
-              else ''
-          }
-        </label>
-        """
-        for template in _playtest_scenario_templates()
-    )
-    investigator_inputs = "".join(
-        f"""
-        <label>
-          调查员 {index}
-          <input
-            type="text"
-            name="investigator_{index}_name"
-            value="{escape(str((values.get('investigator_names') or ["", "", "", ""])[index - 1] or ""))}"
-            {"required" if index == 1 else ""}
-          />
-        </label>
-        """
-        for index in range(1, 5)
-    )
-    body = f"""
-      <section class="hero">
-        <h1>创建新局</h1>
-        <div class="hero-meta">
-          <span>复用内置剧本模板创建 session，不提供 scenario 原始 JSON 编辑。</span>
-        </div>
-        <div class="nav-links">
-          {_render_session_index_link()}
-          {_render_knowledge_index_link("先看准备资料")}
-        </div>
-      </section>
-      {_render_detail(detail)}
-      <section class="panel">
-        <h2>最小 setup</h2>
-        <form method="post" action="/playtest/sessions/create" data-submit-label="创建中...">
-          <label>
-            keeper_name
-            <input type="text" name="keeper_name" value="{escape(str(values.get('keeper_name') or ''))}" required />
-          </label>
-          <label>
-            playtest_group（可选）
-            <input type="text" name="playtest_group" value="{escape(str(values.get('playtest_group') or ''))}" placeholder="例如：旅店线压力测试" />
-          </label>
-          <p class="help">可用来标识同一轮测试、同一批 session 或同一主题实验。</p>
-          <fieldset>
-            <legend>scenario_template</legend>
-            <div class="attention-grid">
-              {template_cards}
-            </div>
-          </fieldset>
-          <article class="summary-card">
-            <h3>当前选中模板</h3>
-            <p><strong>当前选择：{escape(str(selected_template_meta["title"]))}</strong></p>
-            <p>{escape(str(selected_template_meta["summary"]))}</p>
-            <p class="meta-line">
-              {escape(str(selected_template_meta["experience_hint"]))}
-              · {escape(str(selected_template_meta["recommended_party"]))}
-            </p>
-          </article>
-          <div class="summary-grid">
-            {investigator_inputs}
-          </div>
-          <p class="help">至少填写 1 名调查员。创建成功后会直接进入 launcher。</p>
-          <button type="submit">创建新局</button>
-        </form>
-      </section>
-    """
-    return _render_shell(
-        title="创建新局",
-        body=body,
-        status_code=status_code,
-        include_form_script=True,
-    )
-
-
 def _render_notice(notice: str | None) -> str:
     if not notice:
         return ""
@@ -817,27 +335,6 @@ def _render_notice(notice: str | None) -> str:
         f"<p>{escape(notice)}</p>"
         "</section>"
     )
-
-
-def _render_shell(
-    *,
-    title: str,
-    body: str,
-    status_code: int = status.HTTP_200_OK,
-    include_form_script: bool = False,
-) -> HTMLResponse:
-    return render_playtest_shell(
-        title=title,
-        body=body,
-        status_code=status_code,
-        include_form_script=include_form_script,
-    )
-
-
-def _format_datetime(value: Any) -> str:
-    if hasattr(value, "isoformat"):
-        return str(value.isoformat())
-    return str(value)
 
 
 def _render_checkpoint_list(checkpoints: list[dict[str, Any]], *, session_id: str, keeper_id: str) -> str:
@@ -2066,57 +1563,6 @@ def _render_keeper_dashboard_page(
         include_form_script=True,
     )
 
-
-def _normalize_form_text(value: str | None) -> str | None:
-    if value is None:
-        return None
-    return value.strip()
-
-
-async def _read_form_payload(request: Request) -> dict[str, str]:
-    body = (await request.body()).decode("utf-8")
-    return {key: value for key, value in parse_qsl(body, keep_blank_values=True)}
-
-
-def _build_validation_detail(exc: ValidationError) -> dict[str, Any]:
-    return build_structured_error_detail(
-        code="request_validation_failed",
-        message="请求参数校验失败",
-        scope="request_validation",
-        errors=shape_validation_error_items(exc.errors()),
-    )
-
-
-def _playtest_status_for_exception(exc: Exception) -> int:
-    if isinstance(exc, ValidationError):
-        return status.HTTP_422_UNPROCESSABLE_ENTITY
-    if isinstance(exc, LookupError):
-        return status.HTTP_404_NOT_FOUND
-    if isinstance(exc, PermissionError):
-        return status.HTTP_403_FORBIDDEN
-    if isinstance(exc, ConflictError):
-        return status.HTTP_409_CONFLICT
-    return status.HTTP_400_BAD_REQUEST
-
-
-def _render_playtest_exception(
-    render_page: Callable[..., HTMLResponse],
-    *,
-    exc: ValidationError | LookupError | PermissionError | ConflictError | ValueError,
-    **render_kwargs: Any,
-) -> HTMLResponse:
-    detail = (
-        _build_validation_detail(exc)
-        if isinstance(exc, ValidationError)
-        else extract_error_detail(exc)
-    )
-    return render_page(
-        detail=detail,
-        status_code=_playtest_status_for_exception(exc),
-        **render_kwargs,
-    )
-
-
 def _render_rules_query_results(result: dict[str, Any] | None) -> str:
     if result is None:
         return '<p class="empty-state">输入一条当前想确认的规则问题，再继续查询。</p>'
@@ -2204,19 +1650,6 @@ def _render_playtest_rules_query_page(
         status_code=status_code,
         include_form_script=True,
     )
-
-
-def _playtest_knowledge_detail(exc: BaseException, *, source_id: str) -> dict[str, Any] | str:
-    detail = extract_error_detail(exc)
-    if isinstance(detail, dict):
-        return detail
-    return build_knowledge_error_detail(
-        code="knowledge_source_not_found",
-        message=str(detail),
-        scope="knowledge_source_lookup",
-        source_id=source_id,
-    )
-
 
 def _load_page_context(service: SessionService, session_id: str) -> tuple[dict[str, Any] | None, list[dict[str, Any]]]:
     snapshot: dict[str, Any] | None = None
@@ -2381,48 +1814,6 @@ def _render_playtest_rules_query_from_service(
         detail=detail,
         status_code=status_code,
     )
-
-
-def _render_playtest_knowledge_index_from_service(
-    *,
-    knowledge_service: KnowledgeService,
-    status_code: int = status.HTTP_200_OK,
-) -> HTMLResponse:
-    return _render_playtest_knowledge_index_page(
-        sources=[source.model_dump(mode="json") for source in knowledge_service.list_sources()],
-        status_code=status_code,
-    )
-
-
-def _render_playtest_knowledge_source_from_service(
-    *,
-    knowledge_service: KnowledgeService,
-    source_id: str,
-    detail: dict[str, Any] | str | None = None,
-    status_code: int = status.HTTP_200_OK,
-) -> HTMLResponse:
-    try:
-        source, preview_chunks = knowledge_service.get_source_preview(source_id, limit=3)
-    except LookupError as exc:
-        return _render_playtest_knowledge_source_page(
-            source_id=source_id,
-            source=None,
-            preview_chunks=[],
-            detail=detail or _playtest_knowledge_detail(exc, source_id=source_id),
-            status_code=(
-                status_code
-                if status_code != status.HTTP_200_OK
-                else status.HTTP_404_NOT_FOUND
-            ),
-        )
-    return _render_playtest_knowledge_source_page(
-        source_id=source_id,
-        source=source.model_dump(mode="json"),
-        preview_chunks=[chunk.model_dump(mode="json") for chunk in preview_chunks],
-        detail=detail,
-        status_code=status_code,
-    )
-
 
 def _render_playtest_session_index_from_service(
     *,
@@ -2902,58 +2293,11 @@ def _render_investigator_page_from_service(
         status_code=status_code,
     )
 
-
-@router.get("/knowledge", response_class=HTMLResponse)
-def playtest_knowledge_index_page(
-    knowledge_service: KnowledgeService = Depends(get_knowledge_service),
-) -> HTMLResponse:
-    return _render_playtest_knowledge_index_from_service(
-        knowledge_service=knowledge_service,
-    )
-
-
-@router.get("/knowledge/{source_id}", response_class=HTMLResponse)
-def playtest_knowledge_source_page(
-    source_id: str,
-    knowledge_service: KnowledgeService = Depends(get_knowledge_service),
-) -> HTMLResponse:
-    return _render_playtest_knowledge_source_from_service(
-        knowledge_service=knowledge_service,
-        source_id=source_id,
-    )
-
-
 @router.get("/sessions", response_class=HTMLResponse)
 def playtest_session_index_page(
     service: SessionService = Depends(get_session_service),
 ) -> HTMLResponse:
     return _render_playtest_session_index_from_service(service=service)
-
-
-@router.get("/sessions/create", response_class=HTMLResponse)
-def playtest_session_create_page() -> HTMLResponse:
-    return _render_playtest_session_create_page()
-
-
-@router.post("/sessions/create", response_class=HTMLResponse)
-async def submit_playtest_session_create(
-    request: Request,
-    service: SessionService = Depends(get_session_service),
-) -> HTMLResponse:
-    form = _normalize_playtest_setup_form_values(await _read_form_payload(request))
-    try:
-        start_request = _build_playtest_setup_request(form)
-        response = service.start_session(start_request)
-        return RedirectResponse(
-            url=f"/playtest/sessions/{response.session_id}/home",
-            status_code=status.HTTP_303_SEE_OTHER,
-        )
-    except (ValidationError, LookupError, ValueError) as exc:
-        return _render_playtest_exception(
-            _render_playtest_session_create_page,
-            exc=exc,
-            form_values=form,
-        )
 
 
 @router.get("/sessions/{session_id}", response_class=HTMLResponse)
