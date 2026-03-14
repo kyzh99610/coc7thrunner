@@ -726,6 +726,69 @@ def _render_keeper_live_control_panel(
         else '<p class="empty-state">当前没有待公开的线索。</p>'
     )
 
+    current_beat_id = str((keeper_view.get("progress_state") or {}).get("current_beat") or "")
+    current_scene = keeper_view.get("current_scene") or {}
+    beats_by_id = {
+        str(beat.get("beat_id")): beat
+        for beat in scenario.get("beats") or []
+        if isinstance(beat, dict) and beat.get("beat_id")
+    }
+    current_beat = beats_by_id.get(current_beat_id)
+    next_beat_candidates: list[dict[str, Any]] = []
+    if current_beat is not None:
+        for next_beat_id in current_beat.get("next_beats") or []:
+            candidate = beats_by_id.get(str(next_beat_id))
+            if candidate is None:
+                continue
+            candidate_status = str(candidate.get("status") or "locked")
+            if candidate_status in {"blocked", "completed", "current"}:
+                continue
+            next_beat_candidates.append(candidate)
+    beat_block = (
+        f"""
+        <article class="summary-card" id="beat-progression">
+          <h3>Beat 推进</h3>
+          <div class="activity-item" id="beat-progression-current-{escape(current_beat_id)}">
+            <div class="activity-header">
+              <h4>{escape(str(current_beat.get('title') if current_beat else '无'))}</h4>
+              <span class="activity-meta">{escape(str(current_scene.get('title', '未知场景')))}</span>
+            </div>
+            <p class="meta-line">当前 beat：<span class="mono">{escape(current_beat_id or '无')}</span></p>
+          </div>
+          <h4>合法下一步</h4>
+          <div class="recent-list">
+            {
+                ''.join(
+                    f'''
+                    <article class="activity-item" id="beat-progression-option-{escape(str(candidate.get("beat_id", "")))}">
+                      <div class="activity-header">
+                        <h4>{escape(str(candidate.get('title', candidate.get('beat_id', '未命名剧情节点'))))}</h4>
+                        <span class="activity-meta">{escape(str(candidate.get('status', 'locked')))}</span>
+                      </div>
+                      <p class="meta-line">beat_id: <span class="mono">{escape(str(candidate.get('beat_id', '')))}</span></p>
+                      <form method="post" action="/playtest/sessions/{escape(session_id)}/keeper/beats/{escape(str(candidate.get('beat_id', '')))}/advance#beat-progression" data-submit-label="提交中...">
+                        <input type="hidden" name="operator_id" value="{escape(operator_id)}" />
+                        <button type="submit">推进到此 beat</button>
+                      </form>
+                    </article>
+                    '''
+                    for candidate in next_beat_candidates
+                )
+                if next_beat_candidates
+                else '<p class="empty-state">当前 beat 没有可手动推进的合法下一节点。</p>'
+            }
+          </div>
+        </article>
+        """
+        if current_beat is not None
+        else """
+        <article class="summary-card" id="beat-progression">
+          <h3>Beat 推进</h3>
+          <p class="empty-state">当前没有正在推进的 beat。</p>
+        </article>
+        """
+    )
+
     return f"""
       <section class="panel" id="live-control">
         <h2>实时控场</h2>
@@ -743,6 +806,7 @@ def _render_keeper_live_control_panel(
             <h4>待公开线索</h4>
             <div class="recent-list">{clue_block}</div>
           </article>
+          {beat_block}
         </div>
       </section>
     """
@@ -755,6 +819,11 @@ def _resolve_live_control_jump_target(payload: dict[str, Any]) -> tuple[str, str
         if objective_id:
             return f"#objective-control-{objective_id}", "回到 objective 控制"
         return "#objective-control", "回到 objective 控制"
+    if control_type == "advance_beat":
+        target_beat_id = payload.get("target_beat_id")
+        if target_beat_id:
+            return f"#beat-progression-current-{target_beat_id}", "回到 beat 推进"
+        return "#beat-progression", "回到 beat 推进"
     if control_type in {"reveal_clue", "reveal_scene"}:
         return "#reveal-control", "回到 reveal 控制"
     return None
@@ -869,7 +938,13 @@ def _render_recent_result_panel(
         for event in reversed((keeper_view.get("visible_events") or [])[-10:])
         if isinstance(event.get("structured_payload"), dict)
         and (event.get("structured_payload") or {}).get("control_type")
-        in {"objective_complete", "objective_reopen", "reveal_clue", "reveal_scene"}
+        in {
+            "objective_complete",
+            "objective_reopen",
+            "advance_beat",
+            "reveal_clue",
+            "reveal_scene",
+        }
     ]
 
     if not prompt_results and not visible_reviewed and not rejected_outcomes and not live_control_events:
@@ -1754,6 +1829,34 @@ async def reopen_objective_via_keeper_dashboard(
         response = service.reopen_keeper_objective(
             session_id,
             objective_id,
+            KeeperLiveControlRequest(operator_id=form.get("operator_id", "")),
+        )
+        return _render_keeper_dashboard_from_service(
+            service=service,
+            session_id=session_id,
+            notice=response.message,
+        )
+    except (ValidationError, LookupError, PermissionError, ConflictError, ValueError) as exc:
+        return _render_playtest_exception(
+            _render_keeper_dashboard_from_service,
+            exc=exc,
+            service=service,
+            session_id=session_id,
+        )
+
+
+@router.post("/sessions/{session_id}/keeper/beats/{beat_id}/advance", response_class=HTMLResponse)
+async def advance_beat_via_keeper_dashboard(
+    session_id: str,
+    beat_id: str,
+    request: Request,
+    service: SessionService = Depends(get_session_service),
+) -> HTMLResponse:
+    form = await _read_form_payload(request)
+    try:
+        response = service.advance_keeper_beat(
+            session_id,
+            beat_id,
             KeeperLiveControlRequest(operator_id=form.get("operator_id", "")),
         )
         return _render_keeper_dashboard_from_service(

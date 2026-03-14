@@ -5,7 +5,7 @@ import shutil
 from fastapi.testclient import TestClient
 
 from coc_runner.domain.scenario_examples import whispering_guesthouse_payload
-from tests.helpers import make_participant
+from tests.helpers import make_participant, make_scenario
 from tests.test_session_import import (
     KEEPER_ID,
     _create_checkpoint,
@@ -28,6 +28,78 @@ def _start_keeper_dashboard_session(client: TestClient) -> str:
                 make_participant("investigator-1", "林舟"),
                 make_participant("ai-1", "测试调查员", kind="ai"),
             ],
+        },
+    )
+    assert response.status_code == 201
+    return response.json()["session_id"]
+
+
+def _keeper_progression_scenario() -> dict:
+    return make_scenario(
+        clues=[
+            {
+                "clue_id": "clue-alpha",
+                "title": "前台异常痕迹",
+                "text": "它说明前台留言曾被人改动过。",
+                "visibility_scope": "kp_only",
+            },
+            {
+                "clue_id": "clue-beta",
+                "title": "账册缺页编号",
+                "text": "它说明缺页记录来自二楼住客登记册。",
+                "visibility_scope": "kp_only",
+            },
+        ],
+        beats=[
+            {
+                "beat_id": "beat-alpha",
+                "title": "观察前台记账桌",
+                "start_unlocked": True,
+                "complete_conditions": {
+                    "clue_discovered": {"clue_id": "clue-alpha"}
+                },
+                "next_beats": ["beat-beta"],
+            },
+            {
+                "beat_id": "beat-beta",
+                "title": "检查账册缺页",
+                "complete_conditions": {
+                    "clue_discovered": {"clue_id": "clue-beta"}
+                },
+                "next_beats": ["beat-gamma"],
+            },
+            {
+                "beat_id": "beat-gamma",
+                "title": "侧线测试节点",
+            },
+        ],
+    )
+
+
+def _keeper_no_next_beat_scenario() -> dict:
+    return make_scenario(
+        beats=[
+            {
+                "beat_id": "beat-solo",
+                "title": "孤立当前节点",
+                "start_unlocked": True,
+            }
+        ],
+    )
+
+
+def _start_keeper_progression_session(
+    client: TestClient,
+    *,
+    scenario: dict | None = None,
+) -> str:
+    response = client.post(
+        "/sessions/start",
+        json={
+            "keeper_name": "KP",
+            "keeper_id": KEEPER_ID,
+            "scenario": scenario or _keeper_progression_scenario(),
+            "participants": [make_participant("investigator-1", "林舟")],
         },
     )
     assert response.status_code == 201
@@ -170,6 +242,95 @@ def test_keeper_dashboard_shows_live_control_entries_and_investigator_page_does_
     assert "实时控场" not in investigator_html
     assert "/keeper/objectives/" not in investigator_html
     assert "/keeper/reveal/" not in investigator_html
+
+
+def test_keeper_dashboard_shows_beat_progression_block_with_legal_next_beat_candidates(
+    client: TestClient,
+) -> None:
+    session_id = _start_keeper_progression_session(client)
+
+    keeper_response = client.get(f"/playtest/sessions/{session_id}/keeper")
+    investigator_response = client.get(
+        f"/playtest/sessions/{session_id}/investigator/investigator-1"
+    )
+
+    assert keeper_response.status_code == 200
+    keeper_html = keeper_response.text
+    assert "Beat 推进" in keeper_html
+    assert 'id="beat-progression"' in keeper_html
+    assert 'id="beat-progression-current-beat-alpha"' in keeper_html
+    assert "当前 beat：beat-alpha" in keeper_html
+    assert "观察前台记账桌" in keeper_html
+    assert "检查账册缺页" in keeper_html
+    assert (
+        f'/playtest/sessions/{session_id}/keeper/beats/beat-beta/advance#beat-progression"'
+        in keeper_html
+    )
+    assert "推进到此 beat" in keeper_html
+    assert f"/playtest/sessions/{session_id}/keeper/beats/beat-gamma/advance" not in keeper_html
+
+    assert investigator_response.status_code == 200
+    investigator_html = investigator_response.text
+    assert "Beat 推进" not in investigator_html
+    assert "/keeper/beats/" not in investigator_html
+
+
+def test_keeper_dashboard_advances_to_legal_next_beat_and_rerenders_with_feedback(
+    client: TestClient,
+) -> None:
+    session_id = _start_keeper_progression_session(client)
+
+    response = client.post(
+        f"/playtest/sessions/{session_id}/keeper/beats/beat-beta/advance",
+        data={"operator_id": KEEPER_ID},
+    )
+
+    assert response.status_code == 200
+    html = response.text
+    assert "已推进到下一 beat：检查账册缺页" in html
+    assert "当前 beat：beat-beta" in html
+    assert 'id="beat-progression-current-beat-beta"' in html
+    assert "最近控场结果" in html
+    assert "回到 beat 推进" in html
+    assert 'href="#beat-progression-current-beat-beta"' in html
+
+
+def test_keeper_dashboard_shows_empty_beat_progression_state_when_no_next_beat_candidates(
+    client: TestClient,
+) -> None:
+    session_id = _start_keeper_progression_session(
+        client,
+        scenario=_keeper_no_next_beat_scenario(),
+    )
+
+    response = client.get(f"/playtest/sessions/{session_id}/keeper")
+
+    assert response.status_code == 200
+    html = response.text
+    assert "Beat 推进" in html
+    assert "当前 beat 没有可手动推进的合法下一节点。" in html
+    assert "/keeper/beats/" not in html
+
+
+def test_keeper_dashboard_invalid_beat_progression_renders_structured_error_without_mutating_state(
+    client: TestClient,
+) -> None:
+    session_id = _start_keeper_progression_session(client)
+    before_snapshot = _get_snapshot(client, session_id)
+
+    response = client.post(
+        f"/playtest/sessions/{session_id}/keeper/beats/beat-gamma/advance",
+        data={"operator_id": KEEPER_ID},
+    )
+
+    assert response.status_code == 400
+    html = response.text
+    assert "操作失败" in html
+    assert "keeper_live_control_invalid" in html
+    assert "当前 beat 不能直接推进到“侧线测试节点”" in html
+
+    after_snapshot = _get_snapshot(client, session_id)
+    assert after_snapshot == before_snapshot
 
 
 def test_keeper_dashboard_objective_complete_and_reopen_controls_rerender_with_feedback(

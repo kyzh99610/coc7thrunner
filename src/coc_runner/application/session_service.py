@@ -1967,6 +1967,27 @@ class SessionService:
             ]
         session.progress_state.last_updated_at = current_time
 
+    def _list_keeper_next_beats(
+        self,
+        session: SessionState,
+    ) -> list[ScenarioBeat]:
+        current_beat_id = session.progress_state.current_beat
+        if current_beat_id is None:
+            return []
+        current_beat = self._find_beat(session.scenario.beats, current_beat_id)
+        candidates: list[ScenarioBeat] = []
+        for next_beat_id in current_beat.next_beats:
+            target_beat = self._find_beat(session.scenario.beats, next_beat_id)
+            target_status = self._resolve_beat_status(session, next_beat_id)
+            if target_status in {
+                ScenarioBeatStatus.BLOCKED,
+                ScenarioBeatStatus.COMPLETED,
+                ScenarioBeatStatus.CURRENT,
+            }:
+                continue
+            candidates.append(target_beat)
+        return candidates
+
     def complete_keeper_objective(
         self,
         session_id: str,
@@ -2459,6 +2480,161 @@ class SessionService:
             language_preference=effective_language,
             target_id=scene.scene_id,
             target_type="scene",
+        )
+
+    def advance_keeper_beat(
+        self,
+        session_id: str,
+        beat_id: str,
+        request: KeeperLiveControlRequest,
+    ) -> KeeperLiveControlResponse:
+        session, effective_language, error_context = self._load_keeper_live_control_context(
+            session_id,
+            request,
+        )
+        error_context["beat_id"] = beat_id
+        try:
+            current_beat_id = session.progress_state.current_beat
+            if current_beat_id is None:
+                raise ValueError(
+                    self._message("beat_progression_not_available", effective_language)
+                )
+            current_beat = self._find_beat(session.scenario.beats, current_beat_id)
+            target_beat = self._find_beat(session.scenario.beats, beat_id)
+            if target_beat.beat_id == current_beat.beat_id:
+                raise ValueError(
+                    self._message(
+                        "beat_already_current",
+                        effective_language,
+                        title=target_beat.title,
+                    )
+                )
+            next_beat_ids = {
+                candidate.beat_id for candidate in self._list_keeper_next_beats(session)
+            }
+            if target_beat.beat_id not in next_beat_ids:
+                raise ValueError(
+                    self._message(
+                        "keeper_live_control_beat_not_reachable",
+                        effective_language,
+                        title=target_beat.title,
+                    )
+                )
+            current_time = datetime.now(timezone.utc)
+            expected_version = session.state_version
+            trigger_action_id = f"keeper-control-{uuid4().hex}"
+            if target_beat.beat_id not in session.progress_state.unlocked_beats:
+                session.progress_state.unlocked_beats.append(target_beat.beat_id)
+            session.progress_state.current_beat = target_beat.beat_id
+            self._sync_beat_statuses(session)
+            self._register_beat_objective(
+                session=session,
+                beat=target_beat,
+                source_action_id=trigger_action_id,
+                trigger_reason=self._message(
+                    "beat_reason_keeper_selected_next",
+                    effective_language,
+                ),
+            )
+            session.progress_state.transition_history.append(
+                self._build_beat_transition_record(
+                    beat=target_beat,
+                    transition=ScenarioBeatTransitionType.CURRENT,
+                    summary=self._message(
+                        "beat_current",
+                        effective_language,
+                        title=target_beat.title,
+                    ),
+                    trigger_action_id=trigger_action_id,
+                    reason=self._message(
+                        "beat_reason_keeper_selected_next",
+                        effective_language,
+                    ),
+                    consequence_refs=[
+                        f"next_beat:{current_beat.beat_id}->{target_beat.beat_id}"
+                    ],
+                )
+            )
+            event_text = self._message(
+                "keeper_live_control_beat_advanced",
+                effective_language,
+                title=target_beat.title,
+            )
+            self._append_keeper_live_control_record(
+                session=session,
+                operator_id=request.operator_id,
+                current_time=current_time,
+                language=effective_language,
+                target_id=target_beat.beat_id,
+                control_type="advance_beat",
+                event_text=event_text,
+                details={
+                    "source_beat_id": current_beat.beat_id,
+                    "source_beat_title": current_beat.title,
+                    "target_beat_id": target_beat.beat_id,
+                    "target_beat_title": target_beat.title,
+                    "result": "current",
+                },
+            )
+            session.state_version += 1
+            session.updated_at = current_time
+            self._save_session(
+                session,
+                expected_version=expected_version,
+                reason="keeper_live_control",
+                language=effective_language,
+            )
+        except LookupError as exc:
+            message = exc.args[0] if exc.args and isinstance(exc.args[0], str) else self._message(
+                "beat_not_found",
+                effective_language,
+                beat_id=beat_id,
+            )
+            raise LookupError(
+                build_session_action_error_detail(
+                    code="keeper_live_control_beat_not_found",
+                    message=message,
+                    scope="keeper_live_control_beat",
+                    **error_context,
+                )
+            ) from exc
+        except ConflictError as exc:
+            message = exc.args[0] if exc.args and isinstance(exc.args[0], str) else self._message(
+                "state_conflict",
+                effective_language,
+            )
+            raise ConflictError(
+                build_session_action_error_detail(
+                    code="keeper_live_control_state_conflict",
+                    message=message,
+                    scope="keeper_live_control_state",
+                    **error_context,
+                )
+            ) from exc
+        except ValueError as exc:
+            message = exc.args[0] if exc.args and isinstance(exc.args[0], str) else self._message(
+                "beat_progression_not_available",
+                effective_language,
+            )
+            raise ValueError(
+                build_session_action_error_detail(
+                    code="keeper_live_control_invalid",
+                    message=message,
+                    scope="keeper_live_control_beat",
+                    **error_context,
+                )
+            ) from exc
+        return KeeperLiveControlResponse(
+            message=self._message(
+                "keeper_live_control_beat_advanced",
+                effective_language,
+                title=target_beat.title,
+            ),
+            session_id=session.session_id,
+            state_version=session.state_version,
+            language_preference=effective_language,
+            target_id=target_beat.beat_id,
+            target_type="beat",
         )
 
     def review_draft_action(
@@ -6286,6 +6462,9 @@ class SessionService:
             "objective_not_found": "未找到目标 {objective_id}",
             "objective_already_completed": "目标“{objective}”已经完成",
             "objective_not_completed": "目标“{objective}”当前尚未完成",
+            "beat_not_found": "未找到剧情节点 {beat_id}",
+            "beat_progression_not_available": "当前 beat 没有可手动推进的合法下一节点。",
+            "beat_already_current": "剧情节点“{title}”已经是当前推进节点",
             "scene_not_found": "未找到场景 {scene_id}",
             "scene_already_revealed": "场景“{title}”已公开",
             "clue_already_revealed": "线索“{title}”已公开",
@@ -6314,6 +6493,8 @@ class SessionService:
             "execution_scene_objective_completed": "场景目标“{objective}”已标记完成",
             "keeper_live_control_objective_completed": "已手动标记目标完成：{objective}",
             "keeper_live_control_objective_reopened": "已取消目标完成状态：{objective}",
+            "keeper_live_control_beat_advanced": "已推进到下一 beat：{title}",
+            "keeper_live_control_beat_not_reachable": "当前 beat 不能直接推进到“{title}”",
             "keeper_live_control_clue_revealed": "已公开线索：{title}",
             "keeper_live_control_scene_revealed": "已公开场景：{title}",
             "scene_objective_completed_by_beat": "由剧情节点“{title}”推进完成",
@@ -6334,6 +6515,7 @@ class SessionService:
             "beat_reason_followup_unlocked": "由剧情节点“{title}”的后续结果解锁",
             "beat_reason_followup_blocked": "由剧情节点“{title}”的后续结果阻塞",
             "beat_reason_current_selected": "已切换到当前可推进节点",
+            "beat_reason_keeper_selected_next": "由 KP 手动推进到下一个合法节点",
             "beat_reason_fail_forward_non_blocking": "核心线索触发失手前进，避免单点卡死",
             "unsupported_review_decision": "不支持的审核决定：{decision}",
         }
@@ -6389,6 +6571,9 @@ class SessionService:
             "objective_not_found": "Objective {objective_id} was not found",
             "objective_already_completed": "Objective {objective} is already completed",
             "objective_not_completed": "Objective {objective} is not completed",
+            "beat_not_found": "Scenario beat {beat_id} was not found",
+            "beat_progression_not_available": "There is no legal next beat available for manual progression.",
+            "beat_already_current": "Scenario beat {title} is already current",
             "scene_not_found": "Scene {scene_id} was not found",
             "scene_already_revealed": "Scene {title} is already revealed",
             "clue_already_revealed": "Clue {title} is already revealed",
@@ -6417,6 +6602,8 @@ class SessionService:
             "execution_scene_objective_completed": "Scene objective {objective} marked complete",
             "keeper_live_control_objective_completed": "Keeper marked objective complete: {objective}",
             "keeper_live_control_objective_reopened": "Keeper reopened objective: {objective}",
+            "keeper_live_control_beat_advanced": "Keeper advanced to beat: {title}",
+            "keeper_live_control_beat_not_reachable": "Current beat cannot advance directly to {title}",
             "keeper_live_control_clue_revealed": "Keeper revealed clue: {title}",
             "keeper_live_control_scene_revealed": "Keeper revealed scene: {title}",
             "scene_objective_completed_by_beat": "completed by beat {title}",
@@ -6437,6 +6624,7 @@ class SessionService:
             "beat_reason_followup_unlocked": "follow-up consequence from beat {title}",
             "beat_reason_followup_blocked": "blocking consequence from beat {title}",
             "beat_reason_current_selected": "selected as the next current beat",
+            "beat_reason_keeper_selected_next": "keeper manually selected the next legal beat",
             "beat_reason_fail_forward_non_blocking": "core clue fail-forward prevented a single-point failure",
             "unsupported_review_decision": "Unsupported review decision: {decision}",
         }
