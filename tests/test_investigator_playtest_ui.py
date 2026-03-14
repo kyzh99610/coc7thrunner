@@ -50,6 +50,7 @@ def test_investigator_playtest_page_opens_with_summary_and_action_form(
     assert "提交玩家行动" in html
     assert 'name="action_text"' in html
     assert "提交行动" in html
+    assert f'/playtest/sessions/{session_id}/home"' in html
     assert "最近可见事件" in html
     assert "会话已创建：迷雾中的旅店" in html
     assert "KP 提示" not in html

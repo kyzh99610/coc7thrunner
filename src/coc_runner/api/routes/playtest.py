@@ -336,6 +336,10 @@ def _render_checkpoint_import_result(import_result: dict[str, Any] | None) -> st
     )
 
 
+def _render_launcher_link(session_id: str) -> str:
+    return f'<a href="/playtest/sessions/{escape(session_id)}/home">返回 playtest 入口</a>'
+
+
 def _render_playtest_launcher_page(
     *,
     session_id: str,
@@ -560,6 +564,7 @@ def _render_checkpoint_page(
     nav_links = (
         f"""
         <div class="nav-links">
+          {_render_launcher_link(session_id)}
           <a href="/playtest/sessions/{escape(session_id)}/keeper">打开主持人工作台</a>
           <a href="/sessions/{escape(session_id)}/snapshot">查看 snapshot JSON</a>
           <a href="/sessions/{escape(session_id)}/export">查看 export JSON</a>
@@ -1158,6 +1163,7 @@ def _render_keeper_dashboard_page(
           </span>
         </div>
         <div class="nav-links">
+          {_render_launcher_link(session_id)}
           <a href="/playtest/sessions/{escape(session_id)}">返回检查点页面</a>
           <a href="/sessions/{escape(session_id)}/snapshot">snapshot JSON</a>
           <a href="/sessions/{escape(session_id)}/export">export JSON</a>
@@ -1485,6 +1491,9 @@ def _render_investigator_page(
           <span>viewer_id: <code>{escape(viewer_id)}</code></span>
           <span>当前场景：{escape(str(scene_title))}</span>
           <span>版本：{escape(str(state_version))}</span>
+        </div>
+        <div class="nav-links">
+          {_render_launcher_link(session_id)}
         </div>
       </section>
       {_render_notice(notice)}

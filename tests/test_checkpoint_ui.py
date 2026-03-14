@@ -42,6 +42,7 @@ def test_session_checkpoint_page_displays_list_and_actions(client: TestClient) -
     assert "未写备注" in html
     assert str(checkpoint["source_session_version"]) in html
     assert checkpoint["created_by"] in html
+    assert f'/playtest/sessions/{session_id}/home"' in html
     assert f'/playtest/sessions/{session_id}/checkpoints/{checkpoint["checkpoint_id"]}/export' in html
     assert f"/playtest/sessions/{session_id}/checkpoints/{checkpoint['checkpoint_id']}/restore" in html
     assert "恢复会创建一个新的 session，不会覆盖当前 session。确定继续吗？" in html

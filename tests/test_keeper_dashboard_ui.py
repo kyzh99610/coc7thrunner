@@ -101,6 +101,7 @@ def test_keeper_dashboard_displays_summary_attention_activity_and_checkpoint_lin
     assert "KP：秦老板看到调查员翻出旧图纸时，应表现出短暂失态。" in html
     assert "KP 草稿：若调查员继续追问秦老板，应准备对话压力。" in html
     assert "账房保留点" in html
+    assert f'/playtest/sessions/{session_id}/home"' in html
     assert f'/playtest/sessions/{session_id}"' in html
     assert f'/sessions/{session_id}/snapshot"' in html
     assert f'/sessions/{session_id}/export"' in html
