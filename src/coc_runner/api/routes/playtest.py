@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 from html import escape
-from typing import Any
+from typing import Any, Callable
 from urllib.parse import parse_qsl
 
 from fastapi import APIRouter, Depends, Request, status
@@ -10,6 +10,7 @@ from fastapi.responses import HTMLResponse
 from pydantic import ValidationError
 
 from coc_runner.api.dependencies import get_session_service
+from coc_runner.api.playtest_layout import render_playtest_shell
 from coc_runner.application.session_service import SessionService
 from coc_runner.domain.errors import ConflictError
 from coc_runner.domain.models import (
@@ -29,235 +30,6 @@ from coc_runner.error_details import (
 
 
 router = APIRouter(prefix="/playtest", tags=["playtest"])
-
-_PLAYTEST_PAGE_STYLES = """
-:root {
-  color-scheme: light;
-  --bg: #f2efe7;
-  --card: #fffdf8;
-  --ink: #2b2118;
-  --muted: #6b5b4d;
-  --line: #d7cab8;
-  --accent: #6c4f3d;
-  --danger: #8b2f2f;
-  --success: #245c3d;
-  --warn: #7a5b11;
-}
-body {
-  margin: 0;
-  font-family: "Microsoft YaHei UI", "Noto Sans SC", sans-serif;
-  background: linear-gradient(180deg, #efe7d6 0%, var(--bg) 100%);
-  color: var(--ink);
-}
-main {
-  max-width: 1040px;
-  margin: 0 auto;
-  padding: 32px 20px 48px;
-}
-.hero, .panel, .checkpoint-card, .feedback, .attention-card, .activity-item, .checkpoint-summary-item {
-  background: var(--card);
-  border: 1px solid var(--line);
-  border-radius: 16px;
-  box-shadow: 0 10px 30px rgba(43, 33, 24, 0.06);
-}
-.hero, .panel, .feedback {
-  padding: 20px;
-  margin-bottom: 18px;
-}
-.hero h1 {
-  margin: 0 0 8px;
-  font-size: 28px;
-}
-.hero-meta, .nav-links, .quick-actions {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 10px 18px;
-  color: var(--muted);
-}
-.nav-links {
-  margin-top: 14px;
-}
-.panel h2, .panel h3 {
-  margin-top: 0;
-}
-form {
-  display: grid;
-  gap: 12px;
-}
-label {
-  display: grid;
-  gap: 6px;
-  font-size: 14px;
-}
-input, textarea, button {
-  font: inherit;
-}
-input, textarea {
-  border: 1px solid var(--line);
-  border-radius: 10px;
-  padding: 10px 12px;
-  background: #fff;
-}
-button, .action-link {
-  border: none;
-  border-radius: 999px;
-  padding: 10px 14px;
-  background: var(--accent);
-  color: #fff;
-  cursor: pointer;
-  text-decoration: none;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-}
-button.danger, .action-link.danger {
-  background: var(--danger);
-}
-button:disabled {
-  opacity: 0.6;
-  cursor: wait;
-}
-.checkpoint-list, .attention-grid, .recent-list, .checkpoint-summary-list {
-  display: grid;
-  gap: 14px;
-}
-.dashboard-grid {
-  display: grid;
-  gap: 18px;
-}
-.summary-grid {
-  display: grid;
-  gap: 14px;
-  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
-}
-.summary-card {
-  padding: 16px;
-  border: 1px solid var(--line);
-  border-radius: 14px;
-  background: rgba(255, 255, 255, 0.75);
-}
-.summary-card h3 {
-  margin: 0 0 10px;
-  font-size: 15px;
-}
-.summary-card ul, .recent-list ul, .attention-card ul, .warning-box ul {
-  margin: 0;
-  padding-left: 18px;
-}
-.summary-card li, .recent-list li, .attention-card li, .warning-box li {
-  margin-bottom: 6px;
-}
-.checkpoint-card, .attention-card, .activity-item, .checkpoint-summary-item {
-  padding: 18px;
-}
-.checkpoint-card-header {
-  display: flex;
-  justify-content: space-between;
-  gap: 16px;
-  margin-bottom: 16px;
-}
-.checkpoint-card-header h3 {
-  margin: 0 0 6px;
-}
-.checkpoint-meta {
-  display: grid;
-  gap: 6px;
-  min-width: 180px;
-  color: var(--muted);
-  font-size: 13px;
-  text-align: right;
-}
-.checkpoint-actions {
-  display: grid;
-  gap: 14px;
-}
-.checkpoint-secondary-actions {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 10px;
-}
-.feedback-success {
-  border-color: rgba(36, 92, 61, 0.25);
-}
-.feedback-error {
-  border-color: rgba(139, 47, 47, 0.25);
-}
-.feedback-code, .muted, .empty-state, .help, .meta-line, .activity-meta {
-  color: var(--muted);
-}
-.warning-box {
-  margin-top: 14px;
-  padding: 14px;
-  border-radius: 12px;
-  background: rgba(122, 91, 17, 0.08);
-  color: var(--warn);
-}
-.warning-box h3, .warning-box p {
-  margin-top: 0;
-}
-.status-pill {
-  display: inline-flex;
-  align-items: center;
-  padding: 4px 10px;
-  border-radius: 999px;
-  background: rgba(108, 79, 61, 0.12);
-  color: var(--accent);
-  font-size: 13px;
-}
-.status-pill.warn {
-  background: rgba(122, 91, 17, 0.12);
-  color: var(--warn);
-}
-.activity-item h3, .attention-card h3, .checkpoint-summary-item h3 {
-  margin: 0 0 8px;
-  font-size: 16px;
-}
-.checkpoint-summary-item p, .attention-card p, .activity-item p {
-  margin: 0 0 8px;
-}
-.checkpoint-summary-header, .activity-header {
-  display: flex;
-  justify-content: space-between;
-  gap: 12px;
-  align-items: baseline;
-}
-code, .mono {
-  background: rgba(43, 33, 24, 0.08);
-  padding: 2px 6px;
-  border-radius: 6px;
-}
-a {
-  color: var(--accent);
-}
-@media (max-width: 720px) {
-  .checkpoint-card-header, .checkpoint-summary-header, .activity-header {
-    display: grid;
-  }
-  .checkpoint-meta {
-    text-align: left;
-    min-width: 0;
-  }
-}
-"""
-
-_PLAYTEST_FORM_SCRIPT = """
-document.querySelectorAll("form[data-submit-label]").forEach((form) => {
-  form.addEventListener("submit", (event) => {
-    const confirmMessage = form.dataset.confirm;
-    if (confirmMessage && !window.confirm(confirmMessage)) {
-      event.preventDefault();
-      return;
-    }
-    const button = form.querySelector("button[type='submit']");
-    if (!button) {
-      return;
-    }
-    button.disabled = true;
-    button.dataset.originalText = button.textContent;
-    button.textContent = form.dataset.submitLabel || "处理中...";
-  });
-});
-"""
 
 
 def _render_detail(detail: dict[str, Any] | str | None) -> str:
@@ -455,23 +227,12 @@ def _render_shell(
     status_code: int = status.HTTP_200_OK,
     include_form_script: bool = False,
 ) -> HTMLResponse:
-    script = f"<script>{_PLAYTEST_FORM_SCRIPT}</script>" if include_form_script else ""
-    html = f"""
-    <!doctype html>
-    <html lang="zh-CN">
-      <head>
-        <meta charset="utf-8" />
-        <meta name="viewport" content="width=device-width, initial-scale=1" />
-        <title>{escape(title)}</title>
-        <style>{_PLAYTEST_PAGE_STYLES}</style>
-      </head>
-      <body>
-        <main>{body}</main>
-        {script}
-      </body>
-    </html>
-    """
-    return HTMLResponse(content=html, status_code=status_code)
+    return render_playtest_shell(
+        title=title,
+        body=body,
+        status_code=status_code,
+        include_form_script=include_form_script,
+    )
 
 
 def _format_datetime(value: Any) -> str:
@@ -1245,6 +1006,36 @@ def _build_validation_detail(exc: ValidationError) -> dict[str, Any]:
     )
 
 
+def _playtest_status_for_exception(exc: Exception) -> int:
+    if isinstance(exc, ValidationError):
+        return status.HTTP_422_UNPROCESSABLE_ENTITY
+    if isinstance(exc, LookupError):
+        return status.HTTP_404_NOT_FOUND
+    if isinstance(exc, PermissionError):
+        return status.HTTP_403_FORBIDDEN
+    if isinstance(exc, ConflictError):
+        return status.HTTP_409_CONFLICT
+    return status.HTTP_400_BAD_REQUEST
+
+
+def _render_playtest_exception(
+    render_page: Callable[..., HTMLResponse],
+    *,
+    exc: ValidationError | LookupError | PermissionError | ConflictError | ValueError,
+    **render_kwargs: Any,
+) -> HTMLResponse:
+    detail = (
+        _build_validation_detail(exc)
+        if isinstance(exc, ValidationError)
+        else extract_error_detail(exc)
+    )
+    return render_page(
+        detail=detail,
+        status_code=_playtest_status_for_exception(exc),
+        **render_kwargs,
+    )
+
+
 def _load_page_context(service: SessionService, session_id: str) -> tuple[dict[str, Any] | None, list[dict[str, Any]]]:
     snapshot: dict[str, Any] | None = None
     snapshot_error: LookupError | None = None
@@ -1717,41 +1508,14 @@ async def submit_player_action_via_investigator_ui(
             notice=response.message,
             action_result=response.model_dump(mode="json"),
         )
-    except ValidationError as exc:
-        return _render_investigator_page_from_service(
+    except (ValidationError, LookupError, ConflictError, ValueError) as exc:
+        return _render_playtest_exception(
+            _render_investigator_page_from_service,
+            exc=exc,
             service=service,
             session_id=session_id,
             viewer_id=viewer_id,
-            detail=_build_validation_detail(exc),
             action_text=action_text,
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-        )
-    except LookupError as exc:
-        return _render_investigator_page_from_service(
-            service=service,
-            session_id=session_id,
-            viewer_id=viewer_id,
-            detail=extract_error_detail(exc),
-            action_text=action_text,
-            status_code=status.HTTP_404_NOT_FOUND,
-        )
-    except ConflictError as exc:
-        return _render_investigator_page_from_service(
-            service=service,
-            session_id=session_id,
-            viewer_id=viewer_id,
-            detail=extract_error_detail(exc),
-            action_text=action_text,
-            status_code=status.HTTP_409_CONFLICT,
-        )
-    except ValueError as exc:
-        return _render_investigator_page_from_service(
-            service=service,
-            session_id=session_id,
-            viewer_id=viewer_id,
-            detail=extract_error_detail(exc),
-            action_text=action_text,
-            status_code=status.HTTP_400_BAD_REQUEST,
         )
 
 
@@ -1782,40 +1546,12 @@ async def update_keeper_prompt_via_dashboard(
             session_id=session_id,
             notice=notice,
         )
-    except ValidationError as exc:
-        return _render_keeper_dashboard_from_service(
+    except (ValidationError, LookupError, PermissionError, ConflictError, ValueError) as exc:
+        return _render_playtest_exception(
+            _render_keeper_dashboard_from_service,
+            exc=exc,
             service=service,
             session_id=session_id,
-            detail=_build_validation_detail(exc),
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-        )
-    except LookupError as exc:
-        return _render_keeper_dashboard_from_service(
-            service=service,
-            session_id=session_id,
-            detail=extract_error_detail(exc),
-            status_code=status.HTTP_404_NOT_FOUND,
-        )
-    except PermissionError as exc:
-        return _render_keeper_dashboard_from_service(
-            service=service,
-            session_id=session_id,
-            detail=extract_error_detail(exc),
-            status_code=status.HTTP_403_FORBIDDEN,
-        )
-    except ConflictError as exc:
-        return _render_keeper_dashboard_from_service(
-            service=service,
-            session_id=session_id,
-            detail=extract_error_detail(exc),
-            status_code=status.HTTP_409_CONFLICT,
-        )
-    except ValueError as exc:
-        return _render_keeper_dashboard_from_service(
-            service=service,
-            session_id=session_id,
-            detail=extract_error_detail(exc),
-            status_code=status.HTTP_400_BAD_REQUEST,
         )
 
 
@@ -1848,40 +1584,12 @@ async def review_draft_via_dashboard(
             session_id=session_id,
             notice=notice,
         )
-    except ValidationError as exc:
-        return _render_keeper_dashboard_from_service(
+    except (ValidationError, LookupError, PermissionError, ConflictError, ValueError) as exc:
+        return _render_playtest_exception(
+            _render_keeper_dashboard_from_service,
+            exc=exc,
             service=service,
             session_id=session_id,
-            detail=_build_validation_detail(exc),
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-        )
-    except LookupError as exc:
-        return _render_keeper_dashboard_from_service(
-            service=service,
-            session_id=session_id,
-            detail=extract_error_detail(exc),
-            status_code=status.HTTP_404_NOT_FOUND,
-        )
-    except PermissionError as exc:
-        return _render_keeper_dashboard_from_service(
-            service=service,
-            session_id=session_id,
-            detail=extract_error_detail(exc),
-            status_code=status.HTTP_403_FORBIDDEN,
-        )
-    except ConflictError as exc:
-        return _render_keeper_dashboard_from_service(
-            service=service,
-            session_id=session_id,
-            detail=extract_error_detail(exc),
-            status_code=status.HTTP_409_CONFLICT,
-        )
-    except ValueError as exc:
-        return _render_keeper_dashboard_from_service(
-            service=service,
-            session_id=session_id,
-            detail=extract_error_detail(exc),
-            status_code=status.HTTP_400_BAD_REQUEST,
         )
 
 
@@ -1906,33 +1614,12 @@ async def create_checkpoint_via_ui(
             session_id=session_id,
             notice="检查点已创建",
         )
-    except ValidationError as exc:
-        return _render_checkpoint_page_from_service(
+    except (ValidationError, LookupError, ConflictError, ValueError) as exc:
+        return _render_playtest_exception(
+            _render_checkpoint_page_from_service,
+            exc=exc,
             service=service,
             session_id=session_id,
-            detail=_build_validation_detail(exc),
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-        )
-    except LookupError as exc:
-        return _render_checkpoint_page_from_service(
-            service=service,
-            session_id=session_id,
-            detail=extract_error_detail(exc),
-            status_code=status.HTTP_404_NOT_FOUND,
-        )
-    except ConflictError as exc:
-        return _render_checkpoint_page_from_service(
-            service=service,
-            session_id=session_id,
-            detail=extract_error_detail(exc),
-            status_code=status.HTTP_409_CONFLICT,
-        )
-    except ValueError as exc:
-        return _render_checkpoint_page_from_service(
-            service=service,
-            session_id=session_id,
-            detail=extract_error_detail(exc),
-            status_code=status.HTTP_400_BAD_REQUEST,
         )
 
 
@@ -1949,26 +1636,12 @@ def export_checkpoint_via_ui(
             checkpoint_id=checkpoint_id,
             export_payload=export_payload.model_dump(mode="json"),
         )
-    except LookupError as exc:
-        return _render_checkpoint_page_from_service(
+    except (LookupError, ConflictError, ValueError) as exc:
+        return _render_playtest_exception(
+            _render_checkpoint_page_from_service,
+            exc=exc,
             service=service,
             session_id=session_id,
-            detail=extract_error_detail(exc),
-            status_code=status.HTTP_404_NOT_FOUND,
-        )
-    except ConflictError as exc:
-        return _render_checkpoint_page_from_service(
-            service=service,
-            session_id=session_id,
-            detail=extract_error_detail(exc),
-            status_code=status.HTTP_409_CONFLICT,
-        )
-    except ValueError as exc:
-        return _render_checkpoint_page_from_service(
-            service=service,
-            session_id=session_id,
-            detail=extract_error_detail(exc),
-            status_code=status.HTTP_400_BAD_REQUEST,
         )
 
 
@@ -2013,37 +1686,13 @@ async def import_checkpoint_via_ui(
             notice=notice,
             import_result=response.model_dump(mode="json"),
         )
-    except ValidationError as exc:
-        return _render_checkpoint_page_from_service(
+    except (ValidationError, LookupError, ConflictError, ValueError) as exc:
+        return _render_playtest_exception(
+            _render_checkpoint_page_from_service,
+            exc=exc,
             service=service,
             session_id=session_id,
-            detail=_build_validation_detail(exc),
             import_payload_text=checkpoint_payload_text,
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-        )
-    except LookupError as exc:
-        return _render_checkpoint_page_from_service(
-            service=service,
-            session_id=session_id,
-            detail=extract_error_detail(exc),
-            import_payload_text=checkpoint_payload_text,
-            status_code=status.HTTP_404_NOT_FOUND,
-        )
-    except ConflictError as exc:
-        return _render_checkpoint_page_from_service(
-            service=service,
-            session_id=session_id,
-            detail=extract_error_detail(exc),
-            import_payload_text=checkpoint_payload_text,
-            status_code=status.HTTP_409_CONFLICT,
-        )
-    except ValueError as exc:
-        return _render_checkpoint_page_from_service(
-            service=service,
-            session_id=session_id,
-            detail=extract_error_detail(exc),
-            import_payload_text=checkpoint_payload_text,
-            status_code=status.HTTP_400_BAD_REQUEST,
         )
 
 
@@ -2073,33 +1722,12 @@ async def update_checkpoint_via_ui(
             session_id=session_id,
             notice="检查点已更新",
         )
-    except ValidationError as exc:
-        return _render_checkpoint_page_from_service(
+    except (ValidationError, LookupError, ConflictError, ValueError) as exc:
+        return _render_playtest_exception(
+            _render_checkpoint_page_from_service,
+            exc=exc,
             service=service,
             session_id=session_id,
-            detail=_build_validation_detail(exc),
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-        )
-    except LookupError as exc:
-        return _render_checkpoint_page_from_service(
-            service=service,
-            session_id=session_id,
-            detail=extract_error_detail(exc),
-            status_code=status.HTTP_404_NOT_FOUND,
-        )
-    except ConflictError as exc:
-        return _render_checkpoint_page_from_service(
-            service=service,
-            session_id=session_id,
-            detail=extract_error_detail(exc),
-            status_code=status.HTTP_409_CONFLICT,
-        )
-    except ValueError as exc:
-        return _render_checkpoint_page_from_service(
-            service=service,
-            session_id=session_id,
-            detail=extract_error_detail(exc),
-            status_code=status.HTTP_400_BAD_REQUEST,
         )
 
 
@@ -2116,26 +1744,12 @@ def delete_checkpoint_via_ui(
             session_id=session_id,
             notice="检查点已删除",
         )
-    except LookupError as exc:
-        return _render_checkpoint_page_from_service(
+    except (LookupError, ConflictError, ValueError) as exc:
+        return _render_playtest_exception(
+            _render_checkpoint_page_from_service,
+            exc=exc,
             service=service,
             session_id=session_id,
-            detail=extract_error_detail(exc),
-            status_code=status.HTTP_404_NOT_FOUND,
-        )
-    except ConflictError as exc:
-        return _render_checkpoint_page_from_service(
-            service=service,
-            session_id=session_id,
-            detail=extract_error_detail(exc),
-            status_code=status.HTTP_409_CONFLICT,
-        )
-    except ValueError as exc:
-        return _render_checkpoint_page_from_service(
-            service=service,
-            session_id=session_id,
-            detail=extract_error_detail(exc),
-            status_code=status.HTTP_400_BAD_REQUEST,
         )
 
 
@@ -2157,24 +1771,10 @@ def restore_checkpoint_via_ui(
             restore_result=restore_response.model_dump(mode="json"),
             status_code=status.HTTP_200_OK,
         )
-    except LookupError as exc:
-        return _render_checkpoint_page_from_service(
+    except (LookupError, ConflictError, ValueError) as exc:
+        return _render_playtest_exception(
+            _render_checkpoint_page_from_service,
+            exc=exc,
             service=service,
             session_id=session_id,
-            detail=extract_error_detail(exc),
-            status_code=status.HTTP_404_NOT_FOUND,
-        )
-    except ConflictError as exc:
-        return _render_checkpoint_page_from_service(
-            service=service,
-            session_id=session_id,
-            detail=extract_error_detail(exc),
-            status_code=status.HTTP_409_CONFLICT,
-        )
-    except ValueError as exc:
-        return _render_checkpoint_page_from_service(
-            service=service,
-            session_id=session_id,
-            detail=extract_error_detail(exc),
-            status_code=status.HTTP_400_BAD_REQUEST,
         )

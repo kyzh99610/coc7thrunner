@@ -216,6 +216,16 @@ def test_checkpoint_ui_restore_shows_new_session_id_link_and_warnings() -> None:
             assert restored_session_id != target_session_id
             assert "后续角色再同步可能降级" in html
             assert f'/playtest/sessions/{restored_session_id}' in html
+
+            continued_action = target_client.post(
+                f"/sessions/{restored_session_id}/player-action",
+                json={
+                    "actor_id": "investigator-1",
+                    "action_text": "我继续检查恢复后的会话是否还能推进。",
+                },
+            )
+            assert continued_action.status_code == 202
+            assert continued_action.json()["session_id"] == restored_session_id
     finally:
         shutil.rmtree(source_run_dir, ignore_errors=True)
         shutil.rmtree(target_run_dir, ignore_errors=True)
