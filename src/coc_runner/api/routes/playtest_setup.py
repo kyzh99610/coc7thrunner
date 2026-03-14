@@ -278,8 +278,14 @@ def _render_playtest_session_create_page(
 
 
 @router.get("/sessions/create", response_class=HTMLResponse)
-async def view_playtest_session_create_page() -> HTMLResponse:
-    return _render_playtest_session_create_page()
+async def view_playtest_session_create_page(
+    playtest_group: str | None = None,
+) -> HTMLResponse:
+    form_values = _default_playtest_setup_form_values()
+    normalized_group = _normalize_form_text(playtest_group)
+    if normalized_group:
+        form_values["playtest_group"] = normalized_group
+    return _render_playtest_session_create_page(form_values=form_values)
 
 
 @router.post("/sessions/create", response_class=HTMLResponse)

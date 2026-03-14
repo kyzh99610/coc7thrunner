@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 from html import escape
 from typing import Any
-from urllib.parse import urlencode
+from urllib.parse import quote, urlencode
 
 from fastapi import APIRouter, Depends, Request, status
 from fastapi.responses import HTMLResponse
@@ -292,7 +292,14 @@ def _render_playtest_session_index_page(
         session_cards = "".join(
             f"""
             <section class="panel">
-              <h3>分组：{escape(group_label)}</h3>
+              <h3>
+                分组：
+                {
+                    f'<a href="/playtest/groups/{quote(group_label)}">{escape(group_label)}</a>'
+                    if group_label != "未分组"
+                    else escape(group_label)
+                }
+              </h3>
               <p class="meta-line">本组 session 数：<span class="mono">{escape(str(len(grouped_cards[group_label])))}</span></p>
               <div class="attention-grid">
                 {"".join(grouped_cards[group_label])}
@@ -322,6 +329,85 @@ def _render_playtest_session_index_page(
     """
     return _render_shell(
         title="Playtest Sessions",
+        body=body,
+        status_code=status_code,
+    )
+
+
+def _render_playtest_group_page(
+    *,
+    group_name: str,
+    sessions: list[dict[str, Any]],
+    status_code: int = status.HTTP_200_OK,
+) -> HTMLResponse:
+    normalized_group = _playtest_group_label(group_name, empty_label="")
+    create_href = (
+        "/playtest/sessions/create"
+        if not normalized_group
+        else f'/playtest/sessions/create?{escape(urlencode({"playtest_group": normalized_group}))}'
+    )
+    if not sessions:
+        session_cards = '<p class="empty-state">当前分组下还没有 session。</p>'
+    else:
+        cards: list[str] = []
+        for session in sessions:
+            scenario = session.get("scenario") or {}
+            progress_state = session.get("progress_state") or {}
+            current_scene = session.get("current_scene") or {}
+            current_beat_id = progress_state.get("current_beat")
+            beats_by_id = {
+                str(beat.get("beat_id")): beat
+                for beat in scenario.get("beats") or []
+                if isinstance(beat, dict) and beat.get("beat_id")
+            }
+            current_beat_title = (
+                (beats_by_id.get(str(current_beat_id)) or {}).get("title")
+                if current_beat_id is not None
+                else None
+            )
+            session_id = str(session.get("session_id") or "")
+            cards.append(
+                f"""
+                <article class="attention-card">
+                  <div class="activity-header">
+                    <h3>{escape(str(scenario.get('title', '未命名会话')))}</h3>
+                    <span class="activity-meta">{_render_session_status_display(session.get('status'))}</span>
+                  </div>
+                  <p class="meta-line">session_id: <code>{escape(session_id)}</code></p>
+                  <p class="meta-line">KP：{escape(str(session.get('keeper_name') or 'KP'))}</p>
+                  <p class="meta-line">当前场景：{escape(str(current_scene.get('title', '未知场景')))}</p>
+                  <p class="meta-line">当前 beat：<span class="mono">{escape(str(current_beat_id or '无'))}</span></p>
+                  <p class="meta-line">当前 beat 标题：{escape(str(current_beat_title or '无'))}</p>
+                  <div class="quick-actions">
+                    <a class="action-link" href="/playtest/sessions/{escape(session_id)}/home">打开 launcher</a>
+                    <a class="action-link" href="/playtest/sessions/{escape(session_id)}/keeper">打开 keeper 页面</a>
+                    <a class="action-link" href="/playtest/sessions/{escape(session_id)}">打开 checkpoint 页面</a>
+                  </div>
+                </article>
+                """
+            )
+        session_cards = "".join(cards)
+    body = f"""
+      <section class="hero">
+        <h1>分组：{escape(normalized_group or group_name)}</h1>
+        <div class="hero-meta">
+          <span>本组 session 数：{escape(str(len(sessions)))}</span>
+          <span>用来浏览同一轮测试、同一批 session 或同一主题实验下的相关局。</span>
+        </div>
+        <div class="nav-links">
+          {_render_session_index_link()}
+          <a href="{create_href}">在本组继续开局</a>
+        </div>
+      </section>
+      <section class="panel">
+        <h2>本组 session</h2>
+        <div class="attention-grid">
+          {session_cards}
+        </div>
+      </section>
+    """
+    return _render_shell(
+        title=f"分组 {normalized_group or group_name}",
         body=body,
         status_code=status_code,
     )
@@ -2298,6 +2384,22 @@ def playtest_session_index_page(
     service: SessionService = Depends(get_session_service),
 ) -> HTMLResponse:
     return _render_playtest_session_index_from_service(service=service)
+
+
+@router.get("/groups/{group_name}", response_class=HTMLResponse)
+def playtest_group_page(
+    group_name: str,
+    service: SessionService = Depends(get_session_service),
+) -> HTMLResponse:
+    sessions = [
+        session.model_dump(mode="json")
+        for session in service.list_sessions()
+        if _playtest_group_label(session.playtest_group, empty_label="") == group_name
+    ]
+    return _render_playtest_group_page(
+        group_name=group_name,
+        sessions=sessions,
+    )
 
 
 @router.get("/sessions/{session_id}", response_class=HTMLResponse)

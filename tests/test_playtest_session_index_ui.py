@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from urllib.parse import quote
+
 from fastapi.testclient import TestClient
 
 from tests.helpers import make_participant
@@ -89,16 +91,53 @@ def test_playtest_session_index_shows_natural_empty_state_without_sessions(
 def test_playtest_session_index_groups_sessions_by_playtest_group_and_keeps_ungrouped_bucket(
     client: TestClient,
 ) -> None:
-    grouped_one = _start_grouped_snapshot_session(client, playtest_group="旅店线压力测试")
-    grouped_two = _start_grouped_snapshot_session(client, playtest_group="旅店线压力测试")
+    group_name = "旅店线压力测试"
+    grouped_one = _start_grouped_snapshot_session(client, playtest_group=group_name)
+    grouped_two = _start_grouped_snapshot_session(client, playtest_group=group_name)
     ungrouped = _start_grouped_snapshot_session(client, playtest_group=None)
 
     response = client.get("/playtest/sessions")
 
     assert response.status_code == 200
     html = response.text
-    assert "分组：旅店线压力测试" in html
+    assert f"分组：{group_name}" in html
+    assert f'href="/playtest/groups/{quote(group_name)}"' in html
     assert "分组：未分组" in html
     assert grouped_one in html
     assert grouped_two in html
     assert ungrouped in html
+
+
+def test_playtest_group_page_lists_group_sessions_and_entry_links(
+    client: TestClient,
+) -> None:
+    group_name = "旅店线压力测试"
+    grouped_one = _start_grouped_snapshot_session(client, playtest_group=group_name)
+    grouped_two = _start_grouped_snapshot_session(client, playtest_group=group_name)
+
+    response = client.get(f"/playtest/groups/{quote(group_name)}")
+
+    assert response.status_code == 200
+    html = response.text
+    assert f"分组：{group_name}" in html
+    assert "本组 session 数" in html
+    assert grouped_one in html
+    assert grouped_two in html
+    assert f'/playtest/sessions/{grouped_one}/home"' in html
+    assert f'/playtest/sessions/{grouped_one}/keeper"' in html
+    assert f'/playtest/sessions/{grouped_one}"' in html
+    assert f'href="/playtest/sessions/create?playtest_group={quote(group_name)}"' in html
+
+
+def test_playtest_group_page_shows_natural_empty_state_for_unknown_group(
+    client: TestClient,
+) -> None:
+    group_name = "不存在的测试批次"
+
+    response = client.get(f"/playtest/groups/{quote(group_name)}")
+
+    assert response.status_code == 200
+    html = response.text
+    assert f"分组：{group_name}" in html
+    assert "当前分组下还没有 session。" in html
+    assert f'href="/playtest/sessions/create?playtest_group={quote(group_name)}"' in html

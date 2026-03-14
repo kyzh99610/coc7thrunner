@@ -39,6 +39,20 @@ def test_playtest_session_create_page_displays_minimal_setup_form(
     assert "创建成功后会直接进入 launcher。" in html
 
 
+def test_playtest_session_create_page_prefills_group_from_query_param(
+    client: TestClient,
+) -> None:
+    response = client.get(
+        "/playtest/sessions/create",
+        params={"playtest_group": "旅店线压力测试"},
+    )
+
+    assert response.status_code == 200
+    html = response.text
+    assert 'name="playtest_group"' in html
+    assert 'value="旅店线压力测试"' in html
+
+
 def test_playtest_session_setup_flow_creates_session_and_redirects_to_launcher(
     client: TestClient,
 ) -> None:
