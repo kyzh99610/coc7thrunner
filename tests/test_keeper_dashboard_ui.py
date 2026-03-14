@@ -146,6 +146,9 @@ def test_keeper_dashboard_shows_live_control_entries_and_investigator_page_does_
     assert "实时控场" in keeper_html
     assert "目标控制" in keeper_html
     assert "Reveal 控制" in keeper_html
+    assert 'id="objective-control"' in keeper_html
+    assert 'id="reveal-control"' in keeper_html
+    assert 'id="objective-control-objective.lobby.observe_keeper"' in keeper_html
     assert (
         f'/playtest/sessions/{session_id}/keeper/objectives/objective.lobby.observe_keeper/complete#live-control"'
         in keeper_html
@@ -184,8 +187,11 @@ def test_keeper_dashboard_objective_complete_and_reopen_controls_rerender_with_f
     complete_html = complete_response.text
     assert "已手动标记目标完成" in complete_html
     assert "确认老板是否在刻意回避储物间问题" in complete_html
+    assert "最近控场结果" in complete_html
     assert "未完成目标：0" in complete_html
     assert "最近完成目标：确认老板是否在刻意回避储物间问题" in complete_html
+    assert 'href="#objective-control-objective.lobby.observe_keeper"' in complete_html
+    assert "回到 objective 控制" in complete_html
     assert (
         f'/playtest/sessions/{session_id}/keeper/objectives/{objective_id}/reopen#live-control"'
         in complete_html
@@ -201,6 +207,7 @@ def test_keeper_dashboard_objective_complete_and_reopen_controls_rerender_with_f
     assert "已取消目标完成状态" in reopen_html
     assert "确认老板是否在刻意回避储物间问题" in reopen_html
     assert "未完成目标：1" in reopen_html
+    assert 'href="#objective-control-objective.lobby.observe_keeper"' in reopen_html
     assert "最近完成目标：确认老板是否在刻意回避储物间问题" not in reopen_html
     assert (
         f'/playtest/sessions/{session_id}/keeper/objectives/{objective_id}/complete#live-control"'
@@ -243,7 +250,10 @@ def test_keeper_dashboard_reveal_clue_and_scene_controls_apply_and_surface_resul
     clue_html = clue_response.text
     assert "已公开线索" in clue_html
     assert "旅店旧图纸" in clue_html
+    assert "最近控场结果" in clue_html
     assert "已公开线索：旅店旧图纸" in clue_html
+    assert 'href="#reveal-control"' in clue_html
+    assert "回到 reveal 控制" in clue_html
     assert (
         f'/playtest/sessions/{session_id}/keeper/reveal/clues/clue.old_floorplan#live-control"'
         not in clue_html
@@ -264,8 +274,10 @@ def test_keeper_dashboard_reveal_clue_and_scene_controls_apply_and_surface_resul
     scene_html = scene_response.text
     assert "已公开场景" in scene_html
     assert "旅店账房" in scene_html
+    assert "最近控场结果" in scene_html
     assert "已公开场景：旅店账房" in scene_html
     assert "找到能指向地窖的记录" in scene_html
+    assert 'href="#reveal-control"' in scene_html
     assert (
         f'/playtest/sessions/{session_id}/keeper/reveal/scenes/scene.guesthouse_office#live-control"'
         not in scene_html
@@ -633,6 +645,8 @@ def test_keeper_dashboard_shows_natural_empty_states_without_optional_data(
     assert "当前环境缺少外部知识源" not in html
     assert 'href="#prompt-' not in html
     assert 'href="#draft-' not in html
+    assert 'href="#objective-control-' not in html
+    assert 'href="#reveal-control"' not in html
     assert f"/keeper/prompts/" not in html
     assert f"/draft-actions/" not in html
 

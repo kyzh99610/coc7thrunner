@@ -645,7 +645,7 @@ def _render_keeper_live_control_panel(
     unresolved_block = (
         "".join(
             f"""
-            <article class="activity-item">
+            <article class="activity-item" id="objective-control-{escape(str(objective.get('objective_id', '')))}">
               <div class="activity-header">
                 <h3>{escape(str(objective.get('text', objective.get('objective_id', '未命名目标'))))}</h3>
                 <span class="activity-meta">{escape(str(objective.get('scene_id') or objective.get('beat_id') or 'objective'))}</span>
@@ -666,7 +666,7 @@ def _render_keeper_live_control_panel(
     completed_block = (
         "".join(
             f"""
-            <article class="activity-item">
+            <article class="activity-item" id="objective-control-{escape(str(objective.get('objective_id', '')))}">
               <div class="activity-header">
                 <h3>{escape(str(objective.get('text', objective.get('objective_id', '未命名目标'))))}</h3>
                 <span class="activity-meta">{escape(str(objective.get('completed_at') or 'recent'))}</span>
@@ -730,13 +730,13 @@ def _render_keeper_live_control_panel(
       <section class="panel" id="live-control">
         <h2>实时控场</h2>
         <div class="summary-grid">
-          <article class="summary-card">
+          <article class="summary-card" id="objective-control">
             <h3>目标控制</h3>
             <div class="recent-list">{unresolved_block}</div>
             <h3>最近完成目标</h3>
             <div class="recent-list">{completed_block}</div>
           </article>
-          <article class="summary-card">
+          <article class="summary-card" id="reveal-control">
             <h3>Reveal 控制</h3>
             <h4>待公开场景</h4>
             <div class="recent-list">{scene_block}</div>
@@ -748,6 +748,26 @@ def _render_keeper_live_control_panel(
     """
 
 
+def _resolve_live_control_jump_target(payload: dict[str, Any]) -> tuple[str, str] | None:
+    control_type = payload.get("control_type")
+    if control_type in {"objective_complete", "objective_reopen"}:
+        objective_id = payload.get("objective_id")
+        if objective_id:
+            return f"#objective-control-{objective_id}", "回到 objective 控制"
+        return "#objective-control", "回到 objective 控制"
+    if control_type in {"reveal_clue", "reveal_scene"}:
+        return "#reveal-control", "回到 reveal 控制"
+    return None
+
+
+def _render_live_control_jump_link(payload: dict[str, Any]) -> str:
+    jump_target = _resolve_live_control_jump_target(payload)
+    if jump_target is None:
+        return ""
+    href, label = jump_target
+    return f'<a class="action-link" href="{escape(href)}">{escape(label)}</a>'
+
+
 def _render_recent_activity(events: list[dict[str, Any]]) -> str:
     if not events:
         return '<p class="empty-state">最近还没有可见活动。</p>'
@@ -756,6 +776,8 @@ def _render_recent_activity(events: list[dict[str, Any]]) -> str:
         event_type = event.get("event_type", "event")
         text = event.get("text", "无摘要")
         created_at = _format_datetime(event.get("created_at", ""))
+        payload = event.get("structured_payload") or {}
+        jump_link = _render_live_control_jump_link(payload) if isinstance(payload, dict) else ""
         items.append(
             f"""
             <article class="activity-item">
@@ -764,6 +786,7 @@ def _render_recent_activity(events: list[dict[str, Any]]) -> str:
                 <span class="activity-meta">{escape(created_at)}</span>
               </div>
               <p class="meta-line">event_type: <span class="mono">{escape(str(event_type))}</span></p>
+              {f'<p class="meta-line">{jump_link}</p>' if jump_link else ''}
             </article>
             """
         )
@@ -841,8 +864,15 @@ def _render_recent_result_panel(
             }
         )
     rejected_outcomes.sort(key=lambda outcome: outcome["created_at"], reverse=True)
+    live_control_events = [
+        event
+        for event in reversed((keeper_view.get("visible_events") or [])[-10:])
+        if isinstance(event.get("structured_payload"), dict)
+        and (event.get("structured_payload") or {}).get("control_type")
+        in {"objective_complete", "objective_reopen", "reveal_clue", "reveal_scene"}
+    ]
 
-    if not prompt_results and not visible_reviewed and not rejected_outcomes:
+    if not prompt_results and not visible_reviewed and not rejected_outcomes and not live_control_events:
         return (
             '<section class="panel" id="recent-results">'
             "<h2>最近处理结果</h2>"
@@ -936,6 +966,27 @@ def _render_recent_result_panel(
         if draft_cards
         else '<p class="empty-state">还没有最近草稿结果。</p>'
     )
+    live_control_cards: list[str] = []
+    for event in live_control_events[:4]:
+        payload = event.get("structured_payload") or {}
+        jump_link = _render_live_control_jump_link(payload) if isinstance(payload, dict) else ""
+        live_control_cards.append(
+            f"""
+            <article class="activity-item">
+              <div class="activity-header">
+                <h3>{escape(str(event.get('text', '未命名控场结果')))}</h3>
+                <span class="activity-meta">{escape(str(event.get('created_at') or ''))}</span>
+              </div>
+              <p class="meta-line">event_type: <span class="mono">{escape(str(event.get('event_type') or 'manual_action'))}</span></p>
+              {f'<p class="meta-line">{jump_link}</p>' if jump_link else ''}
+            </article>
+            """
+        )
+    live_control_block = (
+        "".join(live_control_cards)
+        if live_control_cards
+        else '<p class="empty-state">还没有最近控场结果。</p>'
+    )
 
     return f"""
       <section class="panel" id="recent-results">
@@ -948,6 +999,10 @@ def _render_recent_result_panel(
           <article class="summary-card">
             <h3>最近草稿结果</h3>
             <div class="recent-list">{draft_block}</div>
+          </article>
+          <article class="summary-card">
+            <h3>最近控场结果</h3>
+            <div class="recent-list">{live_control_block}</div>
           </article>
         </div>
       </section>
