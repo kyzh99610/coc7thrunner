@@ -18,6 +18,9 @@ class KnowledgeRepository(Protocol):
     def save_source(self, source: KnowledgeSourceState) -> None:
         ...
 
+    def list_sources(self) -> list[KnowledgeSourceState]:
+        ...
+
     def get_source(self, source_id: str) -> KnowledgeSourceState | None:
         ...
 
@@ -65,6 +68,15 @@ class SqlAlchemyKnowledgeRepository:
             record.source_title_zh = source.source_title_zh
             record.source_json = self._serialize_model(source)
             record.updated_at = datetime.now(timezone.utc)
+
+    def list_sources(self) -> list[KnowledgeSourceState]:
+        with self.session_factory() as db:
+            statement = (
+                select(KnowledgeSourceRecord)
+                .order_by(KnowledgeSourceRecord.updated_at.desc(), KnowledgeSourceRecord.source_id.asc())
+            )
+            records = db.execute(statement).scalars().all()
+            return [KnowledgeSourceState.model_validate_json(record.source_json) for record in records]
 
     def get_source(self, source_id: str) -> KnowledgeSourceState | None:
         with self.session_factory() as db:

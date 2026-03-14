@@ -33,6 +33,7 @@ def test_playtest_session_index_lists_multiple_sessions_with_statuses_and_entry_
     html = response.text
     assert "Playtest Sessions" in html
     assert 'href="/playtest/sessions/create"' in html
+    assert 'href="/playtest/knowledge"' in html
     assert "旅店前厅" in html
     assert "beat-find-note" in html
     assert "计划中" in html
@@ -60,4 +61,5 @@ def test_playtest_session_index_shows_natural_empty_state_without_sessions(
     html = response.text
     assert "Playtest Sessions" in html
     assert 'href="/playtest/sessions/create"' in html
+    assert 'href="/playtest/knowledge"' in html
     assert "当前还没有 session。先创建一局，再从这里进入。" in html

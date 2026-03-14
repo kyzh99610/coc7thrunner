@@ -12,6 +12,7 @@ from knowledge.schemas import (
     KnowledgeSourceRegistration,
     KnowledgeSourceResponse,
     KnowledgeSourceState,
+    RuleChunk,
     RuleQueryRequest,
     RuleQueryResult,
     TextIngestRequest,
@@ -87,6 +88,18 @@ class KnowledgeService:
 
     def get_source(self, source_id: str) -> KnowledgeSourceState:
         return self._load_source(source_id)
+
+    def list_sources(self) -> list[KnowledgeSourceState]:
+        return self.repository.list_sources()
+
+    def get_source_preview(
+        self,
+        source_id: str,
+        *,
+        limit: int = 3,
+    ) -> tuple[KnowledgeSourceState, list[RuleChunk]]:
+        source = self._load_source(source_id)
+        return source, self.repository.list_chunks(source_id=source_id)[:limit]
 
     def query_rules(
         self,
