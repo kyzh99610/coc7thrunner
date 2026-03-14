@@ -134,16 +134,25 @@ def _playtest_scenario_templates() -> list[dict[str, Any]]:
         {
             "template_id": "whispering_guesthouse",
             "title": "雾港旅店的低语",
+            "summary": "旅店老板封死地下储物间，调查员要在封闭空间里顺着低语与旧图纸找出真相。",
+            "experience_hint": "偏封闭空间调查",
+            "recommended_party": "推荐 1-2 名调查员",
             "builder": whispering_guesthouse_payload,
         },
         {
             "template_id": "midnight_archive",
             "title": "雨夜档案馆",
+            "summary": "雨夜档案馆里散着烧焦便笺与借阅记录，适合沿文书与地下异常慢慢下探。",
+            "experience_hint": "偏档案探索",
+            "recommended_party": "推荐 1-3 名调查员",
             "builder": midnight_archive_payload,
         },
         {
             "template_id": "blackout_clinic",
             "title": "停电诊所",
+            "summary": "停电诊所里的病历、封锁区与失控异变更强调压迫感与医疗现场推进。",
+            "experience_hint": "偏医疗异变",
+            "recommended_party": "推荐 2-4 名调查员",
             "builder": blackout_clinic_payload,
         },
     ]
@@ -464,10 +473,29 @@ def _render_playtest_session_create_page(
 ) -> HTMLResponse:
     values = form_values or _default_playtest_setup_form_values()
     selected_template = str(values.get("scenario_template") or "whispering_guesthouse")
-    template_options = "".join(
-        f'<option value="{escape(str(template["template_id"]))}"'
-        f'{" selected" if template["template_id"] == selected_template else ""}>'
-        f'{escape(str(template["title"]))}</option>'
+    selected_template_meta = _get_playtest_scenario_template(selected_template) or _playtest_scenario_templates()[0]
+    template_cards = "".join(
+        f"""
+        <label class="attention-card">
+          <input
+            type="radio"
+            name="scenario_template"
+            value="{escape(str(template["template_id"]))}"
+            {"checked" if template["template_id"] == selected_template else ""}
+          />
+          <h3>{escape(str(template["title"]))}</h3>
+          <p>{escape(str(template["summary"]))}</p>
+          <p class="meta-line">
+            {escape(str(template["experience_hint"]))}
+            · {escape(str(template["recommended_party"]))}
+          </p>
+          {
+              '<p class="meta-line"><strong>当前选择</strong></p>'
+              if template["template_id"] == selected_template
+              else ''
+          }
+        </label>
+        """
         for template in _playtest_scenario_templates()
     )
     investigator_inputs = "".join(
@@ -502,12 +530,21 @@ def _render_playtest_session_create_page(
             keeper_name
             <input type="text" name="keeper_name" value="{escape(str(values.get('keeper_name') or ''))}" required />
           </label>
-          <label>
-            scenario_template
-            <select name="scenario_template">
-              {template_options}
-            </select>
-          </label>
+          <fieldset>
+            <legend>scenario_template</legend>
+            <div class="attention-grid">
+              {template_cards}
+            </div>
+          </fieldset>
+          <article class="summary-card">
+            <h3>当前选中模板</h3>
+            <p><strong>当前选择：{escape(str(selected_template_meta["title"]))}</strong></p>
+            <p>{escape(str(selected_template_meta["summary"]))}</p>
+            <p class="meta-line">
+              {escape(str(selected_template_meta["experience_hint"]))}
+              · {escape(str(selected_template_meta["recommended_party"]))}
+            </p>
+          </article>
           <div class="summary-grid">
             {investigator_inputs}
           </div>
