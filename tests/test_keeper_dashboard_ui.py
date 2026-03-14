@@ -291,6 +291,7 @@ def test_keeper_dashboard_advances_to_legal_next_beat_and_rerenders_with_feedbac
     assert "当前 beat：beat-beta" in html
     assert 'id="beat-progression-current-beat-beta"' in html
     assert "最近控场结果" in html
+    assert '控场类型：<span class="mono">Beat 推进</span>' in html
     assert "回到 beat 推进" in html
     assert 'href="#beat-progression-current-beat-beta"' in html
 
@@ -349,6 +350,7 @@ def test_keeper_dashboard_objective_complete_and_reopen_controls_rerender_with_f
     assert "已手动标记目标完成" in complete_html
     assert "确认老板是否在刻意回避储物间问题" in complete_html
     assert "最近控场结果" in complete_html
+    assert '控场类型：<span class="mono">Objective 已完成</span>' in complete_html
     assert "未完成目标：0" in complete_html
     assert "最近完成目标：确认老板是否在刻意回避储物间问题" in complete_html
     assert 'href="#objective-control-objective.lobby.observe_keeper"' in complete_html
@@ -368,6 +370,7 @@ def test_keeper_dashboard_objective_complete_and_reopen_controls_rerender_with_f
     assert "已取消目标完成状态" in reopen_html
     assert "确认老板是否在刻意回避储物间问题" in reopen_html
     assert "未完成目标：1" in reopen_html
+    assert '控场类型：<span class="mono">Objective 已恢复未完成</span>' in reopen_html
     assert 'href="#objective-control-objective.lobby.observe_keeper"' in reopen_html
     assert "最近完成目标：确认老板是否在刻意回避储物间问题" not in reopen_html
     assert (
@@ -412,6 +415,7 @@ def test_keeper_dashboard_reveal_clue_and_scene_controls_apply_and_surface_resul
     assert "已公开线索" in clue_html
     assert "旅店旧图纸" in clue_html
     assert "最近控场结果" in clue_html
+    assert '控场类型：<span class="mono">Reveal 线索</span>' in clue_html
     assert "已公开线索：旅店旧图纸" in clue_html
     assert 'href="#reveal-control"' in clue_html
     assert "回到 reveal 控制" in clue_html
@@ -436,6 +440,7 @@ def test_keeper_dashboard_reveal_clue_and_scene_controls_apply_and_surface_resul
     assert "已公开场景" in scene_html
     assert "旅店账房" in scene_html
     assert "最近控场结果" in scene_html
+    assert '控场类型：<span class="mono">Reveal 场景</span>' in scene_html
     assert "已公开场景：旅店账房" in scene_html
     assert "找到能指向地窖的记录" in scene_html
     assert 'href="#reveal-control"' in scene_html
@@ -804,6 +809,7 @@ def test_keeper_dashboard_shows_natural_empty_states_without_optional_data(
     assert "还没有最近处理结果。" in html
     assert "还没有检查点。先去创建一个用于回放或分支。" in html
     assert "当前环境缺少外部知识源" not in html
+    assert "控场类型：" not in html
     assert 'href="#prompt-' not in html
     assert 'href="#draft-' not in html
     assert 'href="#objective-control-' not in html

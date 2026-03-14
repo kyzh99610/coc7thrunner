@@ -837,6 +837,20 @@ def _render_live_control_jump_link(payload: dict[str, Any]) -> str:
     return f'<a class="action-link" href="{escape(href)}">{escape(label)}</a>'
 
 
+def _render_live_control_type_label(payload: dict[str, Any]) -> str:
+    control_type = payload.get("control_type")
+    label = {
+        "objective_complete": "Objective 已完成",
+        "objective_reopen": "Objective 已恢复未完成",
+        "reveal_clue": "Reveal 线索",
+        "reveal_scene": "Reveal 场景",
+        "advance_beat": "Beat 推进",
+    }.get(str(control_type))
+    if label is None:
+        return ""
+    return f'控场类型：<span class="mono">{escape(label)}</span>'
+
+
 def _render_recent_activity(events: list[dict[str, Any]]) -> str:
     if not events:
         return '<p class="empty-state">最近还没有可见活动。</p>'
@@ -847,6 +861,7 @@ def _render_recent_activity(events: list[dict[str, Any]]) -> str:
         created_at = _format_datetime(event.get("created_at", ""))
         payload = event.get("structured_payload") or {}
         jump_link = _render_live_control_jump_link(payload) if isinstance(payload, dict) else ""
+        type_label = _render_live_control_type_label(payload) if isinstance(payload, dict) else ""
         items.append(
             f"""
             <article class="activity-item">
@@ -854,6 +869,7 @@ def _render_recent_activity(events: list[dict[str, Any]]) -> str:
                 <h3>{escape(str(text))}</h3>
                 <span class="activity-meta">{escape(created_at)}</span>
               </div>
+              {f'<p class="meta-line">{type_label}</p>' if type_label else ''}
               <p class="meta-line">event_type: <span class="mono">{escape(str(event_type))}</span></p>
               {f'<p class="meta-line">{jump_link}</p>' if jump_link else ''}
             </article>
@@ -1045,6 +1061,7 @@ def _render_recent_result_panel(
     for event in live_control_events[:4]:
         payload = event.get("structured_payload") or {}
         jump_link = _render_live_control_jump_link(payload) if isinstance(payload, dict) else ""
+        type_label = _render_live_control_type_label(payload) if isinstance(payload, dict) else ""
         live_control_cards.append(
             f"""
             <article class="activity-item">
@@ -1052,6 +1069,7 @@ def _render_recent_result_panel(
                 <h3>{escape(str(event.get('text', '未命名控场结果')))}</h3>
                 <span class="activity-meta">{escape(str(event.get('created_at') or ''))}</span>
               </div>
+              {f'<p class="meta-line">{type_label}</p>' if type_label else ''}
               <p class="meta-line">event_type: <span class="mono">{escape(str(event.get('event_type') or 'manual_action'))}</span></p>
               {f'<p class="meta-line">{jump_link}</p>' if jump_link else ''}
             </article>
