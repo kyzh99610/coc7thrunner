@@ -17,6 +17,36 @@ from tests.test_session_import import (
 )
 
 
+def _register_runtime_source(
+    client: TestClient,
+    *,
+    source_id: str,
+    source_title_zh: str,
+    content: str,
+    source_kind: str = "campaign_note",
+    default_priority: int = 30,
+    is_authoritative: bool = False,
+) -> None:
+    register_response = client.post(
+        "/knowledge/register-source",
+        json={
+            "source_id": source_id,
+            "source_kind": source_kind,
+            "source_format": "plain_text",
+            "source_title_zh": source_title_zh,
+            "document_identity": source_id,
+            "default_priority": default_priority,
+            "is_authoritative": is_authoritative,
+        },
+    )
+    assert register_response.status_code == 201
+    ingest_response = client.post(
+        "/knowledge/ingest-text",
+        json={"source_id": source_id, "content": content},
+    )
+    assert ingest_response.status_code == 200
+
+
 def _start_keeper_dashboard_session(client: TestClient) -> str:
     response = client.post(
         "/sessions/start",
@@ -269,9 +299,57 @@ def test_keeper_dashboard_shows_live_control_entries_and_investigator_page_does_
     investigator_html = investigator_response.text
     assert "会话生命周期" not in investigator_html
     assert "实时控场" not in investigator_html
+    assert "规则与知识辅助" not in investigator_html
     assert "/keeper/lifecycle" not in investigator_html
     assert "/keeper/objectives/" not in investigator_html
     assert "/keeper/reveal/" not in investigator_html
+
+
+def test_keeper_dashboard_displays_runtime_rules_and_knowledge_assistance_panel(
+    client: TestClient,
+) -> None:
+    _register_runtime_source(
+        client,
+        source_id="keeper-runtime-rules",
+        source_title_zh="侦查规则",
+        content="# 侦查\n侦查用于发现隐藏线索与可疑痕迹。",
+        source_kind="rulebook",
+        default_priority=40,
+        is_authoritative=True,
+    )
+    _register_runtime_source(
+        client,
+        source_id="keeper-runtime-notes",
+        source_title_zh="旅店笔记",
+        content="稳住老板并找到账房线索时，优先核对留言页码与账册涂改痕迹。",
+        source_kind="campaign_note",
+        default_priority=25,
+        is_authoritative=False,
+    )
+    session_id = _start_keeper_dashboard_session(client)
+    action_response = client.post(
+        f"/sessions/{session_id}/player-action",
+        json={
+            "actor_id": "investigator-1",
+            "action_text": "我按侦查规则检查前台记账桌的异常痕迹。",
+            "structured_action": {"type": "inspect_front_desk"},
+            "rules_query_text": "侦察能发现隐藏线索吗",
+            "deterministic_resolution_required": True,
+        },
+    )
+    assert action_response.status_code == 202
+
+    response = client.get(f"/playtest/sessions/{session_id}/keeper")
+
+    assert response.status_code == 200
+    html = response.text
+    assert "规则与知识辅助" in html
+    assert "当前相关规则提示" in html
+    assert "当前相关知识摘要" in html
+    assert "侦察能发现隐藏线索吗" in html
+    assert "发现隐藏线索与可疑痕迹" in html
+    assert "旅店笔记" in html
+    assert "稳住老板并找到账房线索时，优先核对留言页码与账册涂改痕迹。" in html
 
 
 def test_keeper_dashboard_lifecycle_controls_transition_status_and_render_closeout_summary(
@@ -988,6 +1066,9 @@ def test_keeper_dashboard_shows_natural_empty_states_without_optional_data(
     assert "当前没有待处理的 KP 提示。" in html
     assert "当前没有待审草稿。" in html
     assert "当前没有未完成目标。" in html
+    assert "规则与知识辅助" in html
+    assert "当前局面还没有明显相关的规则提示。" in html
+    assert "当前局面还没有明显相关的知识摘要。" in html
     assert "还没有最近处理结果。" in html
     assert "还没有检查点。先去创建一个用于回放或分支。" in html
     assert "当前环境缺少外部知识源" not in html

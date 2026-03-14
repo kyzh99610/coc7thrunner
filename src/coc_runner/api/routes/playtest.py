@@ -1581,6 +1581,83 @@ def _render_checkpoint_summary(checkpoints: list[dict[str, Any]], *, session_id:
     )
 
 
+def _render_keeper_runtime_assistance_panel(
+    runtime_assistance: dict[str, list[dict[str, Any]]] | None,
+) -> str:
+    assistance = runtime_assistance or {}
+    rule_hints = assistance.get("rule_hints") or []
+    knowledge_hints = assistance.get("knowledge_hints") or []
+
+    if rule_hints:
+        rule_items: list[str] = []
+        for hint in rule_hints[:3]:
+            citations = hint.get("citations") or []
+            rule_items.append(
+                f"""
+                <article class="activity-item">
+                  <div class="activity-header">
+                    <h3>{escape(str(hint.get('title') or '规则提示'))}</h3>
+                    <span class="activity-meta">{escape(str(hint.get('context_label') or '当前局面'))}</span>
+                  </div>
+                  <p>{escape(str(hint.get('summary') or '未命中可用规则依据。'))}</p>
+                  {
+                      f"<p class=\"meta-line\">引用：{escape('；'.join(str(citation) for citation in citations))}</p>"
+                      if citations
+                      else ""
+                  }
+                </article>
+                """
+            )
+        rule_block = "".join(rule_items)
+    else:
+        rule_block = '<p class="empty-state">当前局面还没有明显相关的规则提示。</p>'
+
+    if knowledge_hints:
+        knowledge_items: list[str] = []
+        for hint in knowledge_hints[:3]:
+            meta_parts = [
+                f"来源：{hint['source_title']}"
+                for key in ["source_title"]
+                if hint.get(key)
+            ]
+            if hint.get("query_text"):
+                meta_parts.append(f"关联上下文：{hint['query_text']}")
+            knowledge_items.append(
+                f"""
+                <article class="activity-item">
+                  <div class="activity-header">
+                    <h3>{escape(str(hint.get('title') or '资料摘要'))}</h3>
+                  </div>
+                  <p>{escape(str(hint.get('summary') or ''))}</p>
+                  {
+                      f"<p class=\"meta-line\">{escape(' · '.join(str(part) for part in meta_parts))}</p>"
+                      if meta_parts
+                      else ""
+                  }
+                </article>
+                """
+            )
+        knowledge_block = "".join(knowledge_items)
+    else:
+        knowledge_block = '<p class="empty-state">当前局面还没有明显相关的知识摘要。</p>'
+
+    return f"""
+      <section class="panel" id="runtime-assistance">
+        <h2>规则与知识辅助</h2>
+        <div class="summary-grid">
+          <article class="summary-card">
+            <h3>当前相关规则提示</h3>
+            <div class="recent-list">{rule_block}</div>
+          </article>
+          <article class="summary-card">
+            <h3>当前相关知识摘要</h3>
+            <div class="recent-list">{knowledge_block}</div>
+          </article>
+        </div>
+      </section>
+    """
+
+
 def _render_quick_actions(session_id: str) -> str:
     return f"""
       <section class="panel">
@@ -1603,6 +1680,7 @@ def _render_keeper_dashboard_page(
     keeper_view: dict[str, Any] | None,
     checkpoints: list[dict[str, Any]],
     warnings: list[dict[str, Any]],
+    runtime_assistance: dict[str, list[dict[str, Any]]] | None = None,
     notice: str | None = None,
     detail: dict[str, Any] | str | None = None,
     status_code: int = status.HTTP_200_OK,
@@ -1709,6 +1787,7 @@ def _render_keeper_dashboard_page(
           session_id=session_id,
           operator_id=keeper_id,
       )}
+      {_render_keeper_runtime_assistance_panel(runtime_assistance)}
       {_render_recent_result_panel(session_snapshot=snapshot, keeper_view=current_view)}
       {_render_prompt_jump_targets(active_prompts, session_id=session_id, operator_id=keeper_id)}
       {_render_draft_jump_targets(pending_drafts, session_id=session_id, reviewer_id=keeper_id)}
@@ -1801,13 +1880,20 @@ def _load_page_context(service: SessionService, session_id: str) -> tuple[dict[s
 def _load_keeper_workspace_context(
     service: SessionService,
     session_id: str,
-) -> tuple[dict[str, Any], dict[str, Any], list[dict[str, Any]], list[dict[str, Any]]]:
+) -> tuple[
+    dict[str, Any],
+    dict[str, Any],
+    list[dict[str, Any]],
+    list[dict[str, Any]],
+    dict[str, list[dict[str, Any]]],
+]:
     session, keeper_view, checkpoints, warnings = service.get_keeper_workspace(session_id)
     return (
         session.model_dump(mode="json"),
         keeper_view.model_dump(mode="json"),
         [checkpoint.model_dump(mode="json") for checkpoint in checkpoints],
         [warning.model_dump(mode="json") for warning in warnings],
+        service.get_keeper_runtime_assistance(keeper_view=keeper_view),
     )
 
 
@@ -2136,7 +2222,7 @@ def _render_keeper_dashboard_from_service(
     status_code: int = status.HTTP_200_OK,
 ) -> HTMLResponse:
     try:
-        snapshot, keeper_view, checkpoints, warnings = _load_keeper_workspace_context(
+        snapshot, keeper_view, checkpoints, warnings, runtime_assistance = _load_keeper_workspace_context(
             service,
             session_id,
         )
@@ -2147,6 +2233,7 @@ def _render_keeper_dashboard_from_service(
             keeper_view=None,
             checkpoints=[],
             warnings=[],
+            runtime_assistance=None,
             notice=notice,
             detail=detail or extract_error_detail(exc),
             status_code=(
@@ -2161,6 +2248,7 @@ def _render_keeper_dashboard_from_service(
         keeper_view=keeper_view,
         checkpoints=checkpoints,
         warnings=warnings,
+        runtime_assistance=runtime_assistance,
         notice=notice,
         detail=detail,
         status_code=status_code,

@@ -113,7 +113,7 @@ from knowledge.schemas import (
     KnowledgeSourceState,
     RuleQueryResult,
 )
-from knowledge.terminology import extract_term_matches
+from knowledge.terminology import extract_term_matches, normalize_chinese_text
 
 
 class SessionService:
@@ -508,6 +508,152 @@ class SessionService:
         checkpoints = self.repository.list_checkpoints(session.session_id)
         warnings = self._collect_import_warnings(session, language=error_language)
         return session, keeper_view, checkpoints, warnings
+
+    def get_keeper_runtime_assistance(
+        self,
+        *,
+        keeper_view: InvestigatorView,
+    ) -> dict[str, list[dict[str, Any]]]:
+        return {
+            "rule_hints": self._collect_keeper_runtime_rule_hints(keeper_view),
+            "knowledge_hints": self._collect_keeper_runtime_knowledge_hints(keeper_view),
+        }
+
+    @staticmethod
+    def _collect_keeper_runtime_rule_hints(
+        keeper_view: InvestigatorView,
+    ) -> list[dict[str, Any]]:
+        hints: list[dict[str, Any]] = []
+        seen_keys: set[tuple[str, str]] = set()
+        grounding_sources: list[tuple[str, RuleGroundingSummary]] = []
+
+        for event in reversed(keeper_view.visible_events[-8:]):
+            if event.rules_grounding is not None:
+                grounding_sources.append(("最近行动", event.rules_grounding))
+        for reviewed in reversed(keeper_view.visible_reviewed_actions[-4:]):
+            if reviewed.rules_grounding is not None:
+                grounding_sources.append(("已审草稿", reviewed.rules_grounding))
+        for action in reversed(keeper_view.visible_authoritative_actions[-4:]):
+            if action.rules_grounding is not None:
+                grounding_sources.append(("权威结果", action.rules_grounding))
+
+        for context_label, grounding in grounding_sources:
+            summary = (
+                grounding.review_summary
+                or grounding.chinese_answer_draft
+                or "未命中可用规则依据。"
+            )
+            key = (grounding.query_text, summary)
+            if key in seen_keys:
+                continue
+            seen_keys.add(key)
+            hints.append(
+                {
+                    "title": grounding.query_text,
+                    "summary": summary,
+                    "citations": list(grounding.citations[:2]),
+                    "context_label": context_label,
+                }
+            )
+            if len(hints) >= 3:
+                break
+        return hints
+
+    def _collect_keeper_runtime_knowledge_hints(
+        self,
+        keeper_view: InvestigatorView,
+    ) -> list[dict[str, Any]]:
+        if self.knowledge_repository is None:
+            return []
+        persisted_chunks = self.knowledge_repository.list_chunks()
+        if not persisted_chunks:
+            return []
+
+        retriever = KnowledgeRetriever(persisted_chunks)
+        hints: list[dict[str, Any]] = []
+        seen_chunk_ids: set[str] = set()
+
+        for query_text in self._build_keeper_runtime_query_texts(keeper_view):
+            normalized_query = normalize_chinese_text(query_text)
+            term_matches = extract_term_matches(query_text)
+            matching_chunks = [
+                chunk
+                for chunk in persisted_chunks
+                if not chunk.is_authoritative
+                and retriever._matches_query(
+                    chunk,
+                    query_text,
+                    normalized_query,
+                    term_matches,
+                )
+            ]
+            matching_chunks.sort(
+                key=lambda chunk: (
+                    chunk.priority,
+                    retriever._chunk_relevance_score(
+                        chunk,
+                        normalized_query=normalized_query,
+                        term_matches=term_matches,
+                    ),
+                ),
+                reverse=True,
+            )
+            for raw_chunk in matching_chunks:
+                if raw_chunk.chunk_id in seen_chunk_ids:
+                    continue
+                seen_chunk_ids.add(raw_chunk.chunk_id)
+                hints.append(
+                    {
+                        "title": raw_chunk.title_zh,
+                        "summary": raw_chunk.content,
+                        "source_title": raw_chunk.source_title_zh
+                        or raw_chunk.document_identity,
+                        "query_text": query_text,
+                        "citation": retriever._format_citation(raw_chunk),
+                    }
+                )
+                if len(hints) >= 3:
+                    return hints
+        return hints
+
+    @staticmethod
+    def _build_keeper_runtime_query_texts(
+        keeper_view: InvestigatorView,
+    ) -> list[str]:
+        query_texts: list[str] = []
+
+        def append_query(candidate: str | None) -> None:
+            if candidate is None:
+                return
+            normalized = candidate.strip()
+            if len(normalized) < 2 or normalized in query_texts:
+                return
+            query_texts.append(normalized)
+
+        append_query(keeper_view.current_scene.title)
+        append_query(keeper_view.current_scene.summary)
+
+        if keeper_view.progress_state is not None and keeper_view.progress_state.current_beat:
+            current_beat = next(
+                (
+                    beat
+                    for beat in keeper_view.scenario.beats
+                    if beat.beat_id == keeper_view.progress_state.current_beat
+                ),
+                None,
+            )
+            if current_beat is not None:
+                append_query(current_beat.title)
+                append_query(current_beat.scene_objective)
+
+        if keeper_view.keeper_workflow is not None:
+            for objective in keeper_view.keeper_workflow.unresolved_objectives[:2]:
+                append_query(objective.text)
+
+        for event in reversed(keeper_view.visible_events[-2:]):
+            append_query(event.text)
+
+        return query_texts[:6]
 
     def _resolve_checkpoint_namespace_session_id(
         self,
