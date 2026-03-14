@@ -42,6 +42,7 @@ def test_session_checkpoint_page_displays_list_and_actions(client: TestClient) -
     assert "未写备注" in html
     assert str(checkpoint["source_session_version"]) in html
     assert checkpoint["created_by"] in html
+    assert 'href="/playtest/sessions"' in html
     assert f'/playtest/sessions/{session_id}/home"' in html
     assert f'/playtest/sessions/{session_id}/checkpoints/{checkpoint["checkpoint_id"]}/export' in html
     assert f"/playtest/sessions/{session_id}/checkpoints/{checkpoint['checkpoint_id']}/restore" in html

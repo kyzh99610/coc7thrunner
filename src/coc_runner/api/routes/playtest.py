@@ -115,6 +115,10 @@ def _render_launcher_link(session_id: str) -> str:
     return f'<a href="/playtest/sessions/{escape(session_id)}/home">返回 playtest 入口</a>'
 
 
+def _render_session_index_link() -> str:
+    return '<a href="/playtest/sessions">返回 session 列表</a>'
+
+
 def _session_status_label(status_value: Any) -> str:
     normalized = str(status_value or SessionStatus.PLANNED.value)
     return {
@@ -187,6 +191,9 @@ def _render_playtest_launcher_page(
           <span>KP：{escape(str(snapshot.get('keeper_name', 'KP')))}</span>
           <span>keeper_id: <code>{escape(str(snapshot.get('keeper_id', '—')))}</code></span>
           <span>当前状态：{_render_session_status_display(session_status)}</span>
+        </div>
+        <div class="nav-links">
+          {_render_session_index_link()}
         </div>
       </section>
       {_render_detail(detail)}
@@ -422,6 +429,7 @@ def _render_checkpoint_page(
     nav_links = (
         f"""
         <div class="nav-links">
+          {_render_session_index_link()}
           {_render_launcher_link(session_id)}
           <a href="/playtest/sessions/{escape(session_id)}/keeper">打开主持人工作台</a>
           <a href="/sessions/{escape(session_id)}/snapshot">查看 snapshot JSON</a>
@@ -429,7 +437,7 @@ def _render_checkpoint_page(
         </div>
         """
         if has_live_session
-        else '<div class="nav-links"><span class="muted">当前页面只承载导入的 checkpoint 记录，没有对应的本地 source session。</span></div>'
+        else f'<div class="nav-links">{_render_session_index_link()}<span class="muted">当前页面只承载导入的 checkpoint 记录，没有对应的本地 source session。</span></div>'
     )
     create_panel = (
         f"""

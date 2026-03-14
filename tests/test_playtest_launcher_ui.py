@@ -22,6 +22,7 @@ def test_playtest_launcher_page_displays_summary_and_all_entry_links(
     assert "当前状态" in html
     assert "计划中" in html
     assert "planned" in html
+    assert 'href="/playtest/sessions"' in html
     assert f'/playtest/sessions/{session_id}/keeper"' in html
     assert f'/playtest/sessions/{session_id}"' in html
     assert f'/playtest/sessions/{session_id}/investigator/investigator-1"' in html
