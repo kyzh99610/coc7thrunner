@@ -81,6 +81,7 @@ class ViewerRole(StrEnum):
 
 
 class SessionStatus(StrEnum):
+    PLANNED = "planned"
     ACTIVE = "active"
     PAUSED = "paused"
     COMPLETED = "completed"
@@ -1461,7 +1462,7 @@ class SessionState(BaseModel):
     keeper_name: str = Field(min_length=1, max_length=80)
     language_preference: LanguagePreference = LanguagePreference.ZH_CN
     allow_test_mode_self_review: bool = False
-    status: SessionStatus = SessionStatus.ACTIVE
+    status: SessionStatus = SessionStatus.PLANNED
     scenario: ScenarioScaffold
     current_scene: SceneState
     participants: list[SessionParticipant]
@@ -1666,6 +1667,12 @@ class UpdateKeeperPromptResponse(BaseModel):
 
 class KeeperLiveControlRequest(BaseModel):
     operator_id: str = Field(min_length=1, max_length=80)
+    language_preference: LanguagePreference | None = None
+
+
+class UpdateSessionLifecycleRequest(BaseModel):
+    operator_id: str = Field(min_length=1, max_length=80)
+    target_status: SessionStatus
     language_preference: LanguagePreference | None = None
 
 

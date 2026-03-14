@@ -82,11 +82,13 @@ from coc_runner.domain.models import (
     SessionImportResponse,
     SessionImportWarning,
     SessionParticipant,
+    SessionStatus,
     SessionStartRequest,
     SessionStartResponse,
     SessionState,
     StatusEffect,
     UpdateKeeperPromptRequest,
+    UpdateSessionLifecycleRequest,
     UpdateKeeperPromptResponse,
     UpdateCheckpointRequest,
     UpdateCheckpointResponse,
@@ -1884,6 +1886,55 @@ class SessionService:
         )
         return session, effective_language, error_context
 
+    def _load_keeper_lifecycle_context(
+        self,
+        session_id: str,
+        request: UpdateSessionLifecycleRequest,
+    ) -> tuple[SessionState, LanguagePreference, dict[str, Any]]:
+        error_language = self._resolve_language(request.language_preference)
+        try:
+            session = self._load_session(session_id, language=error_language)
+        except LookupError as exc:
+            message = exc.args[0] if exc.args and isinstance(exc.args[0], str) else self._message(
+                "session_not_found",
+                error_language,
+                session_id=session_id,
+            )
+            raise LookupError(
+                build_session_action_error_detail(
+                    code="session_lifecycle_session_not_found",
+                    message=message,
+                    scope="session_lifecycle_session",
+                    session_id=session_id,
+                    operator_id=request.operator_id,
+                    target_status=request.target_status.value,
+                )
+            ) from exc
+        effective_language = self._resolve_language(
+            request.language_preference,
+            session.language_preference,
+        )
+        error_context = {
+            "session_id": session.session_id,
+            "operator_id": request.operator_id,
+            "target_status": request.target_status.value,
+        }
+        self._authorize_operator(
+            session,
+            operator_id=request.operator_id,
+            language=effective_language,
+            error_detail=build_session_action_error_detail(
+                code="session_lifecycle_operator_not_authorized",
+                message=self._message(
+                    "session_lifecycle_operator_not_authorized",
+                    effective_language,
+                ),
+                scope="session_lifecycle_permission",
+                **error_context,
+            ),
+        )
+        return session, effective_language, error_context
+
     def _append_keeper_live_control_record(
         self,
         *,
@@ -2635,6 +2686,103 @@ class SessionService:
             language_preference=effective_language,
             target_id=target_beat.beat_id,
             target_type="beat",
+        )
+
+    def update_keeper_session_lifecycle(
+        self,
+        session_id: str,
+        request: UpdateSessionLifecycleRequest,
+    ) -> KeeperLiveControlResponse:
+        session, effective_language, error_context = self._load_keeper_lifecycle_context(
+            session_id,
+            request,
+        )
+        try:
+            current_status = session.status
+            allowed_transitions = {
+                SessionStatus.PLANNED: {SessionStatus.ACTIVE},
+                SessionStatus.ACTIVE: {SessionStatus.PAUSED, SessionStatus.COMPLETED},
+                SessionStatus.PAUSED: {SessionStatus.ACTIVE, SessionStatus.COMPLETED},
+                SessionStatus.COMPLETED: set(),
+            }
+            if request.target_status not in allowed_transitions.get(current_status, set()):
+                raise ValueError(
+                    self._message(
+                        "session_status_transition_invalid",
+                        effective_language,
+                        from_status=self._session_status_label(current_status, effective_language),
+                        to_status=self._session_status_label(request.target_status, effective_language),
+                    )
+                )
+            current_time = datetime.now(timezone.utc)
+            expected_version = session.state_version
+            session.status = request.target_status
+            event_text = self._message(
+                "session_status_updated",
+                effective_language,
+                status=self._session_status_label(request.target_status, effective_language),
+            )
+            self._append_keeper_live_control_record(
+                session=session,
+                operator_id=request.operator_id,
+                current_time=current_time,
+                language=effective_language,
+                target_id=session.session_id,
+                control_type="session_lifecycle",
+                event_text=event_text,
+                details={
+                    "from_status": current_status.value,
+                    "to_status": request.target_status.value,
+                    "result": "updated",
+                },
+            )
+            session.state_version += 1
+            session.updated_at = current_time
+            self._save_session(
+                session,
+                expected_version=expected_version,
+                reason="keeper_live_control",
+                language=effective_language,
+            )
+        except ConflictError as exc:
+            message = exc.args[0] if exc.args and isinstance(exc.args[0], str) else self._message(
+                "state_conflict",
+                effective_language,
+            )
+            raise ConflictError(
+                build_session_action_error_detail(
+                    code="session_lifecycle_state_conflict",
+                    message=message,
+                    scope="session_lifecycle_state",
+                    **error_context,
+                )
+            ) from exc
+        except ValueError as exc:
+            message = exc.args[0] if exc.args and isinstance(exc.args[0], str) else self._message(
+                "session_status_transition_invalid",
+                effective_language,
+                from_status=self._session_status_label(session.status, effective_language),
+                to_status=self._session_status_label(request.target_status, effective_language),
+            )
+            raise ValueError(
+                build_session_action_error_detail(
+                    code="session_lifecycle_invalid",
+                    message=message,
+                    scope="session_lifecycle",
+                    **error_context,
+                )
+            ) from exc
+        return KeeperLiveControlResponse(
+            message=self._message(
+                "session_status_updated",
+                effective_language,
+                status=self._session_status_label(request.target_status, effective_language),
+            ),
+            session_id=session.session_id,
+            state_version=session.state_version,
+            language_preference=effective_language,
+            target_id=session.session_id,
+            target_type="session_status",
         )
 
     def review_draft_action(
@@ -5407,6 +5555,25 @@ class SessionService:
             KeeperPromptStatus.COMPLETED: "completed",
         }[status]
 
+    @staticmethod
+    def _session_status_label(
+        status: SessionStatus,
+        language: LanguagePreference,
+    ) -> str:
+        if language == LanguagePreference.ZH_CN:
+            return {
+                SessionStatus.PLANNED: "计划中",
+                SessionStatus.ACTIVE: "进行中",
+                SessionStatus.PAUSED: "已暂停",
+                SessionStatus.COMPLETED: "已完成",
+            }[status]
+        return {
+            SessionStatus.PLANNED: "planned",
+            SessionStatus.ACTIVE: "active",
+            SessionStatus.PAUSED: "paused",
+            SessionStatus.COMPLETED: "completed",
+        }[status]
+
     def _apply_scene_transition_effect(
         self,
         *,
@@ -6453,6 +6620,7 @@ class SessionService:
             "draft_not_pending": "草稿 {draft_id} 当前不是待审核状态",
             "reviewer_not_authorized": "只有本局 KP 可以审核该草稿",
             "operator_not_authorized": "只有本局 KP 可以提交手动权威行动",
+            "session_lifecycle_operator_not_authorized": "只有本局 KP 可以切换会话状态",
             "keeper_prompt_operator_not_authorized": "只有本局 KP 可以更新 KP 提示状态",
             "keeper_prompt_not_found": "未找到 KP 提示 {prompt_id}",
             "keeper_prompt_updated": "KP 提示已更新",
@@ -6497,6 +6665,8 @@ class SessionService:
             "keeper_live_control_beat_not_reachable": "当前 beat 不能直接推进到“{title}”",
             "keeper_live_control_clue_revealed": "已公开线索：{title}",
             "keeper_live_control_scene_revealed": "已公开场景：{title}",
+            "session_status_updated": "会话状态已切换为{status}",
+            "session_status_transition_invalid": "会话状态不能从{from_status}切换为{to_status}",
             "scene_objective_completed_by_beat": "由剧情节点“{title}”推进完成",
             "scene_objective_completed_by_keeper": "由 KP 手动推进完成",
             "scene_revealed_initial": "初始场景已公开",
@@ -6562,6 +6732,7 @@ class SessionService:
             "draft_not_pending": "Draft {draft_id} is not pending review",
             "reviewer_not_authorized": "Only the session keeper may review this draft",
             "operator_not_authorized": "Only the session keeper may submit manual authoritative actions",
+            "session_lifecycle_operator_not_authorized": "Only the session keeper may change the session lifecycle status",
             "keeper_prompt_operator_not_authorized": "Only the session keeper may update KP prompt status",
             "keeper_prompt_not_found": "KP prompt {prompt_id} was not found",
             "keeper_prompt_updated": "KP prompt updated",
@@ -6606,6 +6777,8 @@ class SessionService:
             "keeper_live_control_beat_not_reachable": "Current beat cannot advance directly to {title}",
             "keeper_live_control_clue_revealed": "Keeper revealed clue: {title}",
             "keeper_live_control_scene_revealed": "Keeper revealed scene: {title}",
+            "session_status_updated": "Session status changed to {status}",
+            "session_status_transition_invalid": "Session status cannot change from {from_status} to {to_status}",
             "scene_objective_completed_by_beat": "completed by beat {title}",
             "scene_objective_completed_by_keeper": "completed by keeper live control",
             "scene_revealed_initial": "initial scene revealed",

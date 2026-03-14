@@ -424,7 +424,7 @@ def test_snapshot_returns_raw_session_state(client: TestClient) -> None:
 
     assert snapshot["session_id"] == session_id
     assert snapshot["keeper_id"] == KEEPER_ID
-    assert snapshot["status"] == "active"
+    assert snapshot["status"] == "planned"
     assert "audit_log" in snapshot
     assert "timeline" in snapshot
     assert "participants" in snapshot

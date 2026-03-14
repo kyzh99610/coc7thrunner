@@ -19,6 +19,8 @@ from coc_runner.domain.models import (
     PlayerActionRequest,
     ReviewDraftRequest,
     RestoreCheckpointRequest,
+    SessionStatus,
+    UpdateSessionLifecycleRequest,
     UpdateCheckpointRequest,
     UpdateKeeperPromptRequest,
     ViewerRole,
@@ -113,6 +115,24 @@ def _render_launcher_link(session_id: str) -> str:
     return f'<a href="/playtest/sessions/{escape(session_id)}/home">返回 playtest 入口</a>'
 
 
+def _session_status_label(status_value: Any) -> str:
+    normalized = str(status_value or SessionStatus.PLANNED.value)
+    return {
+        SessionStatus.PLANNED.value: "计划中",
+        SessionStatus.ACTIVE.value: "进行中",
+        SessionStatus.PAUSED.value: "已暂停",
+        SessionStatus.COMPLETED.value: "已完成",
+    }.get(normalized, normalized)
+
+
+def _render_session_status_display(status_value: Any) -> str:
+    normalized = str(status_value or SessionStatus.PLANNED.value)
+    return (
+        f'{escape(_session_status_label(normalized))} '
+        f'<span class="mono">{escape(normalized)}</span>'
+    )
+
+
 def _render_playtest_launcher_page(
     *,
     session_id: str,
@@ -135,6 +155,7 @@ def _render_playtest_launcher_page(
         if current_beat_id is not None
         else None
     )
+    session_status = snapshot.get("status") or SessionStatus.PLANNED.value
     investigator_entries = [
         participant
         for participant in snapshot.get("participants") or []
@@ -165,9 +186,15 @@ def _render_playtest_launcher_page(
           <span>场景：{escape(str(scenario.get('title', '未知会话')))}</span>
           <span>KP：{escape(str(snapshot.get('keeper_name', 'KP')))}</span>
           <span>keeper_id: <code>{escape(str(snapshot.get('keeper_id', '—')))}</code></span>
+          <span>当前状态：{_render_session_status_display(session_status)}</span>
         </div>
       </section>
       {_render_detail(detail)}
+      {
+          '<section class="feedback feedback-success"><h2>该局已完成</h2><p>可进入主持人工作台查看最小收尾摘要，或前往检查点页面继续导出/分支。</p></section>'
+          if session_status == SessionStatus.COMPLETED.value
+          else ''
+      }
       <section class="panel">
         <h2>会话摘要</h2>
         <div class="summary-grid">
@@ -178,6 +205,7 @@ def _render_playtest_launcher_page(
               <li>当前 beat：{escape(str(current_beat_id or '无'))}</li>
               <li>当前 beat 标题：{escape(str(current_beat_title or '无'))}</li>
               <li>状态版本：{escape(str(snapshot.get('state_version', '—')))}</li>
+              <li>当前状态：{escape(_session_status_label(session_status))} <span class="mono">{escape(str(session_status))}</span></li>
             </ul>
           </article>
           <article class="summary-card">
@@ -614,6 +642,95 @@ def _render_draft_jump_targets(
     )
 
 
+def _render_session_lifecycle_panel(
+    *,
+    session_snapshot: dict[str, Any],
+    keeper_view: dict[str, Any],
+    checkpoints: list[dict[str, Any]],
+    session_id: str,
+    operator_id: str,
+) -> str:
+    status_value = str(session_snapshot.get("status") or SessionStatus.PLANNED.value)
+    progress_state = keeper_view.get("progress_state") or {}
+    workflow = keeper_view.get("keeper_workflow") or {}
+    summary = workflow.get("summary") or {}
+    current_scene = keeper_view.get("current_scene") or {}
+    current_beat_id = progress_state.get("current_beat")
+    completed_objective_count = len(progress_state.get("completed_objective_history") or [])
+    unresolved_objective_count = int(
+        summary.get("unresolved_objective_count")
+        or len(workflow.get("unresolved_objectives") or [])
+    )
+    investigator_count = sum(
+        1
+        for participant in session_snapshot.get("participants") or []
+        if isinstance(participant, dict)
+        and participant.get("kind") == "human"
+        and participant.get("actor_id") != session_snapshot.get("keeper_id")
+    )
+    allowed_transitions = {
+        SessionStatus.PLANNED.value: [(SessionStatus.ACTIVE.value, "切换到 active")],
+        SessionStatus.ACTIVE.value: [
+            (SessionStatus.PAUSED.value, "切换到 paused"),
+            (SessionStatus.COMPLETED.value, "标记为 completed"),
+        ],
+        SessionStatus.PAUSED.value: [
+            (SessionStatus.ACTIVE.value, "恢复为 active"),
+            (SessionStatus.COMPLETED.value, "标记为 completed"),
+        ],
+        SessionStatus.COMPLETED.value: [],
+    }
+    action_buttons = "".join(
+        f"""
+        <button type="submit" name="target_status" value="{escape(target_status)}">{escape(label)}</button>
+        """
+        for target_status, label in allowed_transitions.get(status_value, [])
+    )
+    lifecycle_form = (
+        f"""
+        <form method="post" action="/playtest/sessions/{escape(session_id)}/keeper/lifecycle#lifecycle-control" data-submit-label="提交中...">
+          <input type="hidden" name="operator_id" value="{escape(operator_id)}" />
+          <div class="checkpoint-secondary-actions">
+            {action_buttons}
+          </div>
+        </form>
+        """
+        if action_buttons
+        else '<p class="empty-state">当前状态没有额外可切换的下一个生命周期状态。</p>'
+    )
+    closeout_block = (
+        f"""
+        <article class="summary-card">
+          <h3>本局收尾摘要</h3>
+          <ul>
+            <li>当前场景：{escape(str(current_scene.get('title', '未知场景')))}</li>
+            <li>当前 beat：{escape(str(current_beat_id or '无'))}</li>
+            <li>已完成目标：{escape(str(completed_objective_count))}</li>
+            <li>未完成目标：{escape(str(unresolved_objective_count))}</li>
+            <li>检查点数量：{escape(str(len(checkpoints)))}</li>
+            <li>调查员数量：{escape(str(investigator_count))}</li>
+          </ul>
+        </article>
+        """
+        if status_value == SessionStatus.COMPLETED.value
+        else ""
+    )
+    return f"""
+      <section class="panel" id="lifecycle-control">
+        <h2>会话生命周期</h2>
+        <div class="summary-grid">
+          <article class="summary-card">
+            <h3>当前状态</h3>
+            <p class="meta-line">当前状态：{_render_session_status_display(status_value)}</p>
+            <p class="help">只提供 planned / active / paused / completed 的最小切换，不改变现有主链写能力。</p>
+            {lifecycle_form}
+          </article>
+          {closeout_block}
+        </div>
+      </section>
+    """
+
+
 def _render_keeper_live_control_panel(
     *,
     keeper_view: dict[str, Any],
@@ -814,6 +931,8 @@ def _render_keeper_live_control_panel(
 
 def _resolve_live_control_jump_target(payload: dict[str, Any]) -> tuple[str, str] | None:
     control_type = payload.get("control_type")
+    if control_type == "session_lifecycle":
+        return "#lifecycle-control", "回到 lifecycle 控制"
     if control_type in {"objective_complete", "objective_reopen"}:
         objective_id = payload.get("objective_id")
         if objective_id:
@@ -840,6 +959,7 @@ def _render_live_control_jump_link(payload: dict[str, Any]) -> str:
 def _render_live_control_type_label(payload: dict[str, Any]) -> str:
     control_type = payload.get("control_type")
     label = {
+        "session_lifecycle": "Session 状态",
         "objective_complete": "Objective 已完成",
         "objective_reopen": "Objective 已恢复未完成",
         "reveal_clue": "Reveal 线索",
@@ -955,6 +1075,7 @@ def _render_recent_result_panel(
         if isinstance(event.get("structured_payload"), dict)
         and (event.get("structured_payload") or {}).get("control_type")
         in {
+            "session_lifecycle",
             "objective_complete",
             "objective_reopen",
             "advance_beat",
@@ -1171,6 +1292,7 @@ def _render_keeper_dashboard_page(
     scenario = current_view.get("scenario") or {}
     current_scene = current_view.get("current_scene") or {}
     keeper_id = str(snapshot.get("keeper_id", current_view.get("keeper_id", "keeper-1")))
+    session_status = snapshot.get("status") or SessionStatus.PLANNED.value
     beats = {beat["beat_id"]: beat for beat in scenario.get("beats", [])}
     current_beat_id = progress_state.get("current_beat")
     current_beat = beats.get(current_beat_id) if current_beat_id else None
@@ -1202,6 +1324,7 @@ def _render_keeper_dashboard_page(
           <span>keeper_id: <code>{escape(str(snapshot.get('keeper_id', '—')))}</code></span>
           <span>当前场景：{escape(str(current_scene.get('title', '未知场景')))}</span>
           <span>状态版本：{escape(str(current_view.get('state_version', snapshot.get('state_version', '—'))))}</span>
+          <span>当前状态：{_render_session_status_display(session_status)}</span>
           <span class="status-pill{' warn' if warnings else ''}">
             {escape('存在降级/外部来源告警' if warnings else '状态正常')}
           </span>
@@ -1225,6 +1348,7 @@ def _render_keeper_dashboard_page(
               <li>当前场景：{escape(str(current_scene.get('title', '未知场景')))}</li>
               <li>当前 beat：{escape(str(current_beat_id or '无'))}</li>
               <li>当前 beat 标题：{escape(str(current_beat.get('title') if current_beat else '无'))}</li>
+              <li>当前状态：{escape(_session_status_label(session_status))} <span class="mono">{escape(str(session_status))}</span></li>
             </ul>
           </article>
           <article class="summary-card">
@@ -1241,6 +1365,13 @@ def _render_keeper_dashboard_page(
           </article>
         </div>
       </section>
+      {_render_session_lifecycle_panel(
+          session_snapshot=snapshot,
+          keeper_view=current_view,
+          checkpoints=checkpoints,
+          session_id=session_id,
+          operator_id=keeper_id,
+      )}
       <section class="panel" id="attention">
         <h2>待处理</h2>
         <div class="attention-grid">
@@ -1757,6 +1888,35 @@ def keeper_dashboard_page(
     service: SessionService = Depends(get_session_service),
 ) -> HTMLResponse:
     return _render_keeper_dashboard_from_service(service=service, session_id=session_id)
+
+
+@router.post("/sessions/{session_id}/keeper/lifecycle", response_class=HTMLResponse)
+async def update_session_lifecycle_via_keeper_dashboard(
+    session_id: str,
+    request: Request,
+    service: SessionService = Depends(get_session_service),
+) -> HTMLResponse:
+    form = await _read_form_payload(request)
+    try:
+        response = service.update_keeper_session_lifecycle(
+            session_id,
+            UpdateSessionLifecycleRequest(
+                operator_id=form.get("operator_id", ""),
+                target_status=form.get("target_status", ""),
+            ),
+        )
+        return _render_keeper_dashboard_from_service(
+            service=service,
+            session_id=session_id,
+            notice=response.message,
+        )
+    except (ValidationError, LookupError, PermissionError, ConflictError, ValueError) as exc:
+        return _render_playtest_exception(
+            _render_keeper_dashboard_from_service,
+            exc=exc,
+            service=service,
+            session_id=session_id,
+        )
 
 
 @router.get("/sessions/{session_id}/investigator/{viewer_id}", response_class=HTMLResponse)

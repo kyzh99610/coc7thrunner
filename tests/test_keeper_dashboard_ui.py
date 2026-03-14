@@ -169,6 +169,9 @@ def test_keeper_dashboard_displays_summary_attention_activity_and_checkpoint_lin
     assert "旅店账房" in html
     assert "beat.office_records" in html
     assert "核对账房记录" in html
+    assert "当前状态" in html
+    assert "计划中" in html
+    assert "planned" in html
     assert "找到能指向地窖的记录" in html
     assert "KP：秦老板看到调查员翻出旧图纸时，应表现出短暂失态。" in html
     assert "KP 草稿：若调查员继续追问秦老板，应准备对话压力。" in html
@@ -180,6 +183,29 @@ def test_keeper_dashboard_displays_summary_attention_activity_and_checkpoint_lin
     assert html.index("我趁老板转身时抽出柜台后的旧图纸并溜进账房。") < html.index(
         "会话已创建：雾港旅店的低语"
     )
+
+
+def test_keeper_dashboard_shows_lifecycle_control_for_default_planned_session(
+    client: TestClient,
+) -> None:
+    session_id = _start_keeper_dashboard_session(client)
+
+    response = client.get(f"/playtest/sessions/{session_id}/keeper")
+
+    assert response.status_code == 200
+    html = response.text
+    assert "会话生命周期" in html
+    assert 'id="lifecycle-control"' in html
+    assert "当前状态" in html
+    assert "计划中" in html
+    assert "planned" in html
+    assert (
+        f'action="/playtest/sessions/{session_id}/keeper/lifecycle#lifecycle-control"'
+        in html
+    )
+    assert 'name="target_status" value="active"' in html
+    assert 'name="target_status" value="paused"' not in html
+    assert 'name="target_status" value="completed"' not in html
 
 
 def test_keeper_dashboard_attention_items_include_prompt_and_draft_jump_targets(
@@ -216,6 +242,7 @@ def test_keeper_dashboard_shows_live_control_entries_and_investigator_page_does_
     assert keeper_response.status_code == 200
     keeper_html = keeper_response.text
     assert "实时控场" in keeper_html
+    assert "会话生命周期" in keeper_html
     assert "目标控制" in keeper_html
     assert "Reveal 控制" in keeper_html
     assert 'id="objective-control"' in keeper_html
@@ -239,9 +266,98 @@ def test_keeper_dashboard_shows_live_control_entries_and_investigator_page_does_
 
     assert investigator_response.status_code == 200
     investigator_html = investigator_response.text
+    assert "会话生命周期" not in investigator_html
     assert "实时控场" not in investigator_html
+    assert "/keeper/lifecycle" not in investigator_html
     assert "/keeper/objectives/" not in investigator_html
     assert "/keeper/reveal/" not in investigator_html
+
+
+def test_keeper_dashboard_lifecycle_controls_transition_status_and_render_closeout_summary(
+    client: TestClient,
+) -> None:
+    session_id = _start_keeper_dashboard_session(client)
+
+    activate_response = client.post(
+        f"/playtest/sessions/{session_id}/keeper/lifecycle",
+        data={"operator_id": KEEPER_ID, "target_status": "active"},
+    )
+
+    assert activate_response.status_code == 200
+    activate_html = activate_response.text
+    assert "会话状态已切换为进行中" in activate_html
+    assert "当前状态" in activate_html
+    assert "进行中" in activate_html
+    assert "active" in activate_html
+    assert 'name="target_status" value="paused"' in activate_html
+    assert 'name="target_status" value="completed"' in activate_html
+    assert "最近控场结果" in activate_html
+    assert '控场类型：<span class="mono">Session 状态</span>' in activate_html
+    assert 'href="#lifecycle-control"' in activate_html
+
+    pause_response = client.post(
+        f"/playtest/sessions/{session_id}/keeper/lifecycle",
+        data={"operator_id": KEEPER_ID, "target_status": "paused"},
+    )
+
+    assert pause_response.status_code == 200
+    pause_html = pause_response.text
+    assert "会话状态已切换为已暂停" in pause_html
+    assert "已暂停" in pause_html
+    assert "paused" in pause_html
+    assert 'name="target_status" value="active"' in pause_html
+    assert 'name="target_status" value="completed"' in pause_html
+
+    resume_response = client.post(
+        f"/playtest/sessions/{session_id}/keeper/lifecycle",
+        data={"operator_id": KEEPER_ID, "target_status": "active"},
+    )
+
+    assert resume_response.status_code == 200
+    resume_html = resume_response.text
+    assert "会话状态已切换为进行中" in resume_html
+    assert "进行中" in resume_html
+    assert "active" in resume_html
+
+    complete_response = client.post(
+        f"/playtest/sessions/{session_id}/keeper/lifecycle",
+        data={"operator_id": KEEPER_ID, "target_status": "completed"},
+    )
+
+    assert complete_response.status_code == 200
+    complete_html = complete_response.text
+    assert "会话状态已切换为已完成" in complete_html
+    assert "当前状态" in complete_html
+    assert "已完成" in complete_html
+    assert "completed" in complete_html
+    assert "本局收尾摘要" in complete_html
+    assert "当前场景：" in complete_html
+    assert "当前 beat：" in complete_html
+    assert "调查员数量：1" in complete_html
+    assert "检查点数量：0" in complete_html
+    assert 'href="#lifecycle-control"' in complete_html
+    assert 'name="target_status"' not in complete_html
+
+
+def test_keeper_dashboard_invalid_lifecycle_transition_renders_structured_error_without_mutating_state(
+    client: TestClient,
+) -> None:
+    session_id = _start_keeper_dashboard_session(client)
+    before_snapshot = _get_snapshot(client, session_id)
+
+    response = client.post(
+        f"/playtest/sessions/{session_id}/keeper/lifecycle",
+        data={"operator_id": KEEPER_ID, "target_status": "paused"},
+    )
+
+    assert response.status_code == 400
+    html = response.text
+    assert "操作失败" in html
+    assert "session_lifecycle_invalid" in html
+    assert "会话状态不能从计划中切换为已暂停" in html
+
+    after_snapshot = _get_snapshot(client, session_id)
+    assert after_snapshot == before_snapshot
 
 
 def test_keeper_dashboard_shows_beat_progression_block_with_legal_next_beat_candidates(
