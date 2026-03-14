@@ -6,6 +6,7 @@ from fastapi.testclient import TestClient
 
 from tests.helpers import make_participant
 from tests.test_session_import import (
+    KEEPER_ID,
     _discover_note_and_queue_prompt,
     _get_snapshot,
     _import_character_sheet_source,
@@ -50,12 +51,45 @@ def test_investigator_playtest_page_opens_with_summary_and_action_form(
     assert "提交玩家行动" in html
     assert 'name="action_text"' in html
     assert "提交行动" in html
+    assert "本局已结束" not in html
     assert f'/playtest/sessions/{session_id}/home"' in html
     assert "最近可见事件" in html
     assert "会话已创建：迷雾中的旅店" in html
     assert "KP 提示" not in html
     assert "visible_reviewed_actions" not in html
     assert "keeper_workflow" not in html
+
+
+def test_investigator_playtest_page_shows_completed_notice_and_hides_action_form_when_session_completed(
+    client: TestClient,
+) -> None:
+    session_id = _start_investigator_ui_session(client)
+
+    activate_response = client.post(
+        f"/playtest/sessions/{session_id}/keeper/lifecycle",
+        data={"operator_id": KEEPER_ID, "target_status": "active"},
+    )
+    assert activate_response.status_code == 200
+
+    complete_response = client.post(
+        f"/playtest/sessions/{session_id}/keeper/lifecycle",
+        data={"operator_id": KEEPER_ID, "target_status": "completed"},
+    )
+    assert complete_response.status_code == 200
+
+    response = client.get(f"/playtest/sessions/{session_id}/investigator/investigator-1")
+
+    assert response.status_code == 200
+    html = response.text
+    assert "本局已结束" in html
+    assert "当前页面保留结束后的查看状态" in html
+    assert "当前场景：旅店前厅" in html
+    assert "最近可见事件" in html
+    assert "会话已创建：迷雾中的旅店" in html
+    assert "提交玩家行动" in html
+    assert "本局已结束，当前页面不再提交新的玩家行动。" in html
+    assert 'name="action_text"' not in html
+    assert "提交行动" not in html
 
 
 def test_investigator_playtest_page_preserves_private_visibility_without_keeper_leakage(

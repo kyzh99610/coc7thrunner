@@ -1753,6 +1753,7 @@ def _render_investigator_page(
     session_id: str,
     viewer_id: str,
     investigator_view: dict[str, Any] | None,
+    session_status: str | None = None,
     notice: str | None = None,
     detail: dict[str, Any] | str | None = None,
     action_result: dict[str, Any] | None = None,
@@ -1780,6 +1781,35 @@ def _render_investigator_page(
     scene_title = view.get("current_scene", {}).get("title", "未知场景")
     state_version = view.get("state_version", "—")
     action_form_value = escape(action_text or "")
+    normalized_session_status = str(session_status or SessionStatus.PLANNED.value)
+    completed_notice = (
+        '<section class="warning-box"><h2>本局已结束</h2>'
+        '<p>当前页面保留结束后的查看状态；你仍可查看自己的可见信息和最近结果。</p>'
+        "</section>"
+        if normalized_session_status == SessionStatus.COMPLETED.value
+        else ""
+    )
+    action_panel = (
+        """
+      <section class="panel">
+        <h2>提交玩家行动</h2>
+        <p class="empty-state">本局已结束，当前页面不再提交新的玩家行动。</p>
+      </section>
+        """
+        if normalized_session_status == SessionStatus.COMPLETED.value
+        else f"""
+      <section class="panel">
+        <h2>提交玩家行动</h2>
+        <form method="post" action="/playtest/sessions/{escape(session_id)}/investigator/{escape(viewer_id)}/actions" data-submit-label="提交中...">
+          <label>
+            action_text
+            <textarea name="action_text" rows="4" placeholder="例如：我检查门缝后的低语来源。" required>{action_form_value}</textarea>
+          </label>
+          <button type="submit">提交行动</button>
+        </form>
+      </section>
+        """
+    )
 
     body = f"""
       <section class="hero">
@@ -1794,6 +1824,7 @@ def _render_investigator_page(
           {_render_launcher_link(session_id)}
         </div>
       </section>
+      {completed_notice}
       {_render_notice(notice)}
       {_render_detail(detail)}
       {_render_investigator_action_result(action_result)}
@@ -1832,16 +1863,7 @@ def _render_investigator_page(
           </article>
         </div>
       </section>
-      <section class="panel">
-        <h2>提交玩家行动</h2>
-        <form method="post" action="/playtest/sessions/{escape(session_id)}/investigator/{escape(viewer_id)}/actions" data-submit-label="提交中...">
-          <label>
-            action_text
-            <textarea name="action_text" rows="4" placeholder="例如：我检查门缝后的低语来源。" required>{action_form_value}</textarea>
-          </label>
-          <button type="submit">提交行动</button>
-        </form>
-      </section>
+      {action_panel}
       <section class="panel">
         <h2>最近可见事件</h2>
         <div class="recent-list">
@@ -1922,12 +1944,14 @@ def _render_investigator_page_from_service(
 ) -> HTMLResponse:
     try:
         investigator_view = _load_investigator_page_context(service, session_id, viewer_id)
+        session_snapshot = service.snapshot_session(session_id)
     except (LookupError, ValueError) as exc:
         fallback_detail = detail or extract_error_detail(exc)
         return _render_investigator_page(
             session_id=session_id,
             viewer_id=viewer_id,
             investigator_view=None,
+            session_status=None,
             notice=notice,
             detail=fallback_detail,
             action_result=action_result,
@@ -1946,6 +1970,7 @@ def _render_investigator_page_from_service(
         session_id=session_id,
         viewer_id=viewer_id,
         investigator_view=investigator_view,
+        session_status=str(session_snapshot.get("status") or SessionStatus.PLANNED.value),
         notice=notice,
         detail=detail,
         action_result=action_result,
