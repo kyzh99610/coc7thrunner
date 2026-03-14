@@ -131,6 +131,178 @@ def test_keeper_dashboard_attention_items_include_prompt_and_draft_jump_targets(
     assert "KP 草稿：若调查员继续追问秦老板，应准备对话压力。" in html
 
 
+def test_keeper_dashboard_shows_live_control_entries_and_investigator_page_does_not(
+    client: TestClient,
+) -> None:
+    session_id = _start_keeper_dashboard_session(client)
+
+    keeper_response = client.get(f"/playtest/sessions/{session_id}/keeper")
+    investigator_response = client.get(
+        f"/playtest/sessions/{session_id}/investigator/investigator-1"
+    )
+
+    assert keeper_response.status_code == 200
+    keeper_html = keeper_response.text
+    assert "实时控场" in keeper_html
+    assert "目标控制" in keeper_html
+    assert "Reveal 控制" in keeper_html
+    assert (
+        f'/playtest/sessions/{session_id}/keeper/objectives/objective.lobby.observe_keeper/complete#live-control"'
+        in keeper_html
+    )
+    assert (
+        f'/playtest/sessions/{session_id}/keeper/reveal/clues/clue.old_floorplan#live-control"'
+        in keeper_html
+    )
+    assert (
+        f'/playtest/sessions/{session_id}/keeper/reveal/scenes/scene.guesthouse_office#live-control"'
+        in keeper_html
+    )
+    assert "标记完成" in keeper_html
+    assert "公开线索" in keeper_html
+    assert "公开场景" in keeper_html
+
+    assert investigator_response.status_code == 200
+    investigator_html = investigator_response.text
+    assert "实时控场" not in investigator_html
+    assert "/keeper/objectives/" not in investigator_html
+    assert "/keeper/reveal/" not in investigator_html
+
+
+def test_keeper_dashboard_objective_complete_and_reopen_controls_rerender_with_feedback(
+    client: TestClient,
+) -> None:
+    session_id = _start_keeper_dashboard_session(client)
+    objective_id = "objective.lobby.observe_keeper"
+
+    complete_response = client.post(
+        f"/playtest/sessions/{session_id}/keeper/objectives/{objective_id}/complete",
+        data={"operator_id": KEEPER_ID},
+    )
+
+    assert complete_response.status_code == 200
+    complete_html = complete_response.text
+    assert "已手动标记目标完成" in complete_html
+    assert "确认老板是否在刻意回避储物间问题" in complete_html
+    assert "未完成目标：0" in complete_html
+    assert "最近完成目标：确认老板是否在刻意回避储物间问题" in complete_html
+    assert (
+        f'/playtest/sessions/{session_id}/keeper/objectives/{objective_id}/reopen#live-control"'
+        in complete_html
+    )
+
+    reopen_response = client.post(
+        f"/playtest/sessions/{session_id}/keeper/objectives/{objective_id}/reopen",
+        data={"operator_id": KEEPER_ID},
+    )
+
+    assert reopen_response.status_code == 200
+    reopen_html = reopen_response.text
+    assert "已取消目标完成状态" in reopen_html
+    assert "确认老板是否在刻意回避储物间问题" in reopen_html
+    assert "未完成目标：1" in reopen_html
+    assert "最近完成目标：确认老板是否在刻意回避储物间问题" not in reopen_html
+    assert (
+        f'/playtest/sessions/{session_id}/keeper/objectives/{objective_id}/complete#live-control"'
+        in reopen_html
+    )
+
+
+def test_keeper_dashboard_invalid_objective_control_renders_structured_error_without_mutating_state(
+    client: TestClient,
+) -> None:
+    session_id = _start_keeper_dashboard_session(client)
+    before_snapshot = _get_snapshot(client, session_id)
+
+    response = client.post(
+        f"/playtest/sessions/{session_id}/keeper/objectives/objective.missing/complete",
+        data={"operator_id": KEEPER_ID},
+    )
+
+    assert response.status_code == 404
+    html = response.text
+    assert "操作失败" in html
+    assert "keeper_live_control_objective_not_found" in html
+    assert "未找到目标 objective.missing" in html
+
+    after_snapshot = _get_snapshot(client, session_id)
+    assert after_snapshot == before_snapshot
+
+
+def test_keeper_dashboard_reveal_clue_and_scene_controls_apply_and_surface_results(
+    client: TestClient,
+) -> None:
+    session_id = _start_keeper_dashboard_session(client)
+
+    clue_response = client.post(
+        f"/playtest/sessions/{session_id}/keeper/reveal/clues/clue.old_floorplan",
+        data={"operator_id": KEEPER_ID},
+    )
+
+    assert clue_response.status_code == 200
+    clue_html = clue_response.text
+    assert "已公开线索" in clue_html
+    assert "旅店旧图纸" in clue_html
+    assert "已公开线索：旅店旧图纸" in clue_html
+    assert (
+        f'/playtest/sessions/{session_id}/keeper/reveal/clues/clue.old_floorplan#live-control"'
+        not in clue_html
+    )
+
+    investigator_page = client.get(
+        f"/playtest/sessions/{session_id}/investigator/investigator-1"
+    )
+    assert investigator_page.status_code == 200
+    assert "旅店旧图纸" in investigator_page.text
+
+    scene_response = client.post(
+        f"/playtest/sessions/{session_id}/keeper/reveal/scenes/scene.guesthouse_office",
+        data={"operator_id": KEEPER_ID},
+    )
+
+    assert scene_response.status_code == 200
+    scene_html = scene_response.text
+    assert "已公开场景" in scene_html
+    assert "旅店账房" in scene_html
+    assert "已公开场景：旅店账房" in scene_html
+    assert "找到能指向地窖的记录" in scene_html
+    assert (
+        f'/playtest/sessions/{session_id}/keeper/reveal/scenes/scene.guesthouse_office#live-control"'
+        not in scene_html
+    )
+
+    investigator_state = client.get(
+        f"/sessions/{session_id}/state",
+        params={"viewer_role": "investigator", "viewer_id": "investigator-1"},
+    )
+    assert investigator_state.status_code == 200
+    visible_scene_ids = {
+        scene["scene_id"] for scene in investigator_state.json()["scenario"]["scenes"]
+    }
+    assert "scene.guesthouse_office" in visible_scene_ids
+
+
+def test_keeper_dashboard_invalid_reveal_control_renders_structured_error_without_mutating_state(
+    client: TestClient,
+) -> None:
+    session_id = _start_keeper_dashboard_session(client)
+    before_snapshot = _get_snapshot(client, session_id)
+
+    response = client.post(
+        f"/playtest/sessions/{session_id}/keeper/reveal/scenes/scene.missing",
+        data={"operator_id": KEEPER_ID},
+    )
+
+    assert response.status_code == 404
+    html = response.text
+    assert "操作失败" in html
+    assert "keeper_live_control_scene_not_found" in html
+    assert "未找到场景 scene.missing" in html
+
+    after_snapshot = _get_snapshot(client, session_id)
+    assert after_snapshot == before_snapshot
+
+
 def test_keeper_dashboard_prompt_target_supports_acknowledge_and_completed_form_submission(
     client: TestClient,
 ) -> None:

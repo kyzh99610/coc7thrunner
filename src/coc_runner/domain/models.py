@@ -99,6 +99,7 @@ class AuditActionType(StrEnum):
     DRAFT_CREATED = "draft_created"
     REVIEW_DECISION = "review_decision"
     KEEPER_PROMPT_UPDATED = "keeper_prompt_updated"
+    KEEPER_LIVE_CONTROL = "keeper_live_control"
     IMPORT = "import"
     ROLLBACK = "rollback"
 
@@ -1661,6 +1662,20 @@ class UpdateKeeperPromptResponse(BaseModel):
     language_preference: LanguagePreference
     prompt: QueuedKPPrompt
     keeper_workflow: KeeperWorkflowState
+
+
+class KeeperLiveControlRequest(BaseModel):
+    operator_id: str = Field(min_length=1, max_length=80)
+    language_preference: LanguagePreference | None = None
+
+
+class KeeperLiveControlResponse(BaseModel):
+    message: str
+    session_id: str
+    state_version: int
+    language_preference: LanguagePreference
+    target_id: str = Field(min_length=1)
+    target_type: str = Field(min_length=1)
 
 
 class RollbackRequest(BaseModel):

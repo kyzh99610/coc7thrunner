@@ -15,6 +15,7 @@ from coc_runner.application.session_service import SessionService
 from coc_runner.domain.errors import ConflictError
 from coc_runner.domain.models import (
     CreateCheckpointRequest,
+    KeeperLiveControlRequest,
     PlayerActionRequest,
     ReviewDraftRequest,
     RestoreCheckpointRequest,
@@ -613,6 +614,140 @@ def _render_draft_jump_targets(
     )
 
 
+def _render_keeper_live_control_panel(
+    *,
+    keeper_view: dict[str, Any],
+    session_id: str,
+    operator_id: str,
+) -> str:
+    workflow = keeper_view.get("keeper_workflow") or {}
+    summary = workflow.get("summary") or {}
+    unresolved_objectives = workflow.get("unresolved_objectives") or []
+    recent_completed_raw = summary.get("recently_completed_objectives") or []
+    seen_completed_ids: set[str] = set()
+    recent_completed: list[dict[str, Any]] = []
+    for objective in recent_completed_raw:
+        objective_id = str(objective.get("objective_id") or "")
+        if not objective_id or objective_id in seen_completed_ids:
+            continue
+        seen_completed_ids.add(objective_id)
+        recent_completed.append(objective)
+    scenario = keeper_view.get("scenario") or {}
+    revealable_scenes = [
+        scene for scene in scenario.get("scenes") or [] if isinstance(scene, dict) and not scene.get("revealed")
+    ]
+    revealable_clues = [
+        clue
+        for clue in scenario.get("clues") or []
+        if isinstance(clue, dict) and clue.get("status") != "shared_with_party"
+    ]
+
+    unresolved_block = (
+        "".join(
+            f"""
+            <article class="activity-item">
+              <div class="activity-header">
+                <h3>{escape(str(objective.get('text', objective.get('objective_id', '未命名目标'))))}</h3>
+                <span class="activity-meta">{escape(str(objective.get('scene_id') or objective.get('beat_id') or 'objective'))}</span>
+              </div>
+              <p class="meta-line">objective_id: <span class="mono">{escape(str(objective.get('objective_id', '')))}</span></p>
+              <form method="post" action="/playtest/sessions/{escape(session_id)}/keeper/objectives/{escape(str(objective.get('objective_id', '')))}/complete#live-control" data-submit-label="提交中...">
+                <input type="hidden" name="operator_id" value="{escape(operator_id)}" />
+                <button type="submit">标记完成</button>
+              </form>
+            </article>
+            """
+            for objective in unresolved_objectives[:4]
+        )
+        if unresolved_objectives
+        else '<p class="empty-state">当前没有可手动推进的未完成目标。</p>'
+    )
+
+    completed_block = (
+        "".join(
+            f"""
+            <article class="activity-item">
+              <div class="activity-header">
+                <h3>{escape(str(objective.get('text', objective.get('objective_id', '未命名目标'))))}</h3>
+                <span class="activity-meta">{escape(str(objective.get('completed_at') or 'recent'))}</span>
+              </div>
+              <p class="meta-line">objective_id: <span class="mono">{escape(str(objective.get('objective_id', '')))}</span></p>
+              <form method="post" action="/playtest/sessions/{escape(session_id)}/keeper/objectives/{escape(str(objective.get('objective_id', '')))}/reopen#live-control" data-submit-label="提交中...">
+                <input type="hidden" name="operator_id" value="{escape(operator_id)}" />
+                <button type="submit" class="danger">取消完成</button>
+              </form>
+            </article>
+            """
+            for objective in recent_completed[:4]
+        )
+        if recent_completed
+        else '<p class="empty-state">当前没有最近完成、可回退的目标。</p>'
+    )
+
+    scene_block = (
+        "".join(
+            f"""
+            <article class="activity-item">
+              <div class="activity-header">
+                <h3>{escape(str(scene.get('title', scene.get('scene_id', '未命名场景'))))}</h3>
+                <span class="activity-meta">{escape(str(scene.get('phase', 'scene')))}</span>
+              </div>
+              <p class="meta-line">scene_id: <span class="mono">{escape(str(scene.get('scene_id', '')))}</span></p>
+              <form method="post" action="/playtest/sessions/{escape(session_id)}/keeper/reveal/scenes/{escape(str(scene.get('scene_id', '')))}#live-control" data-submit-label="提交中...">
+                <input type="hidden" name="operator_id" value="{escape(operator_id)}" />
+                <button type="submit">公开场景</button>
+              </form>
+            </article>
+            """
+            for scene in revealable_scenes[:4]
+        )
+        if revealable_scenes
+        else '<p class="empty-state">当前没有待公开的场景。</p>'
+    )
+
+    clue_block = (
+        "".join(
+            f"""
+            <article class="activity-item">
+              <div class="activity-header">
+                <h3>{escape(str(clue.get('title', clue.get('clue_id', '未命名线索'))))}</h3>
+                <span class="activity-meta">{escape(str(clue.get('status', 'undiscovered')))}</span>
+              </div>
+              <p class="meta-line">clue_id: <span class="mono">{escape(str(clue.get('clue_id', '')))}</span></p>
+              <form method="post" action="/playtest/sessions/{escape(session_id)}/keeper/reveal/clues/{escape(str(clue.get('clue_id', '')))}#live-control" data-submit-label="提交中...">
+                <input type="hidden" name="operator_id" value="{escape(operator_id)}" />
+                <button type="submit">公开线索</button>
+              </form>
+            </article>
+            """
+            for clue in revealable_clues[:5]
+        )
+        if revealable_clues
+        else '<p class="empty-state">当前没有待公开的线索。</p>'
+    )
+
+    return f"""
+      <section class="panel" id="live-control">
+        <h2>实时控场</h2>
+        <div class="summary-grid">
+          <article class="summary-card">
+            <h3>目标控制</h3>
+            <div class="recent-list">{unresolved_block}</div>
+            <h3>最近完成目标</h3>
+            <div class="recent-list">{completed_block}</div>
+          </article>
+          <article class="summary-card">
+            <h3>Reveal 控制</h3>
+            <h4>待公开场景</h4>
+            <div class="recent-list">{scene_block}</div>
+            <h4>待公开线索</h4>
+            <div class="recent-list">{clue_block}</div>
+          </article>
+        </div>
+      </section>
+    """
+
+
 def _render_recent_activity(events: list[dict[str, Any]]) -> str:
     if not events:
         return '<p class="empty-state">最近还没有可见活动。</p>'
@@ -966,6 +1101,11 @@ def _render_keeper_dashboard_page(
           {_render_attention_block(title='未完成目标', items=objective_items, empty_text='当前没有未完成目标。')}
         </div>
       </section>
+      {_render_keeper_live_control_panel(
+          keeper_view=current_view,
+          session_id=session_id,
+          operator_id=keeper_id,
+      )}
       {_render_recent_result_panel(session_snapshot=snapshot, keeper_view=current_view)}
       {_render_prompt_jump_targets(active_prompts, session_id=session_id, operator_id=keeper_id)}
       {_render_draft_jump_targets(pending_drafts, session_id=session_id, reviewer_id=keeper_id)}
@@ -1516,6 +1656,118 @@ async def submit_player_action_via_investigator_ui(
             session_id=session_id,
             viewer_id=viewer_id,
             action_text=action_text,
+        )
+
+
+@router.post("/sessions/{session_id}/keeper/objectives/{objective_id}/complete", response_class=HTMLResponse)
+async def complete_objective_via_keeper_dashboard(
+    session_id: str,
+    objective_id: str,
+    request: Request,
+    service: SessionService = Depends(get_session_service),
+) -> HTMLResponse:
+    form = await _read_form_payload(request)
+    try:
+        response = service.complete_keeper_objective(
+            session_id,
+            objective_id,
+            KeeperLiveControlRequest(operator_id=form.get("operator_id", "")),
+        )
+        return _render_keeper_dashboard_from_service(
+            service=service,
+            session_id=session_id,
+            notice=response.message,
+        )
+    except (ValidationError, LookupError, PermissionError, ConflictError, ValueError) as exc:
+        return _render_playtest_exception(
+            _render_keeper_dashboard_from_service,
+            exc=exc,
+            service=service,
+            session_id=session_id,
+        )
+
+
+@router.post("/sessions/{session_id}/keeper/objectives/{objective_id}/reopen", response_class=HTMLResponse)
+async def reopen_objective_via_keeper_dashboard(
+    session_id: str,
+    objective_id: str,
+    request: Request,
+    service: SessionService = Depends(get_session_service),
+) -> HTMLResponse:
+    form = await _read_form_payload(request)
+    try:
+        response = service.reopen_keeper_objective(
+            session_id,
+            objective_id,
+            KeeperLiveControlRequest(operator_id=form.get("operator_id", "")),
+        )
+        return _render_keeper_dashboard_from_service(
+            service=service,
+            session_id=session_id,
+            notice=response.message,
+        )
+    except (ValidationError, LookupError, PermissionError, ConflictError, ValueError) as exc:
+        return _render_playtest_exception(
+            _render_keeper_dashboard_from_service,
+            exc=exc,
+            service=service,
+            session_id=session_id,
+        )
+
+
+@router.post("/sessions/{session_id}/keeper/reveal/clues/{clue_id}", response_class=HTMLResponse)
+async def reveal_clue_via_keeper_dashboard(
+    session_id: str,
+    clue_id: str,
+    request: Request,
+    service: SessionService = Depends(get_session_service),
+) -> HTMLResponse:
+    form = await _read_form_payload(request)
+    try:
+        response = service.reveal_keeper_clue(
+            session_id,
+            clue_id,
+            KeeperLiveControlRequest(operator_id=form.get("operator_id", "")),
+        )
+        return _render_keeper_dashboard_from_service(
+            service=service,
+            session_id=session_id,
+            notice=response.message,
+        )
+    except (ValidationError, LookupError, PermissionError, ConflictError, ValueError) as exc:
+        return _render_playtest_exception(
+            _render_keeper_dashboard_from_service,
+            exc=exc,
+            service=service,
+            session_id=session_id,
+        )
+
+
+@router.post("/sessions/{session_id}/keeper/reveal/scenes/{scene_id}", response_class=HTMLResponse)
+async def reveal_scene_via_keeper_dashboard(
+    session_id: str,
+    scene_id: str,
+    request: Request,
+    service: SessionService = Depends(get_session_service),
+) -> HTMLResponse:
+    form = await _read_form_payload(request)
+    try:
+        response = service.reveal_keeper_scene(
+            session_id,
+            scene_id,
+            KeeperLiveControlRequest(operator_id=form.get("operator_id", "")),
+        )
+        return _render_keeper_dashboard_from_service(
+            service=service,
+            session_id=session_id,
+            notice=response.message,
+        )
+    except (ValidationError, LookupError, PermissionError, ConflictError, ValueError) as exc:
+        return _render_playtest_exception(
+            _render_keeper_dashboard_from_service,
+            exc=exc,
+            service=service,
+            session_id=session_id,
         )
 
 

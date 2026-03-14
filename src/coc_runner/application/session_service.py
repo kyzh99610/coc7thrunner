@@ -38,6 +38,8 @@ from coc_runner.domain.models import (
     InvestigatorView,
     ImportCheckpointResponse,
     KPDraftRequest,
+    KeeperLiveControlRequest,
+    KeeperLiveControlResponse,
     ListCheckpointsResponse,
     KeeperPromptPriority,
     KeeperWorkflowState,
@@ -1836,6 +1838,627 @@ class SessionService:
             language_preference=effective_language,
             prompt=response_prompt,
             keeper_workflow=keeper_workflow or KeeperWorkflowState(),
+        )
+
+    def _load_keeper_live_control_context(
+        self,
+        session_id: str,
+        request: KeeperLiveControlRequest,
+    ) -> tuple[SessionState, LanguagePreference, dict[str, Any]]:
+        error_language = self._resolve_language(request.language_preference)
+        try:
+            session = self._load_session(session_id, language=error_language)
+        except LookupError as exc:
+            message = exc.args[0] if exc.args and isinstance(exc.args[0], str) else self._message(
+                "session_not_found",
+                error_language,
+                session_id=session_id,
+            )
+            raise LookupError(
+                build_session_action_error_detail(
+                    code="keeper_live_control_session_not_found",
+                    message=message,
+                    scope="keeper_live_control_session",
+                    session_id=session_id,
+                    operator_id=request.operator_id,
+                )
+            ) from exc
+        effective_language = self._resolve_language(
+            request.language_preference,
+            session.language_preference,
+        )
+        error_context = {
+            "session_id": session.session_id,
+            "operator_id": request.operator_id,
+        }
+        self._authorize_operator(
+            session,
+            operator_id=request.operator_id,
+            language=effective_language,
+            error_detail=build_session_action_error_detail(
+                code="keeper_live_control_operator_not_authorized",
+                message=self._message("operator_not_authorized", effective_language),
+                scope="keeper_live_control_permission",
+                **error_context,
+            ),
+        )
+        return session, effective_language, error_context
+
+    def _append_keeper_live_control_record(
+        self,
+        *,
+        session: SessionState,
+        operator_id: str,
+        current_time: datetime,
+        language: LanguagePreference,
+        target_id: str,
+        control_type: str,
+        event_text: str,
+        details: dict[str, Any],
+    ) -> None:
+        session.timeline.append(
+            SessionEvent(
+                event_type=EventType.MANUAL_ACTION,
+                actor_id=operator_id,
+                actor_type=ActorType.KEEPER,
+                visibility_scope=VisibilityScope.KP_ONLY,
+                visible_to=[],
+                text=event_text,
+                structured_payload={
+                    "control_type": control_type,
+                    **details,
+                },
+                is_authoritative=True,
+                language_preference=language,
+                created_at=current_time,
+            )
+        )
+        self._append_audit_log(
+            session,
+            action=AuditActionType.KEEPER_LIVE_CONTROL,
+            actor_id=operator_id,
+            subject_id=target_id,
+            current_time=current_time,
+            details={
+                "control_type": control_type,
+                **details,
+            },
+        )
+
+    @staticmethod
+    def _get_active_scene_objective(
+        session: SessionState,
+        objective_id: str,
+    ) -> ActiveSceneObjective | None:
+        for objective in session.progress_state.active_scene_objectives:
+            if objective.objective_id == objective_id:
+                return objective
+        return None
+
+    def _reopen_scene_objective(
+        self,
+        *,
+        session: SessionState,
+        objective: ActiveSceneObjective,
+        current_time: datetime,
+    ) -> None:
+        objective.resolved = False
+        objective.resolved_by_action_id = None
+        matching_indices = [
+            index
+            for index, record in enumerate(session.progress_state.completed_objective_history)
+            if record.objective_id == objective.objective_id
+        ]
+        if matching_indices:
+            del session.progress_state.completed_objective_history[matching_indices[-1]]
+        if not any(
+            record.text == objective.text
+            for record in session.progress_state.completed_objective_history
+        ):
+            session.progress_state.completed_objectives = [
+                value
+                for value in session.progress_state.completed_objectives
+                if value != objective.text
+            ]
+            session.progress_state.completed_scene_objectives = [
+                value
+                for value in session.progress_state.completed_scene_objectives
+                if value != objective.text
+            ]
+        session.progress_state.last_updated_at = current_time
+
+    def complete_keeper_objective(
+        self,
+        session_id: str,
+        objective_id: str,
+        request: KeeperLiveControlRequest,
+    ) -> KeeperLiveControlResponse:
+        session, effective_language, error_context = self._load_keeper_live_control_context(
+            session_id,
+            request,
+        )
+        error_context["objective_id"] = objective_id
+        try:
+            objective = self._get_active_scene_objective(session, objective_id)
+            if objective is None:
+                raise LookupError(
+                    self._message(
+                        "objective_not_found",
+                        effective_language,
+                        objective_id=objective_id,
+                    )
+                )
+            if objective.resolved:
+                raise ValueError(
+                    self._message(
+                        "objective_already_completed",
+                        effective_language,
+                        objective=objective.text,
+                    )
+                )
+            current_time = datetime.now(timezone.utc)
+            expected_version = session.state_version
+            source_action_id = f"keeper-control-{uuid4().hex}"
+            completed_objectives = self._mark_scene_objective_complete(
+                session=session,
+                source_action_id=source_action_id,
+                beat_id=objective.beat_id,
+                scene_id=objective.scene_id,
+                objective_id=objective.objective_id,
+                objective_label=objective.text,
+                trigger_reason=self._message(
+                    "scene_objective_completed_by_keeper",
+                    effective_language,
+                ),
+                current_time=current_time,
+            )
+            objective_label = completed_objectives[0] if completed_objectives else objective.text
+            event_text = self._message(
+                "keeper_live_control_objective_completed",
+                effective_language,
+                objective=objective_label,
+            )
+            self._append_keeper_live_control_record(
+                session=session,
+                operator_id=request.operator_id,
+                current_time=current_time,
+                language=effective_language,
+                target_id=objective.objective_id,
+                control_type="objective_complete",
+                event_text=event_text,
+                details={
+                    "objective_id": objective.objective_id,
+                    "objective_text": objective.text,
+                    "scene_id": objective.scene_id,
+                    "beat_id": objective.beat_id,
+                    "result": "completed",
+                },
+            )
+            session.state_version += 1
+            session.updated_at = current_time
+            self._save_session(
+                session,
+                expected_version=expected_version,
+                reason="keeper_live_control",
+                language=effective_language,
+            )
+        except LookupError as exc:
+            message = exc.args[0] if exc.args and isinstance(exc.args[0], str) else self._message(
+                "objective_not_found",
+                effective_language,
+                objective_id=objective_id,
+            )
+            raise LookupError(
+                build_session_action_error_detail(
+                    code="keeper_live_control_objective_not_found",
+                    message=message,
+                    scope="keeper_live_control_objective",
+                    **error_context,
+                )
+            ) from exc
+        except ConflictError as exc:
+            message = exc.args[0] if exc.args and isinstance(exc.args[0], str) else self._message(
+                "state_conflict",
+                effective_language,
+            )
+            raise ConflictError(
+                build_session_action_error_detail(
+                    code="keeper_live_control_state_conflict",
+                    message=message,
+                    scope="keeper_live_control_state",
+                    **error_context,
+                )
+            ) from exc
+        except ValueError as exc:
+            message = exc.args[0] if exc.args and isinstance(exc.args[0], str) else self._message(
+                "objective_already_completed",
+                effective_language,
+                objective=objective_id,
+            )
+            raise ValueError(
+                build_session_action_error_detail(
+                    code="keeper_live_control_invalid",
+                    message=message,
+                    scope="keeper_live_control_objective",
+                    **error_context,
+                )
+            ) from exc
+        return KeeperLiveControlResponse(
+            message=self._message(
+                "keeper_live_control_objective_completed",
+                effective_language,
+                objective=objective.text,
+            ),
+            session_id=session.session_id,
+            state_version=session.state_version,
+            language_preference=effective_language,
+            target_id=objective.objective_id,
+            target_type="objective",
+        )
+
+    def reopen_keeper_objective(
+        self,
+        session_id: str,
+        objective_id: str,
+        request: KeeperLiveControlRequest,
+    ) -> KeeperLiveControlResponse:
+        session, effective_language, error_context = self._load_keeper_live_control_context(
+            session_id,
+            request,
+        )
+        error_context["objective_id"] = objective_id
+        try:
+            objective = self._get_active_scene_objective(session, objective_id)
+            if objective is None:
+                raise LookupError(
+                    self._message(
+                        "objective_not_found",
+                        effective_language,
+                        objective_id=objective_id,
+                    )
+                )
+            if not objective.resolved:
+                raise ValueError(
+                    self._message(
+                        "objective_not_completed",
+                        effective_language,
+                        objective=objective.text,
+                    )
+                )
+            current_time = datetime.now(timezone.utc)
+            expected_version = session.state_version
+            self._reopen_scene_objective(
+                session=session,
+                objective=objective,
+                current_time=current_time,
+            )
+            event_text = self._message(
+                "keeper_live_control_objective_reopened",
+                effective_language,
+                objective=objective.text,
+            )
+            self._append_keeper_live_control_record(
+                session=session,
+                operator_id=request.operator_id,
+                current_time=current_time,
+                language=effective_language,
+                target_id=objective.objective_id,
+                control_type="objective_reopen",
+                event_text=event_text,
+                details={
+                    "objective_id": objective.objective_id,
+                    "objective_text": objective.text,
+                    "scene_id": objective.scene_id,
+                    "beat_id": objective.beat_id,
+                    "result": "reopened",
+                },
+            )
+            session.state_version += 1
+            session.updated_at = current_time
+            self._save_session(
+                session,
+                expected_version=expected_version,
+                reason="keeper_live_control",
+                language=effective_language,
+            )
+        except LookupError as exc:
+            message = exc.args[0] if exc.args and isinstance(exc.args[0], str) else self._message(
+                "objective_not_found",
+                effective_language,
+                objective_id=objective_id,
+            )
+            raise LookupError(
+                build_session_action_error_detail(
+                    code="keeper_live_control_objective_not_found",
+                    message=message,
+                    scope="keeper_live_control_objective",
+                    **error_context,
+                )
+            ) from exc
+        except ConflictError as exc:
+            message = exc.args[0] if exc.args and isinstance(exc.args[0], str) else self._message(
+                "state_conflict",
+                effective_language,
+            )
+            raise ConflictError(
+                build_session_action_error_detail(
+                    code="keeper_live_control_state_conflict",
+                    message=message,
+                    scope="keeper_live_control_state",
+                    **error_context,
+                )
+            ) from exc
+        except ValueError as exc:
+            message = exc.args[0] if exc.args and isinstance(exc.args[0], str) else self._message(
+                "objective_not_completed",
+                effective_language,
+                objective=objective_id,
+            )
+            raise ValueError(
+                build_session_action_error_detail(
+                    code="keeper_live_control_invalid",
+                    message=message,
+                    scope="keeper_live_control_objective",
+                    **error_context,
+                )
+            ) from exc
+        return KeeperLiveControlResponse(
+            message=self._message(
+                "keeper_live_control_objective_reopened",
+                effective_language,
+                objective=objective.text,
+            ),
+            session_id=session.session_id,
+            state_version=session.state_version,
+            language_preference=effective_language,
+            target_id=objective.objective_id,
+            target_type="objective",
+        )
+
+    def reveal_keeper_clue(
+        self,
+        session_id: str,
+        clue_id: str,
+        request: KeeperLiveControlRequest,
+    ) -> KeeperLiveControlResponse:
+        session, effective_language, error_context = self._load_keeper_live_control_context(
+            session_id,
+            request,
+        )
+        error_context["clue_id"] = clue_id
+        try:
+            clue = self._find_clue(session, clue_id=clue_id, clue_title=None)
+            if clue is None:
+                raise LookupError(
+                    self._message("clue_not_found", effective_language, clue_ref=clue_id)
+                )
+            if clue.status == ClueProgressState.SHARED_WITH_PARTY and clue.visibility_scope == VisibilityScope.PUBLIC:
+                raise ValueError(
+                    self._message(
+                        "clue_already_revealed",
+                        effective_language,
+                        title=clue.title,
+                    )
+                )
+            current_time = datetime.now(timezone.utc)
+            expected_version = session.state_version
+            self._apply_clue_state_effect(
+                session=session,
+                effect=ClueStateEffect(
+                    clue_id=clue_id,
+                    status=ClueProgressState.SHARED_WITH_PARTY,
+                    share_with_party=True,
+                    discovered_via=f"keeper_live_control:{clue_id}",
+                ),
+                language=effective_language,
+                current_time=current_time,
+            )
+            event_text = self._message(
+                "keeper_live_control_clue_revealed",
+                effective_language,
+                title=clue.title,
+            )
+            self._append_keeper_live_control_record(
+                session=session,
+                operator_id=request.operator_id,
+                current_time=current_time,
+                language=effective_language,
+                target_id=clue.clue_id,
+                control_type="reveal_clue",
+                event_text=event_text,
+                details={
+                    "clue_id": clue.clue_id,
+                    "clue_title": clue.title,
+                    "result": "revealed",
+                },
+            )
+            session.state_version += 1
+            session.updated_at = current_time
+            self._save_session(
+                session,
+                expected_version=expected_version,
+                reason="keeper_live_control",
+                language=effective_language,
+            )
+        except LookupError as exc:
+            message = exc.args[0] if exc.args and isinstance(exc.args[0], str) else self._message(
+                "clue_not_found",
+                effective_language,
+                clue_ref=clue_id,
+            )
+            raise LookupError(
+                build_session_action_error_detail(
+                    code="keeper_live_control_clue_not_found",
+                    message=message,
+                    scope="keeper_live_control_clue",
+                    **error_context,
+                )
+            ) from exc
+        except ConflictError as exc:
+            message = exc.args[0] if exc.args and isinstance(exc.args[0], str) else self._message(
+                "state_conflict",
+                effective_language,
+            )
+            raise ConflictError(
+                build_session_action_error_detail(
+                    code="keeper_live_control_state_conflict",
+                    message=message,
+                    scope="keeper_live_control_state",
+                    **error_context,
+                )
+            ) from exc
+        except ValueError as exc:
+            message = exc.args[0] if exc.args and isinstance(exc.args[0], str) else self._message(
+                "clue_already_revealed",
+                effective_language,
+                title=clue_id,
+            )
+            raise ValueError(
+                build_session_action_error_detail(
+                    code="keeper_live_control_invalid",
+                    message=message,
+                    scope="keeper_live_control_clue",
+                    **error_context,
+                )
+            ) from exc
+        return KeeperLiveControlResponse(
+            message=self._message(
+                "keeper_live_control_clue_revealed",
+                effective_language,
+                title=clue.title,
+            ),
+            session_id=session.session_id,
+            state_version=session.state_version,
+            language_preference=effective_language,
+            target_id=clue.clue_id,
+            target_type="clue",
+        )
+
+    def reveal_keeper_scene(
+        self,
+        session_id: str,
+        scene_id: str,
+        request: KeeperLiveControlRequest,
+    ) -> KeeperLiveControlResponse:
+        session, effective_language, error_context = self._load_keeper_live_control_context(
+            session_id,
+            request,
+        )
+        error_context["scene_id"] = scene_id
+        try:
+            scene = self._find_scenario_scene(
+                session.scenario.scenes,
+                scene_id=scene_id,
+                scene_title=None,
+            )
+            if scene is None:
+                raise LookupError(
+                    self._message(
+                        "scene_not_found",
+                        effective_language,
+                        scene_id=scene_id,
+                    )
+                )
+            if scene.revealed:
+                raise ValueError(
+                    self._message(
+                        "scene_already_revealed",
+                        effective_language,
+                        title=scene.title,
+                    )
+                )
+            current_time = datetime.now(timezone.utc)
+            expected_version = session.state_version
+            source_action_id = f"keeper-control-{uuid4().hex}"
+            self._reveal_scene_registry_entry(
+                session=session,
+                scene=scene,
+                source_action_id=source_action_id,
+                trigger_reason=self._message(
+                    "scene_revealed_by_keeper",
+                    effective_language,
+                ),
+                current_time=current_time,
+            )
+            event_text = self._message(
+                "keeper_live_control_scene_revealed",
+                effective_language,
+                title=scene.title,
+            )
+            self._append_keeper_live_control_record(
+                session=session,
+                operator_id=request.operator_id,
+                current_time=current_time,
+                language=effective_language,
+                target_id=scene.scene_id,
+                control_type="reveal_scene",
+                event_text=event_text,
+                details={
+                    "scene_id": scene.scene_id,
+                    "scene_title": scene.title,
+                    "result": "revealed",
+                },
+            )
+            session.state_version += 1
+            session.updated_at = current_time
+            self._save_session(
+                session,
+                expected_version=expected_version,
+                reason="keeper_live_control",
+                language=effective_language,
+            )
+        except LookupError as exc:
+            message = exc.args[0] if exc.args and isinstance(exc.args[0], str) else self._message(
+                "scene_not_found",
+                effective_language,
+                scene_id=scene_id,
+            )
+            raise LookupError(
+                build_session_action_error_detail(
+                    code="keeper_live_control_scene_not_found",
+                    message=message,
+                    scope="keeper_live_control_scene",
+                    **error_context,
+                )
+            ) from exc
+        except ConflictError as exc:
+            message = exc.args[0] if exc.args and isinstance(exc.args[0], str) else self._message(
+                "state_conflict",
+                effective_language,
+            )
+            raise ConflictError(
+                build_session_action_error_detail(
+                    code="keeper_live_control_state_conflict",
+                    message=message,
+                    scope="keeper_live_control_state",
+                    **error_context,
+                )
+            ) from exc
+        except ValueError as exc:
+            message = exc.args[0] if exc.args and isinstance(exc.args[0], str) else self._message(
+                "scene_already_revealed",
+                effective_language,
+                title=scene_id,
+            )
+            raise ValueError(
+                build_session_action_error_detail(
+                    code="keeper_live_control_invalid",
+                    message=message,
+                    scope="keeper_live_control_scene",
+                    **error_context,
+                )
+            ) from exc
+        return KeeperLiveControlResponse(
+            message=self._message(
+                "keeper_live_control_scene_revealed",
+                effective_language,
+                title=scene.title,
+            ),
+            session_id=session.session_id,
+            state_version=session.state_version,
+            language_preference=effective_language,
+            target_id=scene.scene_id,
+            target_type="scene",
         )
 
     def review_draft_action(
@@ -5660,6 +6283,12 @@ class SessionService:
             "keeper_prompt_status_updated": "KP 提示状态已更新为 {status}",
             "keeper_prompt_status_invalid": "KP 提示不能从 {from_status} 变更为 {to_status}",
             "keeper_prompt_terminal": "KP 提示 {prompt_id} 已结束，不能再次变更状态",
+            "objective_not_found": "未找到目标 {objective_id}",
+            "objective_already_completed": "目标“{objective}”已经完成",
+            "objective_not_completed": "目标“{objective}”当前尚未完成",
+            "scene_not_found": "未找到场景 {scene_id}",
+            "scene_already_revealed": "场景“{title}”已公开",
+            "clue_already_revealed": "线索“{title}”已公开",
             "state_conflict": "会话状态版本冲突，请重新加载后再试",
             "draft_stale": "草稿 {draft_id} 已过期，当前版本 {current_version} 与草稿版本 {created_at_version} 差距过大",
             "draft_superseded": "草稿 {draft_id} 已被后续草稿取代，不能再生成权威结果",
@@ -5683,10 +6312,16 @@ class SessionService:
             "execution_npc_attitude_updated": "NPC“{npc_id}”态度已更新为“{attitude}”",
             "execution_kp_prompt_queued": "已为剧情节点“{title}”加入 KP 提示",
             "execution_scene_objective_completed": "场景目标“{objective}”已标记完成",
+            "keeper_live_control_objective_completed": "已手动标记目标完成：{objective}",
+            "keeper_live_control_objective_reopened": "已取消目标完成状态：{objective}",
+            "keeper_live_control_clue_revealed": "已公开线索：{title}",
+            "keeper_live_control_scene_revealed": "已公开场景：{title}",
             "scene_objective_completed_by_beat": "由剧情节点“{title}”推进完成",
+            "scene_objective_completed_by_keeper": "由 KP 手动推进完成",
             "scene_revealed_initial": "初始场景已公开",
             "scene_revealed_by_transition": "因场景切换公开场景“{title}”",
             "scene_revealed_by_beat": "因剧情节点“{title}”推进公开新场景",
+            "scene_revealed_by_keeper": "由 KP 手动公开场景",
             "kp_prompt_triggered_by_beat": "由剧情节点“{title}”触发",
             "beat_unlocked": "剧情节点“{title}”已解锁",
             "beat_blocked": "剧情节点“{title}”已阻塞",
@@ -5751,6 +6386,12 @@ class SessionService:
             "keeper_prompt_status_updated": "KP prompt status updated to {status}",
             "keeper_prompt_status_invalid": "KP prompt cannot transition from {from_status} to {to_status}",
             "keeper_prompt_terminal": "KP prompt {prompt_id} is terminal and cannot change again",
+            "objective_not_found": "Objective {objective_id} was not found",
+            "objective_already_completed": "Objective {objective} is already completed",
+            "objective_not_completed": "Objective {objective} is not completed",
+            "scene_not_found": "Scene {scene_id} was not found",
+            "scene_already_revealed": "Scene {title} is already revealed",
+            "clue_already_revealed": "Clue {title} is already revealed",
             "state_conflict": "Session state version conflict, reload and try again",
             "draft_stale": "Draft {draft_id} is stale because current version {current_version} is too far from draft version {created_at_version}",
             "draft_superseded": "Draft {draft_id} was superseded and cannot create another canonical outcome",
@@ -5774,10 +6415,16 @@ class SessionService:
             "execution_npc_attitude_updated": "NPC {npc_id} attitude updated to {attitude}",
             "execution_kp_prompt_queued": "Queued a KP prompt for beat {title}",
             "execution_scene_objective_completed": "Scene objective {objective} marked complete",
+            "keeper_live_control_objective_completed": "Keeper marked objective complete: {objective}",
+            "keeper_live_control_objective_reopened": "Keeper reopened objective: {objective}",
+            "keeper_live_control_clue_revealed": "Keeper revealed clue: {title}",
+            "keeper_live_control_scene_revealed": "Keeper revealed scene: {title}",
             "scene_objective_completed_by_beat": "completed by beat {title}",
+            "scene_objective_completed_by_keeper": "completed by keeper live control",
             "scene_revealed_initial": "initial scene revealed",
             "scene_revealed_by_transition": "scene {title} revealed by transition",
             "scene_revealed_by_beat": "scene revealed by beat {title}",
+            "scene_revealed_by_keeper": "scene revealed by keeper live control",
             "kp_prompt_triggered_by_beat": "triggered by beat {title}",
             "beat_unlocked": "Scenario beat {title} unlocked",
             "beat_blocked": "Scenario beat {title} blocked",
