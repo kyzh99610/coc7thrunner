@@ -30,6 +30,9 @@ class SessionRepository(Protocol):
     def create(self, session: SessionState, *, reason: str) -> None:
         ...
 
+    def list_sessions(self) -> list[SessionState]:
+        ...
+
     def get(self, session_id: str) -> SessionState | None:
         ...
 
@@ -88,6 +91,15 @@ class SqlAlchemySessionRepository:
             if record is None:
                 return None
             return SessionState.model_validate_json(record.session_json)
+
+    def list_sessions(self) -> list[SessionState]:
+        with self.session_factory() as db:
+            statement = (
+                select(SessionRecord)
+                .order_by(SessionRecord.updated_at.desc(), SessionRecord.session_id.desc())
+            )
+            records = db.execute(statement).scalars().all()
+            return [SessionState.model_validate_json(record.session_json) for record in records]
 
     def save(self, session: SessionState, *, reason: str, expected_version: int) -> None:
         with self.session_factory.begin() as db:

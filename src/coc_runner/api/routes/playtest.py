@@ -239,6 +239,74 @@ def _render_playtest_launcher_page(
     )
 
 
+def _render_playtest_session_index_page(
+    *,
+    sessions: list[dict[str, Any]],
+    status_code: int = status.HTTP_200_OK,
+) -> HTMLResponse:
+    if not sessions:
+        session_cards = '<p class="empty-state">当前还没有 session。先通过 API 创建一局，再从这里进入。</p>'
+    else:
+        cards: list[str] = []
+        for session in sessions:
+            scenario = session.get("scenario") or {}
+            progress_state = session.get("progress_state") or {}
+            current_scene = session.get("current_scene") or {}
+            current_beat_id = progress_state.get("current_beat")
+            beats_by_id = {
+                str(beat.get("beat_id")): beat
+                for beat in scenario.get("beats") or []
+                if isinstance(beat, dict) and beat.get("beat_id")
+            }
+            current_beat_title = (
+                (beats_by_id.get(str(current_beat_id)) or {}).get("title")
+                if current_beat_id is not None
+                else None
+            )
+            session_id = str(session.get("session_id") or "")
+            cards.append(
+                f"""
+                <article class="attention-card">
+                  <div class="activity-header">
+                    <h3>{escape(str(scenario.get('title', '未命名会话')))}</h3>
+                    <span class="activity-meta">{_render_session_status_display(session.get('status'))}</span>
+                  </div>
+                  <p class="meta-line">session_id: <code>{escape(session_id)}</code></p>
+                  <p class="meta-line">KP：{escape(str(session.get('keeper_name') or 'KP'))}</p>
+                  <p class="meta-line">当前场景：{escape(str(current_scene.get('title', '未知场景')))}</p>
+                  <p class="meta-line">当前 beat：<span class="mono">{escape(str(current_beat_id or '无'))}</span></p>
+                  <p class="meta-line">当前 beat 标题：{escape(str(current_beat_title or '无'))}</p>
+                  <div class="quick-actions">
+                    <a class="action-link" href="/playtest/sessions/{escape(session_id)}/home">打开 launcher</a>
+                    <a class="action-link" href="/playtest/sessions/{escape(session_id)}/keeper">打开 keeper 页面</a>
+                    <a class="action-link" href="/playtest/sessions/{escape(session_id)}">打开 checkpoint 页面</a>
+                  </div>
+                </article>
+                """
+            )
+        session_cards = "".join(cards)
+    body = f"""
+      <section class="hero">
+        <h1>Playtest Sessions</h1>
+        <div class="hero-meta">
+          <span>当前已发现会话数：{escape(str(len(sessions)))}</span>
+          <span>入口只负责列出现有 session，不提供创建或归档操作。</span>
+        </div>
+      </section>
+      <section class="panel">
+        <h2>Session 列表</h2>
+        <div class="attention-grid">
+          {session_cards}
+        </div>
+      </section>
+    """
+    return _render_shell(
+        title="Playtest Sessions",
+        body=body,
+        status_code=status_code,
+    )
+
+
 def _render_notice(notice: str | None) -> str:
     if not notice:
         return ""
@@ -1554,6 +1622,18 @@ def _render_playtest_launcher_from_service(
     )
 
 
+def _render_playtest_session_index_from_service(
+    *,
+    service: SessionService,
+    status_code: int = status.HTTP_200_OK,
+) -> HTMLResponse:
+    sessions = [session.model_dump(mode="json") for session in service.list_sessions()]
+    return _render_playtest_session_index_page(
+        sessions=sessions,
+        status_code=status_code,
+    )
+
+
 def _render_checkpoint_export_page(
     *,
     session_id: str,
@@ -1864,6 +1944,13 @@ def _render_investigator_page_from_service(
         action_text=action_text,
         status_code=status_code,
     )
+
+
+@router.get("/sessions", response_class=HTMLResponse)
+def playtest_session_index_page(
+    service: SessionService = Depends(get_session_service),
+) -> HTMLResponse:
+    return _render_playtest_session_index_from_service(service=service)
 
 
 @router.get("/sessions/{session_id}", response_class=HTMLResponse)

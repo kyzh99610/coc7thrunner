@@ -468,6 +468,9 @@ class SessionService:
             ) from exc
         return session.model_dump(mode="json")
 
+    def list_sessions(self) -> list[SessionState]:
+        return self.repository.list_sessions()
+
     def get_keeper_workspace(
         self,
         session_id: str,
