@@ -20,6 +20,7 @@ def test_playtest_session_create_page_displays_minimal_setup_form(
     assert 'action="/playtest/sessions/create"' in html
     assert 'name="keeper_name"' in html
     assert 'name="playtest_group"' in html
+    assert "可用来标识同一轮测试、同一批 session 或同一主题实验。" in html
     assert 'type="radio"' in html
     assert 'name="scenario_template"' in html
     assert 'value="whispering_guesthouse"' in html

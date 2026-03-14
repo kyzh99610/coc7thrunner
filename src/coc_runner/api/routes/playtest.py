@@ -777,6 +777,7 @@ def _render_playtest_session_create_page(
             playtest_group（可选）
             <input type="text" name="playtest_group" value="{escape(str(values.get('playtest_group') or ''))}" placeholder="例如：旅店线压力测试" />
           </label>
+          <p class="help">可用来标识同一轮测试、同一批 session 或同一主题实验。</p>
           <fieldset>
             <legend>scenario_template</legend>
             <div class="attention-grid">
