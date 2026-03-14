@@ -55,6 +55,14 @@ def test_investigator_playtest_page_opens_with_summary_and_action_form(
     assert f'/playtest/sessions/{session_id}/home"' in html
     assert "最近可见事件" in html
     assert "会话已创建：迷雾中的旅店" in html
+    assert "职业：记者" in html
+    assert "年龄：28" in html
+    assert "力量 50" in html
+    assert "图书馆使用 70" in html
+    assert "随身物品" in html
+    assert "当前没有可见的随身物品。" in html
+    assert "私有备注与记录" in html
+    assert "林舟 的私人笔记" in html
     assert "KP 提示" not in html
     assert "visible_reviewed_actions" not in html
     assert "keeper_workflow" not in html
@@ -88,6 +96,10 @@ def test_investigator_playtest_page_shows_completed_notice_and_hides_action_form
     assert "会话已创建：迷雾中的旅店" in html
     assert "提交玩家行动" in html
     assert "本局已结束，当前页面不再提交新的玩家行动。" in html
+    assert "职业：记者" in html
+    assert "图书馆使用 70" in html
+    assert "私有备注与记录" in html
+    assert "林舟 的私人笔记" in html
     assert 'name="action_text"' not in html
     assert "提交行动" not in html
 
@@ -160,8 +172,13 @@ def test_investigator_playtest_page_preserves_private_visibility_without_keeper_
 
     assert "残缺日记" in html_one
     assert "残缺日记" not in html_two
+    assert "日记只对真正翻到它的人暴露房内真相。" in html_one
+    assert "日记只对真正翻到它的人暴露房内真相。" not in html_two
+    assert "状态：仅自己可见" in html_one
     assert "只有林舟能看到的补充备注。" in html_one
     assert "只有林舟能看到的补充备注。" not in html_two
+    assert "会话备注" in html_one
+    assert "会话备注" not in html_two
     assert "KP：档案室的低语压力已具备条件，请保留一次理智审阅。" not in html_one
     assert "AI 草稿不应泄露给调查员。" not in html_one
     assert "visible_reviewed_actions" not in html_one

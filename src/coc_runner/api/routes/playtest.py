@@ -2243,6 +2243,139 @@ def _render_investigator_recent_events(visible_events: list[dict[str, Any]]) -> 
     return "".join(items)
 
 
+def _render_clue_status_label(status_value: Any) -> str:
+    status_labels = {
+        "undiscovered": "未发现",
+        "discovered": "已发现",
+        "partially_understood": "部分理解",
+        "shared_with_party": "已分享给全队",
+        "private_to_actor": "仅自己可见",
+    }
+    return status_labels.get(str(status_value), str(status_value or "未知"))
+
+
+def _render_investigator_clue_details(visible_clues: list[dict[str, Any]]) -> str:
+    if not visible_clues:
+        return '<p class="empty-state">当前还没有你可见的线索。</p>'
+    items: list[str] = []
+    for clue in visible_clues:
+        title = str(clue.get("title") or "未命名线索")
+        description = str(clue.get("text") or "当前没有更多线索说明。")
+        status_label = _render_clue_status_label(clue.get("status"))
+        clue_id = clue.get("clue_id")
+        items.append(
+            f"""
+            <article class="activity-item">
+              <div class="activity-header">
+                <h3>{escape(title)}</h3>
+              </div>
+              <p>{escape(description)}</p>
+              <p class="meta-line">状态：{escape(status_label)}</p>
+              {
+                  f'<p class="meta-line">clue_id: <span class="mono">{escape(str(clue_id))}</span></p>'
+                  if clue_id
+                  else ''
+              }
+            </article>
+            """
+        )
+    return '<div class="recent-list">' + "".join(items) + "</div>"
+
+
+def _render_investigator_character_panel(
+    *,
+    viewer_name: str,
+    scene_title: str,
+    viewer_summary: dict[str, Any] | None,
+    own_character_state: dict[str, Any],
+) -> str:
+    viewer_character = (
+        viewer_summary.get("character")
+        if isinstance(viewer_summary, dict) and isinstance(viewer_summary.get("character"), dict)
+        else {}
+    )
+    occupation = viewer_character.get("occupation")
+    age = viewer_character.get("age")
+    attributes = viewer_character.get("attributes") if isinstance(viewer_character.get("attributes"), dict) else {}
+    skills = viewer_character.get("skills") if isinstance(viewer_character.get("skills"), dict) else {}
+    inventory = [str(item) for item in own_character_state.get("inventory") or [] if str(item).strip()]
+    attribute_labels = {
+        "strength": "力量",
+        "constitution": "体质",
+        "size": "体型",
+        "dexterity": "敏捷",
+        "appearance": "外貌",
+        "intelligence": "智力",
+        "power": "意志",
+        "education": "教育",
+    }
+    attribute_summary = " · ".join(
+        f"{attribute_labels[key]} {value}"
+        for key, value in attributes.items()
+        if key in attribute_labels
+    )
+    top_skills = sorted(
+        ((str(skill), int(score)) for skill, score in skills.items()),
+        key=lambda item: (-item[1], item[0]),
+    )[:5]
+    skill_summary = " · ".join(
+        f"{skill} {score}" for skill, score in top_skills
+    )
+    return f"""
+      <p class="meta-line">角色：{escape(str(viewer_name))}</p>
+      <p class="meta-line">当前场景：{escape(str(scene_title))}</p>
+      {
+          f'<p class="meta-line">职业：{escape(str(occupation))} · 年龄：{escape(str(age))}</p>'
+          if occupation or age is not None
+          else ''
+      }
+      <ul>
+        <li>HP：{escape(str(own_character_state.get('current_hit_points', '—')))}</li>
+        <li>MP：{escape(str(own_character_state.get('current_magic_points', '—')))}</li>
+        <li>SAN：{escape(str(own_character_state.get('current_sanity', '—')))}</li>
+      </ul>
+      {
+          f'<p class="meta-line">关键属性：{escape(attribute_summary)}</p>'
+          if attribute_summary
+          else ''
+      }
+      {
+          f'<p class="meta-line">擅长技能：{escape(skill_summary)}</p>'
+          if skill_summary
+          else ''
+      }
+      <p class="meta-line">随身物品</p>
+      {_render_list_or_empty(inventory, empty_text="当前没有可见的随身物品。")}
+    """
+
+
+def _render_investigator_private_notes(
+    own_character_state: dict[str, Any],
+    own_private_state: dict[str, Any],
+) -> str:
+    entries: list[tuple[str, str]] = []
+    for note in own_private_state.get("private_notes") or []:
+        note_text = str(note).strip()
+        if note_text:
+            entries.append(("角色私密记录", note_text))
+    for note in own_character_state.get("private_notes") or []:
+        note_text = str(note).strip()
+        if note_text:
+            entries.append(("会话备注", note_text))
+    if not entries:
+        return '<p class="empty-state">当前没有你的私有备注。</p>'
+    items = [
+        f"""
+        <article class="activity-item">
+          <p class="meta-line">{escape(label)}</p>
+          <p>{escape(note)}</p>
+        </article>
+        """
+        for label, note in entries
+    ]
+    return '<div class="recent-list">' + "".join(items) + "</div>"
+
+
 def _render_investigator_page(
     *,
     session_id: str,
@@ -2269,7 +2402,7 @@ def _render_investigator_page(
     own_character_state = view.get("own_character_state") or {}
     own_private_state = view.get("own_private_state") or {}
     visible_clues = [
-        clue.get("title")
+        clue
         for clue in view.get("scenario", {}).get("clues", [])
         if isinstance(clue, dict) and clue.get("title")
     ]
@@ -2328,17 +2461,16 @@ def _render_investigator_page(
         <div class="summary-grid">
           <article class="summary-card">
             <h3>当前状态</h3>
-            <ul>
-              <li>角色：{escape(str(viewer_name))}</li>
-              <li>当前场景：{escape(str(scene_title))}</li>
-              <li>HP：{escape(str(own_character_state.get('current_hit_points', '—')))}</li>
-              <li>MP：{escape(str(own_character_state.get('current_magic_points', '—')))}</li>
-              <li>SAN：{escape(str(own_character_state.get('current_sanity', '—')))}</li>
-            </ul>
+            {_render_investigator_character_panel(
+                viewer_name=str(viewer_name),
+                scene_title=str(scene_title),
+                viewer_summary=viewer_summary if isinstance(viewer_summary, dict) else None,
+                own_character_state=own_character_state,
+            )}
           </article>
           <article class="summary-card">
             <h3>可见线索</h3>
-            {_render_list_or_empty(visible_clues, empty_text="当前还没有你可见的线索。")}
+            {_render_investigator_clue_details(visible_clues)}
           </article>
           <article class="summary-card">
             <h3>状态与条件</h3>
@@ -2349,12 +2481,8 @@ def _render_investigator_page(
             )}
           </article>
           <article class="summary-card">
-            <h3>我的备注</h3>
-            {_render_list_or_empty(
-                list(own_character_state.get("private_notes", []))
-                + list(own_private_state.get("private_notes", [])),
-                empty_text="当前没有你的私有备注。",
-            )}
+            <h3>私有备注与记录</h3>
+            {_render_investigator_private_notes(own_character_state, own_private_state)}
           </article>
         </div>
       </section>
