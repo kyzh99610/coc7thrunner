@@ -1460,6 +1460,7 @@ class SessionState(BaseModel):
     session_id: str = Field(default_factory=lambda: f"session-{uuid4().hex}")
     keeper_id: str = Field(min_length=1, max_length=80)
     keeper_name: str = Field(min_length=1, max_length=80)
+    playtest_group: str | None = Field(default=None, max_length=80)
     language_preference: LanguagePreference = LanguagePreference.ZH_CN
     allow_test_mode_self_review: bool = False
     status: SessionStatus = SessionStatus.PLANNED
@@ -1477,6 +1478,14 @@ class SessionState(BaseModel):
     state_version: int = Field(default=1, ge=1)
     created_at: datetime = Field(default_factory=utc_now)
     updated_at: datetime = Field(default_factory=utc_now)
+
+    @field_validator("playtest_group")
+    @classmethod
+    def normalize_playtest_group(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        normalized = value.strip()
+        return normalized or None
 
     @model_validator(mode="after")
     def validate_participants(self) -> "SessionState":
@@ -1526,10 +1535,19 @@ class InvestigatorView(BaseModel):
 class SessionStartRequest(BaseModel):
     keeper_id: str | None = Field(default=None, min_length=1, max_length=80)
     keeper_name: str = Field(min_length=1, max_length=80)
+    playtest_group: str | None = Field(default=None, max_length=80)
     language_preference: LanguagePreference | None = None
     allow_test_mode_self_review: bool = False
     scenario: ScenarioScaffold
     participants: list[SessionParticipant]
+
+    @field_validator("playtest_group")
+    @classmethod
+    def normalize_playtest_group(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        normalized = value.strip()
+        return normalized or None
 
 
 class SessionStartResponse(BaseModel):

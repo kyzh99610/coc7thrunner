@@ -295,6 +295,7 @@ class SessionService:
             session = SessionState(
                 keeper_id=request.keeper_id or self.DEFAULT_KEEPER_ID,
                 keeper_name=request.keeper_name,
+                playtest_group=request.playtest_group,
                 language_preference=session_language,
                 allow_test_mode_self_review=request.allow_test_mode_self_review,
                 scenario=scenario,

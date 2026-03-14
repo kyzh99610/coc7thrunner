@@ -182,6 +182,11 @@ def _session_status_label(status_value: Any) -> str:
     }.get(normalized, normalized)
 
 
+def _playtest_group_label(group_value: Any, *, empty_label: str = "未分组") -> str:
+    normalized = str(group_value or "").strip()
+    return normalized or empty_label
+
+
 def _knowledge_kind_label(kind_value: Any) -> str:
     return {
         "rulebook": "规则书",
@@ -250,6 +255,7 @@ def _render_playtest_launcher_page(
         else None
     )
     session_status = snapshot.get("status") or SessionStatus.PLANNED.value
+    playtest_group = snapshot.get("playtest_group")
     investigator_entries = [
         participant
         for participant in snapshot.get("participants") or []
@@ -280,6 +286,11 @@ def _render_playtest_launcher_page(
           <span>场景：{escape(str(scenario.get('title', '未知会话')))}</span>
           <span>KP：{escape(str(snapshot.get('keeper_name', 'KP')))}</span>
           <span>keeper_id: <code>{escape(str(snapshot.get('keeper_id', '—')))}</code></span>
+          {
+              f'<span>分组：{escape(_playtest_group_label(playtest_group))}</span>'
+              if playtest_group
+              else ''
+          }
           <span>当前状态：{_render_session_status_display(session_status)}</span>
         </div>
         <div class="nav-links">
@@ -344,7 +355,8 @@ def _render_playtest_session_index_page(
     if not sessions:
         session_cards = '<p class="empty-state">当前还没有 session。先创建一局，再从这里进入。</p>'
     else:
-        cards: list[str] = []
+        grouped_cards: dict[str, list[str]] = {}
+        group_order: list[str] = []
         for session in sessions:
             scenario = session.get("scenario") or {}
             progress_state = session.get("progress_state") or {}
@@ -361,7 +373,11 @@ def _render_playtest_session_index_page(
                 else None
             )
             session_id = str(session.get("session_id") or "")
-            cards.append(
+            group_label = _playtest_group_label(session.get("playtest_group"))
+            if group_label not in grouped_cards:
+                grouped_cards[group_label] = []
+                group_order.append(group_label)
+            grouped_cards[group_label].append(
                 f"""
                 <article class="attention-card">
                   <div class="activity-header">
@@ -369,6 +385,7 @@ def _render_playtest_session_index_page(
                     <span class="activity-meta">{_render_session_status_display(session.get('status'))}</span>
                   </div>
                   <p class="meta-line">session_id: <code>{escape(session_id)}</code></p>
+                  <p class="meta-line">分组：{escape(group_label)}</p>
                   <p class="meta-line">KP：{escape(str(session.get('keeper_name') or 'KP'))}</p>
                   <p class="meta-line">当前场景：{escape(str(current_scene.get('title', '未知场景')))}</p>
                   <p class="meta-line">当前 beat：<span class="mono">{escape(str(current_beat_id or '无'))}</span></p>
@@ -381,7 +398,18 @@ def _render_playtest_session_index_page(
                 </article>
                 """
             )
-        session_cards = "".join(cards)
+        session_cards = "".join(
+            f"""
+            <section class="panel">
+              <h3>分组：{escape(group_label)}</h3>
+              <p class="meta-line">本组 session 数：<span class="mono">{escape(str(len(grouped_cards[group_label])))}</span></p>
+              <div class="attention-grid">
+                {"".join(grouped_cards[group_label])}
+              </div>
+            </section>
+            """
+            for group_label in group_order
+        )
     body = f"""
       <section class="hero">
         <h1>Playtest Sessions</h1>
@@ -577,6 +605,7 @@ def _render_playtest_knowledge_source_page(
 def _default_playtest_setup_form_values() -> dict[str, Any]:
     return {
         "keeper_name": "",
+        "playtest_group": "",
         "scenario_template": "whispering_guesthouse",
         "investigator_names": ["", "", "", ""],
     }
@@ -585,6 +614,7 @@ def _default_playtest_setup_form_values() -> dict[str, Any]:
 def _normalize_playtest_setup_form_values(form: dict[str, str]) -> dict[str, Any]:
     values = _default_playtest_setup_form_values()
     values["keeper_name"] = form.get("keeper_name", "")
+    values["playtest_group"] = form.get("playtest_group", "")
     values["scenario_template"] = form.get(
         "scenario_template",
         values["scenario_template"],
@@ -670,6 +700,7 @@ def _build_playtest_setup_request(form_values: dict[str, Any]) -> SessionStartRe
     return SessionStartRequest.model_validate(
         {
             "keeper_name": str(form_values.get("keeper_name") or ""),
+            "playtest_group": _normalize_form_text(str(form_values.get("playtest_group") or "")),
             "scenario": template["builder"](),
             "participants": participants,
         }
@@ -741,6 +772,10 @@ def _render_playtest_session_create_page(
           <label>
             keeper_name
             <input type="text" name="keeper_name" value="{escape(str(values.get('keeper_name') or ''))}" required />
+          </label>
+          <label>
+            playtest_group（可选）
+            <input type="text" name="playtest_group" value="{escape(str(values.get('playtest_group') or ''))}" placeholder="例如：旅店线压力测试" />
           </label>
           <fieldset>
             <legend>scenario_template</legend>

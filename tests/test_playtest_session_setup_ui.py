@@ -19,6 +19,7 @@ def test_playtest_session_create_page_displays_minimal_setup_form(
     assert "先看准备资料" in html
     assert 'action="/playtest/sessions/create"' in html
     assert 'name="keeper_name"' in html
+    assert 'name="playtest_group"' in html
     assert 'type="radio"' in html
     assert 'name="scenario_template"' in html
     assert 'value="whispering_guesthouse"' in html
@@ -46,6 +47,7 @@ def test_playtest_session_setup_flow_creates_session_and_redirects_to_launcher(
         "/playtest/sessions/create",
         data={
             "keeper_name": "新局 KP",
+            "playtest_group": "旅店线压力测试",
             "scenario_template": "midnight_archive",
             "investigator_1_name": "林舟",
             "investigator_2_name": "周岚",
@@ -64,6 +66,7 @@ def test_playtest_session_setup_flow_creates_session_and_redirects_to_launcher(
     assert "Playtest 入口" in html
     assert f"session_id: <code>{new_session_id}</code>" in html
     assert "KP：新局 KP" in html
+    assert "分组：旅店线压力测试" in html
     assert "雨夜档案馆" in html
     assert "林舟" in html
     assert "周岚" in html
@@ -72,6 +75,7 @@ def test_playtest_session_setup_flow_creates_session_and_redirects_to_launcher(
     index_response = client.get("/playtest/sessions")
     assert index_response.status_code == 200
     assert new_session_id in index_response.text
+    assert "旅店线压力测试" in index_response.text
     assert f'/playtest/sessions/{new_session_id}/home"' in index_response.text
 
 
