@@ -1,8 +1,31 @@
 from __future__ import annotations
 
+from urllib.parse import quote
+
 from fastapi.testclient import TestClient
 
+from tests.helpers import make_participant
 from tests.test_session_import import KEEPER_ID, _get_snapshot, _start_snapshot_session
+from tests.test_session_import import _snapshot_scenario
+
+
+def _start_grouped_snapshot_session(
+    client: TestClient,
+    *,
+    playtest_group: str,
+) -> str:
+    response = client.post(
+        "/sessions/start",
+        json={
+            "keeper_name": "KP",
+            "keeper_id": KEEPER_ID,
+            "playtest_group": playtest_group,
+            "scenario": _snapshot_scenario(),
+            "participants": [make_participant("investigator-1", "林舟")],
+        },
+    )
+    assert response.status_code == 201
+    return response.json()["session_id"]
 
 
 def test_playtest_launcher_page_displays_summary_and_all_entry_links(
@@ -29,6 +52,22 @@ def test_playtest_launcher_page_displays_summary_and_all_entry_links(
     assert f'/playtest/sessions/{session_id}/investigator/investigator-2"' in html
     assert "林舟" in html
     assert "周岚" in html
+    assert "返回本组" not in html
+
+
+def test_playtest_launcher_page_shows_back_link_to_group_when_session_has_group(
+    client: TestClient,
+) -> None:
+    group_name = "旅店线压力测试"
+    session_id = _start_grouped_snapshot_session(client, playtest_group=group_name)
+
+    response = client.get(f"/playtest/sessions/{session_id}/home")
+
+    assert response.status_code == 200
+    html = response.text
+    assert f"分组：{group_name}" in html
+    assert "返回本组" in html
+    assert f'href="/playtest/groups/{quote(group_name)}"' in html
 
 
 def test_playtest_launcher_page_shows_completed_status_hint_after_keeper_completes_session(

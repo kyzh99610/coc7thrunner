@@ -147,6 +147,11 @@ def _render_playtest_launcher_page(
     )
     session_status = snapshot.get("status") or SessionStatus.PLANNED.value
     playtest_group = snapshot.get("playtest_group")
+    group_link = (
+        f'<a href="/playtest/groups/{quote(str(playtest_group))}">返回本组</a>'
+        if playtest_group
+        else ""
+    )
     investigator_entries = [
         participant
         for participant in snapshot.get("participants") or []
@@ -186,6 +191,7 @@ def _render_playtest_launcher_page(
         </div>
         <div class="nav-links">
           {_render_session_index_link()}
+          {group_link}
         </div>
       </section>
       {_render_detail(detail)}
