@@ -1,6 +1,13 @@
 from __future__ import annotations
 
+import shutil
+from pathlib import Path
+from uuid import uuid4
+
 from fastapi.testclient import TestClient
+
+
+TEMPLATE_SAMPLE_DIR = Path(__file__).resolve().parents[1] / "coc7th rules and templates" / "sample templates"
 
 
 def _source_count(client: TestClient) -> int:
@@ -41,6 +48,41 @@ def _ingest_text(client: TestClient, *, source_id: str, content: str) -> None:
         json={"source_id": source_id, "content": content},
     )
     assert response.status_code == 200
+
+
+def _build_scenario_card_root() -> Path:
+    scenario_root = Path("test-artifacts") / f"scenario_card_sources_{uuid4().hex}"
+    investigators_dir = scenario_root / "investigators"
+    owned_npcs_dir = scenario_root / "owned_npcs"
+    sidecars_dir = scenario_root / "sidecars"
+    module_npcs_dir = scenario_root / "module_npcs"
+    investigators_dir.mkdir(parents=True)
+    owned_npcs_dir.mkdir()
+    sidecars_dir.mkdir()
+    module_npcs_dir.mkdir()
+
+    shutil.copy(
+        TEMPLATE_SAMPLE_DIR / "Bruce vain.xlsx",
+        investigators_dir / "Bruce vain.xlsx",
+    )
+    shutil.copy(
+        TEMPLATE_SAMPLE_DIR / "Leon Von Jager.xlsx",
+        investigators_dir / "Leon Von Jager.xlsx",
+    )
+    shutil.copy(
+        TEMPLATE_SAMPLE_DIR / "Henrich·Gustav·von·Rothschild.xlsx",
+        owned_npcs_dir / "Henrich·Gustav·von·Rothschild.xlsx",
+    )
+    shutil.copy(
+        TEMPLATE_SAMPLE_DIR / "Bruce vain.xlsx",
+        module_npcs_dir / "Module Keeper NPC.xlsx",
+    )
+    (sidecars_dir / "lobby.json").write_text(
+        '{"scene_id":"scene.guesthouse_lobby","hook":"灯影压迫"}',
+        encoding="utf-8",
+    )
+    (investigators_dir / "broken.xlsx").write_text("not-a-real-xlsx", encoding="utf-8")
+    return scenario_root
 
 
 def test_playtest_knowledge_index_lists_sources_with_detail_links_and_metadata(
@@ -250,3 +292,99 @@ def test_playtest_knowledge_detail_ingest_text_failure_shows_error_without_silen
     assert "request_validation_failed" in html
     assert "继续去创建 session" not in html
     assert "旅店草案规则" in html
+
+
+def test_playtest_knowledge_index_can_batch_register_scenario_card_sources_from_scenario_root(
+    client: TestClient,
+) -> None:
+    scenario_root = _build_scenario_card_root()
+    try:
+        response = client.post(
+            "/playtest/knowledge/register-scenario-card-sources",
+            data={"scenario_root_path": str(scenario_root)},
+        )
+
+        assert response.status_code == 200
+        html = response.text
+        assert "按 scenario 目录批量登记角色卡" in html
+        assert 'action="/playtest/knowledge/register-scenario-card-sources"' in html
+        assert 'name="scenario_root_path"' in html
+        assert "只扫描 investigators/*.xlsx 与 owned_npcs/*.xlsx" in html
+        assert "不会监控目录，也不会自动同步" in html
+        assert "Bruce vain.xlsx" in html
+        assert "Leon Von Jager.xlsx" in html
+        assert "Henrich·Gustav·von·Rothschild.xlsx" in html
+        assert "Module Keeper NPC.xlsx" not in html
+        assert "broken.xlsx" in html
+        assert "调查员角色卡" in html
+        assert "自车 NPC 角色卡" in html
+        assert "registered" in html
+        assert "failed" in html
+        assert "sidecars/ 目录已检测到，但本轮不会读取其中内容。" in html
+
+        scenario_sources = [
+            source
+            for source in client.app.state.knowledge_service.list_sources()
+            if source.source_metadata.get("scenario_root_path") == str(scenario_root.resolve())
+        ]
+        assert len(scenario_sources) == 3
+        assert {
+            source.source_metadata.get("card_category") for source in scenario_sources
+        } == {"investigator", "owned_npc"}
+        assert {
+            source.source_metadata.get("relative_path") for source in scenario_sources
+        } == {
+            "investigators/Bruce vain.xlsx",
+            "investigators/Leon Von Jager.xlsx",
+            "owned_npcs/Henrich·Gustav·von·Rothschild.xlsx",
+        }
+        assert all(
+            source.source_metadata.get("registration_mode") == "scenario_folder_scan"
+            for source in scenario_sources
+        )
+        assert all(
+            source.source_metadata.get("template_profile_detected") == "coc7th_integrated_workbook_v1"
+            for source in scenario_sources
+        )
+
+        bruce_source = next(
+            source
+            for source in scenario_sources
+            if source.source_metadata.get("file_name") == "Bruce vain.xlsx"
+        )
+        import_response = client.post(
+            "/knowledge/import-character-sheet",
+            json={"source_id": bruce_source.source_id},
+        )
+        assert import_response.status_code == 200
+        extraction = import_response.json()["extraction"]
+        assert extraction["template_profile"] == "coc7th_integrated_workbook_v1"
+        assert extraction["investigator_name"] == "布鲁斯·维恩"
+    finally:
+        shutil.rmtree(scenario_root, ignore_errors=True)
+
+
+def test_playtest_knowledge_index_scenario_card_batch_registration_is_light_scan_not_sync_system(
+    client: TestClient,
+) -> None:
+    scenario_root = _build_scenario_card_root()
+    try:
+        first_response = client.post(
+            "/playtest/knowledge/register-scenario-card-sources",
+            data={"scenario_root_path": str(scenario_root)},
+        )
+        assert first_response.status_code == 200
+        source_count_after_first_scan = _source_count(client)
+
+        second_response = client.post(
+            "/playtest/knowledge/register-scenario-card-sources",
+            data={"scenario_root_path": str(scenario_root)},
+        )
+
+        assert second_response.status_code == 200
+        html = second_response.text
+        assert "当前不会自动同步或覆盖已登记 source。" in html
+        assert "skipped" in html
+        assert _source_count(client) == source_count_after_first_scan
+    finally:
+        shutil.rmtree(scenario_root, ignore_errors=True)

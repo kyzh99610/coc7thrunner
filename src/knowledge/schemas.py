@@ -42,6 +42,7 @@ class KnowledgeSourceRegistration(BaseModel):
     document_identity: str
     source_path: str | None = None
     source_title_zh: str | None = None
+    source_metadata: dict[str, str] = Field(default_factory=dict)
     ruleset: str = "coc7e"
     default_visibility: VisibilityScope = VisibilityScope.PUBLIC
     allowed_player_ids: list[str] = Field(default_factory=list)
@@ -260,6 +261,60 @@ class CharacterSheetImportResponse(BaseModel):
     source: KnowledgeSourceState
     extraction: CharacterSheetExtraction
     review: CharacterImportReview
+
+
+class ScenarioCardCategory(StrEnum):
+    INVESTIGATOR = "investigator"
+    OWNED_NPC = "owned_npc"
+
+
+class ScenarioCardRegistrationStatus(StrEnum):
+    REGISTERED = "registered"
+    SKIPPED = "skipped"
+    FAILED = "failed"
+
+
+class ScenarioCardSourceRegistrationRequest(BaseModel):
+    scenario_root_path: str = Field(min_length=1)
+
+    @field_validator("scenario_root_path")
+    @classmethod
+    def _normalize_scenario_root_path(cls, value: str) -> str:
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("scenario_root_path must not be blank")
+        return normalized
+
+
+class ScenarioCardSourceRegistrationItem(BaseModel):
+    category: ScenarioCardCategory
+    file_name: str = Field(min_length=1)
+    relative_path: str = Field(min_length=1)
+    file_path: str = Field(min_length=1)
+    status: ScenarioCardRegistrationStatus
+    source_id: str | None = None
+    source_title_zh: str | None = None
+    template_profile_detected: str | None = None
+    message: str | None = None
+
+
+class ScenarioCardSourceRegistrationResponse(BaseModel):
+    message: str
+    scenario_root_path: str
+    sidecars_directory_present: bool = False
+    items: list[ScenarioCardSourceRegistrationItem] = Field(default_factory=list)
+
+    @property
+    def registered_count(self) -> int:
+        return sum(item.status == ScenarioCardRegistrationStatus.REGISTERED for item in self.items)
+
+    @property
+    def skipped_count(self) -> int:
+        return sum(item.status == ScenarioCardRegistrationStatus.SKIPPED for item in self.items)
+
+    @property
+    def failed_count(self) -> int:
+        return sum(item.status == ScenarioCardRegistrationStatus.FAILED for item in self.items)
 
 
 class RuleQueryRequest(BaseModel):

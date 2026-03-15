@@ -22,6 +22,7 @@ from coc_runner.api.routes.playtest_shared import (
 from coc_runner.application.knowledge_service import KnowledgeService
 from coc_runner.error_details import build_knowledge_error_detail, extract_error_detail
 from knowledge.schemas import KnowledgeSourceRegistration, TextIngestRequest
+from knowledge.schemas import ScenarioCardSourceRegistrationRequest
 
 
 router = APIRouter()
@@ -53,6 +54,13 @@ def _knowledge_ingest_status_label(status_value: Any) -> str:
         "registered": "已登记",
         "ingested": "已入库",
     }.get(str(status_value), str(status_value or "未知"))
+
+
+def _scenario_card_category_label(category_value: Any) -> str:
+    return {
+        "investigator": "调查员角色卡",
+        "owned_npc": "自车 NPC 角色卡",
+    }.get(str(category_value), str(category_value or "未知类别"))
 
 
 def _summarize_text_preview(text_value: Any, *, limit: int = 180) -> str:
@@ -105,12 +113,22 @@ def _default_register_form_values() -> dict[str, str]:
     }
 
 
+def _default_scenario_card_form_values() -> dict[str, str]:
+    return {"scenario_root_path": ""}
+
+
 def _normalize_register_form_values(form: dict[str, str]) -> dict[str, str]:
     values = _default_register_form_values()
     values["source_id"] = form.get("source_id", "")
     values["source_title_zh"] = form.get("source_title_zh", "")
     values["source_kind"] = form.get("source_kind", values["source_kind"])
     values["source_format"] = form.get("source_format", values["source_format"])
+    return values
+
+
+def _normalize_scenario_card_form_values(form: dict[str, str]) -> dict[str, str]:
+    values = _default_scenario_card_form_values()
+    values["scenario_root_path"] = form.get("scenario_root_path", "")
     return values
 
 
@@ -130,15 +148,100 @@ def _build_playtest_source_registration_request(
     )
 
 
+def _build_playtest_scenario_card_registration_request(
+    form_values: dict[str, str],
+) -> ScenarioCardSourceRegistrationRequest:
+    return ScenarioCardSourceRegistrationRequest.model_validate(
+        {
+            "scenario_root_path": _normalize_form_text(form_values.get("scenario_root_path")) or "",
+        }
+    )
+
+
+def _render_scenario_card_registration_result(
+    result: dict[str, Any] | None,
+) -> str:
+    if not result:
+        return ""
+    items = result.get("items") or []
+    item_cards = "".join(
+        f"""
+        <article class="activity-item">
+          <div class="activity-header">
+            <h3>{escape(str(item.get('file_name') or '未命名角色卡'))}</h3>
+            <span class="activity-meta">{escape(str(item.get('status') or 'unknown'))}</span>
+          </div>
+          <p class="meta-line">类别：{escape(_scenario_card_category_label(item.get('category')))}</p>
+          <p class="meta-line">relative_path：<code>{escape(str(item.get('relative_path') or ''))}</code></p>
+          {
+              f'<p class="meta-line">source_id：<code>{escape(str(item.get("source_id") or ""))}</code></p>'
+              if item.get("source_id")
+              else ''
+          }
+          {
+              f'<p class="meta-line">模板识别：<span class="mono">{escape(str(item.get("template_profile_detected")))}</span></p>'
+              if item.get("template_profile_detected")
+              else ''
+          }
+          {
+              f'<p>{escape(str(item.get("message") or ""))}</p>'
+              if item.get("message")
+              else ''
+          }
+        </article>
+        """
+        for item in items
+    )
+    investigator_count = sum(
+        1 for item in items if item.get("category") == "investigator"
+    )
+    owned_npc_count = sum(
+        1 for item in items if item.get("category") == "owned_npc"
+    )
+    registered_count = sum(
+        1 for item in items if item.get("status") == "registered"
+    )
+    skipped_count = sum(
+        1 for item in items if item.get("status") == "skipped"
+    )
+    failed_count = sum(
+        1 for item in items if item.get("status") == "failed"
+    )
+    return f"""
+      <div class="recent-list">
+        <article class="activity-item">
+          <div class="activity-header">
+            <h3>扫描结果</h3>
+            <span class="activity-meta">{escape(str(result.get("scenario_root_path") or ""))}</span>
+          </div>
+          <p class="meta-line">调查员角色卡：<span class="mono">{investigator_count}</span></p>
+          <p class="meta-line">自车 NPC 角色卡：<span class="mono">{owned_npc_count}</span></p>
+          <p class="meta-line">registered：<span class="mono">{registered_count}</span></p>
+          <p class="meta-line">skipped：<span class="mono">{skipped_count}</span></p>
+          <p class="meta-line">failed：<span class="mono">{failed_count}</span></p>
+          {
+              '<p class="help">sidecars/ 目录已检测到，但本轮不会读取其中内容。</p>'
+              if result.get("sidecars_directory_present")
+              else ''
+          }
+        </article>
+        {item_cards}
+      </div>
+    """
+
+
 def _render_playtest_knowledge_index_page(
     *,
     sources: list[dict[str, Any]],
     notice: str | None = None,
     detail: dict[str, Any] | str | None = None,
     register_form_values: dict[str, str] | None = None,
+    scenario_card_form_values: dict[str, str] | None = None,
+    scenario_card_registration_result: dict[str, Any] | None = None,
     status_code: int = status.HTTP_200_OK,
 ) -> HTMLResponse:
     form_values = register_form_values or _default_register_form_values()
+    scenario_form_values = scenario_card_form_values or _default_scenario_card_form_values()
     kind_options = "".join(
         f'<option value="{escape(value)}" {"selected" if form_values.get("source_kind") == value else ""}>{escape(label)}</option>'
         for value, label in _knowledge_kind_options()
@@ -212,6 +315,18 @@ def _render_playtest_knowledge_index_page(
           <p class="help">先登记一个资料源，再进入详情页补文本内容。</p>
           <button type="submit">新增资料</button>
         </form>
+      </section>
+      <section class="panel">
+        <h2>按 scenario 目录批量登记角色卡</h2>
+        <form method="post" action="/playtest/knowledge/register-scenario-card-sources" data-submit-label="扫描中...">
+          <label>
+            scenario_root_path
+            <input type="text" name="scenario_root_path" value="{escape(scenario_form_values.get('scenario_root_path', ''))}" required />
+          </label>
+          <p class="help">只扫描 investigators/*.xlsx 与 owned_npcs/*.xlsx，不读取 sidecars/，不会监控目录，也不会自动同步。</p>
+          <button type="submit">扫描并登记角色卡资料</button>
+        </form>
+        {_render_scenario_card_registration_result(scenario_card_registration_result)}
       </section>
       <section class="panel">
         <h2>Knowledge Sources</h2>
@@ -400,6 +515,8 @@ def _render_playtest_knowledge_index_from_service(
     notice: str | None = None,
     detail: dict[str, Any] | str | None = None,
     register_form_values: dict[str, str] | None = None,
+    scenario_card_form_values: dict[str, str] | None = None,
+    scenario_card_registration_result: dict[str, Any] | None = None,
     status_code: int = status.HTTP_200_OK,
 ) -> HTMLResponse:
     return _render_playtest_knowledge_index_page(
@@ -410,6 +527,8 @@ def _render_playtest_knowledge_index_from_service(
         notice=notice,
         detail=detail,
         register_form_values=register_form_values,
+        scenario_card_form_values=scenario_card_form_values,
+        scenario_card_registration_result=scenario_card_registration_result,
         status_code=status_code,
     )
 
@@ -486,6 +605,35 @@ async def register_playtest_knowledge_source(
                 source_id=source_id,
             ),
             register_form_values=form,
+            status_code=_playtest_status_for_exception(exc),
+        )
+
+
+@router.post("/knowledge/register-scenario-card-sources", response_class=HTMLResponse)
+async def register_playtest_scenario_card_sources(
+    request: Request,
+    knowledge_service: KnowledgeService = Depends(get_knowledge_service),
+) -> HTMLResponse:
+    form = _normalize_scenario_card_form_values(await _read_form_payload(request))
+    scenario_root_path = _normalize_form_text(form.get("scenario_root_path")) or ""
+    try:
+        register_request = _build_playtest_scenario_card_registration_request(form)
+        result = knowledge_service.register_scenario_character_sources(register_request)
+        return _render_playtest_knowledge_index_from_service(
+            knowledge_service=knowledge_service,
+            notice=result.message,
+            scenario_card_registration_result=result.model_dump(mode="json"),
+        )
+    except (ValidationError, LookupError, ValueError) as exc:
+        return _render_playtest_knowledge_index_from_service(
+            knowledge_service=knowledge_service,
+            detail=_playtest_knowledge_form_detail(
+                exc,
+                code="scenario_card_source_registration_invalid",
+                scope="scenario_card_source_registration",
+                source_id=scenario_root_path or "scenario_root_path",
+            ),
+            scenario_card_form_values=form,
             status_code=_playtest_status_for_exception(exc),
         )
 

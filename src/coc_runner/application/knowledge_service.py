@@ -1,5 +1,10 @@
 from __future__ import annotations
 
+from coc_runner.application.scenario_card_registration import (
+    build_scenario_card_source_registration,
+    is_supported_scenario_template_card,
+    scan_scenario_character_card_files,
+)
 from coc_runner.application.template_card_import import parse_coc7th_template_card_source
 from knowledge.ingest import KnowledgeIngestor
 from knowledge.retrieval import KnowledgeRetriever
@@ -17,6 +22,10 @@ from knowledge.schemas import (
     RuleChunk,
     RuleQueryRequest,
     RuleQueryResult,
+    ScenarioCardRegistrationStatus,
+    ScenarioCardSourceRegistrationItem,
+    ScenarioCardSourceRegistrationRequest,
+    ScenarioCardSourceRegistrationResponse,
     TextIngestRequest,
     TextIngestResponse,
 )
@@ -44,6 +53,115 @@ class KnowledgeService:
         return KnowledgeSourceResponse(
             message=self._message("source_registered"),
             source=source,
+        )
+
+    def register_scenario_character_sources(
+        self,
+        request: ScenarioCardSourceRegistrationRequest,
+    ) -> ScenarioCardSourceRegistrationResponse:
+        try:
+            scan_result = scan_scenario_character_card_files(request.scenario_root_path)
+        except FileNotFoundError as exc:
+            raise LookupError(
+                self._message(
+                    "scenario_card_root_not_found",
+                    scenario_root_path=request.scenario_root_path,
+                )
+            ) from exc
+        except NotADirectoryError as exc:
+            raise ValueError(
+                self._message(
+                    "scenario_card_root_not_directory",
+                    scenario_root_path=request.scenario_root_path,
+                )
+            ) from exc
+        items: list[ScenarioCardSourceRegistrationItem] = []
+        for card in scan_result.cards:
+            if card.failure_message is not None:
+                items.append(
+                    ScenarioCardSourceRegistrationItem(
+                        category=card.category,
+                        file_name=card.file_name,
+                        relative_path=card.relative_path,
+                        file_path=str(card.file_path),
+                        status=ScenarioCardRegistrationStatus.FAILED,
+                        template_profile_detected=card.template_profile_detected,
+                        message=card.failure_message,
+                    )
+                )
+                continue
+            if not is_supported_scenario_template_card(card):
+                items.append(
+                    ScenarioCardSourceRegistrationItem(
+                        category=card.category,
+                        file_name=card.file_name,
+                        relative_path=card.relative_path,
+                        file_path=str(card.file_path),
+                        status=ScenarioCardRegistrationStatus.FAILED,
+                        template_profile_detected=card.template_profile_detected,
+                        message=self._message(
+                            "scenario_card_template_not_supported",
+                            file_name=card.file_name,
+                        ),
+                    )
+                )
+                continue
+
+            register_request = build_scenario_card_source_registration(
+                card,
+                scenario_root_path=scan_result.scenario_root_path,
+            )
+            existing_source = self.repository.get_source(register_request.source_id)
+            if existing_source is not None:
+                items.append(
+                    ScenarioCardSourceRegistrationItem(
+                        category=card.category,
+                        file_name=card.file_name,
+                        relative_path=card.relative_path,
+                        file_path=str(card.file_path),
+                        status=ScenarioCardRegistrationStatus.SKIPPED,
+                        source_id=existing_source.source_id,
+                        source_title_zh=existing_source.source_title_zh,
+                        template_profile_detected=card.template_profile_detected,
+                        message=self._message("scenario_card_source_already_registered"),
+                    )
+                )
+                continue
+
+            created_source = self.ingestor.register_source(register_request)
+            items.append(
+                ScenarioCardSourceRegistrationItem(
+                    category=card.category,
+                    file_name=card.file_name,
+                    relative_path=card.relative_path,
+                    file_path=str(card.file_path),
+                    status=ScenarioCardRegistrationStatus.REGISTERED,
+                    source_id=created_source.source_id,
+                    source_title_zh=created_source.source_title_zh,
+                    template_profile_detected=card.template_profile_detected,
+                    message=self._message("source_registered"),
+                )
+            )
+
+        registered_count = sum(
+            item.status == ScenarioCardRegistrationStatus.REGISTERED for item in items
+        )
+        skipped_count = sum(
+            item.status == ScenarioCardRegistrationStatus.SKIPPED for item in items
+        )
+        failed_count = sum(
+            item.status == ScenarioCardRegistrationStatus.FAILED for item in items
+        )
+        return ScenarioCardSourceRegistrationResponse(
+            message=self._message(
+                "scenario_card_sources_registered",
+                registered_count=registered_count,
+                skipped_count=skipped_count,
+                failed_count=failed_count,
+            ),
+            scenario_root_path=str(scan_result.scenario_root_path),
+            sidecars_directory_present=scan_result.sidecars_directory_present,
+            items=items,
         )
 
     def ingest_text(
@@ -254,6 +372,11 @@ class KnowledgeService:
             "file_ingested": "文件知识已入库",
             "character_sheet_imported": "角色卡已导入",
             "source_not_found": "未找到知识源 {source_id}",
+            "scenario_card_root_not_found": "未找到 scenario 母文件夹 {scenario_root_path}",
+            "scenario_card_root_not_directory": "scenario_root_path {scenario_root_path} 不是可扫描的目录",
+            "scenario_card_sources_registered": "已按 scenario 目录完成角色卡资料扫描：{registered_count} 条已登记，{skipped_count} 条跳过，{failed_count} 条失败。",
+            "scenario_card_source_already_registered": "知识源已存在，当前不会自动同步或覆盖已登记 source。",
+            "scenario_card_template_not_supported": "文件 {file_name} 不是受支持的固定模板卡家族，当前不会登记。",
         }
         en_messages = {
             "source_registered": "Knowledge source registered",
@@ -261,6 +384,11 @@ class KnowledgeService:
             "file_ingested": "Knowledge file ingested",
             "character_sheet_imported": "Character sheet imported",
             "source_not_found": "Knowledge source {source_id} was not found",
+            "scenario_card_root_not_found": "Scenario root {scenario_root_path} was not found",
+            "scenario_card_root_not_directory": "scenario_root_path {scenario_root_path} is not a directory",
+            "scenario_card_sources_registered": "Scenario card scan completed: {registered_count} registered, {skipped_count} skipped, {failed_count} failed.",
+            "scenario_card_source_already_registered": "Knowledge source already exists; this scan does not auto-sync or overwrite existing sources.",
+            "scenario_card_template_not_supported": "File {file_name} is not a supported fixed template-card family and was not registered.",
         }
         catalog = (
             zh_messages
