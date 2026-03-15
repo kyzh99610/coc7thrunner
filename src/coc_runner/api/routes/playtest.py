@@ -30,6 +30,7 @@ from coc_runner.application.session_service import SessionService
 from coc_runner.domain.errors import ConflictError
 from coc_runner.domain.models import (
     CreateCheckpointRequest,
+    InvestigatorAttributeCheckRequest,
     InvestigatorSkillCheckRequest,
     KeeperLiveControlRequest,
     PlayerActionRequest,
@@ -2028,6 +2029,39 @@ def _investigator_skill_options(
     return sorted(merged_skills.items(), key=lambda item: (-item[1], item[0]))
 
 
+def _investigator_attribute_label_pairs() -> list[tuple[str, str]]:
+    return [
+        ("strength", "力量"),
+        ("constitution", "体质"),
+        ("size", "体型"),
+        ("dexterity", "敏捷"),
+        ("appearance", "外貌"),
+        ("intelligence", "智力"),
+        ("power", "意志"),
+        ("education", "教育"),
+    ]
+
+
+def _investigator_attribute_options(
+    viewer_summary: dict[str, Any] | None,
+) -> list[tuple[str, str, int]]:
+    viewer_character = (
+        viewer_summary.get("character")
+        if isinstance(viewer_summary, dict) and isinstance(viewer_summary.get("character"), dict)
+        else {}
+    )
+    attributes = (
+        viewer_character.get("attributes")
+        if isinstance(viewer_character.get("attributes"), dict)
+        else {}
+    )
+    options: list[tuple[str, str, int]] = []
+    for attribute_name, label in _investigator_attribute_label_pairs():
+        if attribute_name in attributes:
+            options.append((attribute_name, label, int(attributes[attribute_name])))
+    return options
+
+
 def _render_skill_check_outcome_label(outcome_value: Any) -> str:
     return {
         "critical_success": "大成功",
@@ -2049,6 +2083,24 @@ def _render_investigator_skill_check_result(skill_check_result: dict[str, Any] |
         f"<p>{escape(str(skill_check_result.get('message', '已完成技能检定')))}</p>"
         f"<p>技能：{escape(str(skill_check_result.get('skill_name', '—')))}</p>"
         f"<p>技能值：{escape(str(skill_check_result.get('skill_value', '—')))}</p>"
+        f"<p>掷骰结果：{escape(str(roll.get('total', '—')))}</p>"
+        f"<p>判定：{escape(_render_skill_check_outcome_label(roll.get('outcome')))}</p>"
+        "</section>"
+    )
+
+
+def _render_investigator_attribute_check_result(attribute_check_result: dict[str, Any] | None) -> str:
+    if attribute_check_result is None:
+        return ""
+    roll = attribute_check_result.get("roll") or {}
+    attribute_name = str(attribute_check_result.get("attribute_name", ""))
+    attribute_label = dict(_investigator_attribute_label_pairs()).get(attribute_name, attribute_name or "—")
+    return (
+        '<section class="feedback feedback-success">'
+        "<h2>最近一次属性检定</h2>"
+        f"<p>{escape(str(attribute_check_result.get('message', '已完成属性检定')))}</p>"
+        f"<p>属性：{escape(attribute_label)}</p>"
+        f"<p>属性值：{escape(str(attribute_check_result.get('attribute_value', '—')))}</p>"
         f"<p>掷骰结果：{escape(str(roll.get('total', '—')))}</p>"
         f"<p>判定：{escape(_render_skill_check_outcome_label(roll.get('outcome')))}</p>"
         "</section>"
@@ -2094,6 +2146,50 @@ def _render_investigator_skill_check_panel(
           </label>
           <p class="help">从当前角色已有技能中选择一项，快速进行一次普通检定。</p>
           <button type="submit">开始检定</button>
+        </form>
+      </section>
+    """
+
+
+def _render_investigator_attribute_check_panel(
+    *,
+    session_id: str,
+    viewer_id: str,
+    attribute_options: list[tuple[str, str, int]],
+    selected_attribute_name: str | None,
+    session_status: str,
+) -> str:
+    if session_status == SessionStatus.COMPLETED.value:
+        return """
+      <section class="panel">
+        <h2>快速属性检定</h2>
+        <p class="empty-state">本局已结束，当前页面不再进行新的属性检定。</p>
+      </section>
+        """
+    if not attribute_options:
+        return """
+      <section class="panel">
+        <h2>快速属性检定</h2>
+        <p class="empty-state">当前角色没有可用于快速检定的基础属性。</p>
+      </section>
+        """
+    normalized_selected_attribute = str(selected_attribute_name or attribute_options[0][0])
+    options_html = "".join(
+        f'<option value="{escape(attribute_name)}"{" selected" if attribute_name == normalized_selected_attribute else ""}>{escape(label)} ({escape(str(attribute_value))})</option>'
+        for attribute_name, label, attribute_value in attribute_options
+    )
+    return f"""
+      <section class="panel">
+        <h2>快速属性检定</h2>
+        <form method="post" action="/playtest/sessions/{escape(session_id)}/investigator/{escape(viewer_id)}/attribute-check" data-submit-label="检定中...">
+          <label>
+            attribute_name
+            <select name="attribute_name">
+              {options_html}
+            </select>
+          </label>
+          <p class="help">从当前角色的 8 项基础属性中选择一项，快速进行一次普通检定。</p>
+          <button type="submit">开始属性检定</button>
         </form>
       </section>
     """
@@ -2178,16 +2274,7 @@ def _render_investigator_character_panel(
     attributes = viewer_character.get("attributes") if isinstance(viewer_character.get("attributes"), dict) else {}
     skills = viewer_character.get("skills") if isinstance(viewer_character.get("skills"), dict) else {}
     inventory = [str(item) for item in own_character_state.get("inventory") or [] if str(item).strip()]
-    attribute_labels = {
-        "strength": "力量",
-        "constitution": "体质",
-        "size": "体型",
-        "dexterity": "敏捷",
-        "appearance": "外貌",
-        "intelligence": "智力",
-        "power": "意志",
-        "education": "教育",
-    }
+    attribute_labels = dict(_investigator_attribute_label_pairs())
     attribute_summary = " · ".join(
         f"{attribute_labels[key]} {value}"
         for key, value in attributes.items()
@@ -2265,8 +2352,10 @@ def _render_investigator_page(
     detail: dict[str, Any] | str | None = None,
     action_result: dict[str, Any] | None = None,
     skill_check_result: dict[str, Any] | None = None,
+    attribute_check_result: dict[str, Any] | None = None,
     action_text: str | None = None,
     selected_skill_name: str | None = None,
+    selected_attribute_name: str | None = None,
     status_code: int = status.HTTP_200_OK,
 ) -> HTMLResponse:
     view = investigator_view or {}
@@ -2294,6 +2383,9 @@ def _render_investigator_page(
     skill_options = _investigator_skill_options(
         viewer_summary if isinstance(viewer_summary, dict) else None,
         own_character_state,
+    )
+    attribute_options = _investigator_attribute_options(
+        viewer_summary if isinstance(viewer_summary, dict) else None
     )
     completed_notice = (
         '<section class="warning-box"><h2>本局已结束</h2>'
@@ -2342,6 +2434,7 @@ def _render_investigator_page(
       {_render_detail(detail)}
       {_render_investigator_action_result(action_result)}
       {_render_investigator_skill_check_result(skill_check_result)}
+      {_render_investigator_attribute_check_result(attribute_check_result)}
       <section class="panel">
         <h2>我的摘要</h2>
         <div class="summary-grid">
@@ -2378,6 +2471,13 @@ def _render_investigator_page(
           viewer_id=viewer_id,
           skill_options=skill_options,
           selected_skill_name=selected_skill_name,
+          session_status=normalized_session_status,
+      )}
+      {_render_investigator_attribute_check_panel(
+          session_id=session_id,
+          viewer_id=viewer_id,
+          attribute_options=attribute_options,
+          selected_attribute_name=selected_attribute_name,
           session_status=normalized_session_status,
       )}
       <section class="panel">
@@ -2458,8 +2558,10 @@ def _render_investigator_page_from_service(
     detail: dict[str, Any] | str | None = None,
     action_result: dict[str, Any] | None = None,
     skill_check_result: dict[str, Any] | None = None,
+    attribute_check_result: dict[str, Any] | None = None,
     action_text: str | None = None,
     selected_skill_name: str | None = None,
+    selected_attribute_name: str | None = None,
     status_code: int = status.HTTP_200_OK,
 ) -> HTMLResponse:
     try:
@@ -2476,8 +2578,10 @@ def _render_investigator_page_from_service(
             detail=fallback_detail,
             action_result=action_result,
             skill_check_result=skill_check_result,
+            attribute_check_result=attribute_check_result,
             action_text=action_text,
             selected_skill_name=selected_skill_name,
+            selected_attribute_name=selected_attribute_name,
             status_code=(
                 status_code
                 if status_code != status.HTTP_200_OK
@@ -2497,8 +2601,10 @@ def _render_investigator_page_from_service(
         detail=detail,
         action_result=action_result,
         skill_check_result=skill_check_result,
+        attribute_check_result=attribute_check_result,
         action_text=action_text,
         selected_skill_name=selected_skill_name,
+        selected_attribute_name=selected_attribute_name,
         status_code=status_code,
     )
 
@@ -2707,6 +2813,42 @@ async def submit_investigator_skill_check_via_ui(
             session_id=session_id,
             viewer_id=viewer_id,
             selected_skill_name=skill_name,
+        )
+
+
+@router.post("/sessions/{session_id}/investigator/{viewer_id}/attribute-check", response_class=HTMLResponse)
+async def submit_investigator_attribute_check_via_ui(
+    session_id: str,
+    viewer_id: str,
+    request: Request,
+    service: SessionService = Depends(get_session_service),
+) -> HTMLResponse:
+    form = await _read_form_payload(request)
+    attribute_name = _normalize_form_text(form.get("attribute_name")) or ""
+    try:
+        response = service.perform_investigator_attribute_check(
+            session_id,
+            InvestigatorAttributeCheckRequest(
+                actor_id=viewer_id,
+                attribute_name=attribute_name,
+            ),
+        )
+        return _render_investigator_page_from_service(
+            service=service,
+            session_id=session_id,
+            viewer_id=viewer_id,
+            notice=response.message,
+            attribute_check_result=response.model_dump(mode="json"),
+            selected_attribute_name=response.attribute_name,
+        )
+    except (ValidationError, LookupError, ValueError) as exc:
+        return _render_playtest_exception(
+            _render_investigator_page_from_service,
+            exc=exc,
+            service=service,
+            session_id=session_id,
+            viewer_id=viewer_id,
+            selected_attribute_name=attribute_name,
         )
 
 

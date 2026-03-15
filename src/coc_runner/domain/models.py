@@ -1601,6 +1601,24 @@ class InvestigatorSkillCheckResponse(BaseModel):
     success: bool
 
 
+class InvestigatorAttributeCheckRequest(BaseModel):
+    actor_id: str
+    attribute_name: str = Field(min_length=1, max_length=80)
+    language_preference: LanguagePreference | None = None
+
+
+class InvestigatorAttributeCheckResponse(BaseModel):
+    message: str
+    session_id: str
+    viewer_id: str
+    state_version: int
+    language_preference: LanguagePreference
+    attribute_name: str
+    attribute_value: int = Field(ge=1, le=99)
+    roll: D100Roll
+    success: bool
+
+
 class KPDraftRequest(BaseModel):
     draft_text: str = Field(min_length=1)
     structured_action: dict[str, Any] = Field(default_factory=lambda: {"type": "kp_note"})

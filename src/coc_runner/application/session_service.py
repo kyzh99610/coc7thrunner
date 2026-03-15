@@ -36,6 +36,8 @@ from coc_runner.domain.models import (
     EffectContractOrigin,
     EventType,
     InventoryEffect,
+    InvestigatorAttributeCheckRequest,
+    InvestigatorAttributeCheckResponse,
     InvestigatorSkillCheckRequest,
     InvestigatorSkillCheckResponse,
     InvestigatorView,
@@ -1508,6 +1510,98 @@ class SessionService:
                     code="skill_check_invalid",
                     message=message,
                     scope="skill_check_request",
+                    **error_context,
+                )
+            ) from exc
+
+    def perform_investigator_attribute_check(
+        self,
+        session_id: str,
+        request: InvestigatorAttributeCheckRequest,
+    ) -> InvestigatorAttributeCheckResponse:
+        error_language = self._resolve_language(request.language_preference)
+        try:
+            session = self._load_session(session_id, language=error_language)
+        except LookupError as exc:
+            message = exc.args[0] if exc.args and isinstance(exc.args[0], str) else self._message(
+                "session_not_found",
+                error_language,
+                session_id=session_id,
+            )
+            raise LookupError(
+                build_session_action_error_detail(
+                    code="attribute_check_session_not_found",
+                    message=message,
+                    scope="attribute_check_session",
+                    session_id=session_id,
+                    actor_id=request.actor_id,
+                )
+            ) from exc
+
+        error_context = {
+            "session_id": session.session_id,
+            "actor_id": request.actor_id,
+            "attribute_name": request.attribute_name,
+        }
+        try:
+            participant = self._get_participant(session, request.actor_id, language=error_language)
+        except ValueError as exc:
+            message = exc.args[0] if exc.args and isinstance(exc.args[0], str) else self._message(
+                "actor_not_participant",
+                error_language,
+                actor_id=request.actor_id,
+            )
+            raise ValueError(
+                build_session_action_error_detail(
+                    code="attribute_check_invalid",
+                    message=message,
+                    scope="attribute_check_request",
+                    **error_context,
+                )
+            ) from exc
+
+        effective_language = self._resolve_language(
+            request.language_preference,
+            session.language_preference,
+        )
+        try:
+            if session.status == SessionStatus.COMPLETED:
+                raise ValueError(self._message("attribute_check_session_completed", effective_language))
+
+            normalized_attribute_name = request.attribute_name.strip()
+            attribute_scores = participant.character.attributes.model_dump(mode="json")
+            if normalized_attribute_name not in attribute_scores:
+                raise ValueError(
+                    self._message(
+                        "attribute_check_attribute_not_found",
+                        effective_language,
+                        attribute_name=normalized_attribute_name,
+                    )
+                )
+
+            attribute_value = int(attribute_scores[normalized_attribute_name])
+            roll = roll_d100(attribute_value)
+            return InvestigatorAttributeCheckResponse(
+                message=self._message("attribute_check_recorded", effective_language),
+                session_id=session.session_id,
+                viewer_id=request.actor_id,
+                state_version=session.state_version,
+                language_preference=effective_language,
+                attribute_name=normalized_attribute_name,
+                attribute_value=attribute_value,
+                roll=roll,
+                success=roll.total <= attribute_value,
+            )
+        except ValueError as exc:
+            message = exc.args[0] if exc.args and isinstance(exc.args[0], str) else self._message(
+                "invalid_scene_transition",
+                effective_language,
+            )
+            raise ValueError(
+                build_session_action_error_detail(
+                    code="attribute_check_invalid",
+                    message=message,
+                    scope="attribute_check_request",
                     **error_context,
                 )
             ) from exc
@@ -6851,6 +6945,9 @@ class SessionService:
             "skill_check_session_completed": "本局已结束，当前页面不再进行新的技能检定。",
             "skill_check_no_skills": "当前角色没有可用于快速检定的技能。",
             "skill_check_skill_not_found": "技能“{skill_name}”不在当前角色的可用技能列表中。",
+            "attribute_check_recorded": "已完成属性检定",
+            "attribute_check_session_completed": "本局已结束，当前页面不再进行新的属性检定。",
+            "attribute_check_attribute_not_found": "属性“{attribute_name}”不在当前角色的基础属性列表中。",
             "manual_action_recorded": "已记录手动权威行动",
             "draft_recorded": "已记录待审核行动草稿",
             "kp_draft_recorded": "已记录 KP 待审核草稿",
@@ -6968,6 +7065,9 @@ class SessionService:
             "skill_check_session_completed": "This session is completed and no longer accepts new skill checks.",
             "skill_check_no_skills": "This character has no skills available for quick checks.",
             "skill_check_skill_not_found": "Skill {skill_name} is not available on this character.",
+            "attribute_check_recorded": "Attribute check completed",
+            "attribute_check_session_completed": "This session is completed and no longer accepts new attribute checks.",
+            "attribute_check_attribute_not_found": "Attribute {attribute_name} is not available on this character.",
             "manual_action_recorded": "Manual authoritative action recorded",
             "draft_recorded": "Reviewable AI draft recorded",
             "kp_draft_recorded": "Reviewable KP draft recorded",

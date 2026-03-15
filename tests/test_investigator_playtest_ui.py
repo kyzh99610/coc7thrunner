@@ -58,6 +58,11 @@ def test_investigator_playtest_page_opens_with_summary_and_action_form(
     assert 'value="图书馆使用"' in html
     assert 'value="侦查"' in html
     assert "开始检定" in html
+    assert "快速属性检定" in html
+    assert 'name="attribute_name"' in html
+    assert 'value="strength"' in html
+    assert 'value="education"' in html
+    assert "开始属性检定" in html
     assert "本局已结束" not in html
     assert f'/playtest/sessions/{session_id}/home"' in html
     assert "最近可见事件" in html
@@ -105,14 +110,18 @@ def test_investigator_playtest_page_shows_completed_notice_and_hides_action_form
     assert "本局已结束，当前页面不再提交新的玩家行动。" in html
     assert "快速技能检定" in html
     assert "本局已结束，当前页面不再进行新的技能检定。" in html
+    assert "快速属性检定" in html
+    assert "本局已结束，当前页面不再进行新的属性检定。" in html
     assert "职业：记者" in html
     assert "图书馆使用 70" in html
     assert "私有备注与记录" in html
     assert "林舟 的私人笔记" in html
     assert 'name="action_text"' not in html
     assert 'name="skill_name"' not in html
+    assert 'name="attribute_name"' not in html
     assert "提交行动" not in html
     assert "开始检定" not in html
+    assert "开始属性检定" not in html
 
 
 def test_investigator_playtest_page_preserves_private_visibility_without_keeper_leakage(
@@ -273,6 +282,42 @@ def test_investigator_playtest_page_skill_check_submission_rerenders_with_result
     assert "技能值：70" in html
     assert "掷骰结果：35" in html
     assert "判定：成功" in html
+
+
+def test_investigator_playtest_page_attribute_check_submission_rerenders_with_result(
+    client: TestClient,
+    monkeypatch,
+) -> None:
+    session_id = _start_investigator_ui_session(client)
+
+    def _fixed_roll(target: int, *, seed: int | None = None, bonus_dice: int = 0, penalty_dice: int = 0) -> D100Roll:
+        return D100Roll(
+            seed=seed,
+            unit_die=2,
+            tens_dice=[2],
+            selected_tens=2,
+            total=22,
+            target=target,
+            bonus_dice=bonus_dice,
+            penalty_dice=penalty_dice,
+            outcome=RollOutcome.HARD_SUCCESS,
+        )
+
+    monkeypatch.setattr(session_service_module, "roll_d100", _fixed_roll)
+
+    response = client.post(
+        f"/playtest/sessions/{session_id}/investigator/investigator-1/attribute-check",
+        data={"attribute_name": "education"},
+    )
+
+    assert response.status_code == 200
+    html = response.text
+    assert "最近一次属性检定" in html
+    assert "已完成属性检定" in html
+    assert "属性：教育" in html
+    assert "属性值：75" in html
+    assert "掷骰结果：22" in html
+    assert "判定：困难成功" in html
 
 
 def test_investigator_playtest_page_invalid_action_shows_structured_error(
