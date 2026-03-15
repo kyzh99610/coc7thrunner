@@ -4,6 +4,12 @@ import shutil
 
 import coc_runner.application.session_service as session_service_module
 from fastapi.testclient import TestClient
+from coc_runner.application.dice_execution import (
+    DiceCheckKind,
+    DiceExecutionRequest,
+    DiceExecutionResult,
+    DiceStyleExecutionBackend,
+)
 from coc_runner.domain.dice import D100Roll, RollOutcome
 
 from tests.helpers import make_participant
@@ -341,6 +347,118 @@ def test_investigator_playtest_page_attribute_check_submission_rerenders_with_re
     assert html.index("掷骰结果：22") < html.index("判定：困难成功")
 
 
+def test_investigator_playtest_page_skill_check_can_use_optional_dice_backend_bridge(
+    client: TestClient,
+) -> None:
+    session_id = _start_investigator_ui_session(client)
+
+    class _ScriptedDiceClient:
+        def __init__(self) -> None:
+            self.calls: list[tuple[DiceExecutionRequest, str]] = []
+
+        def execute_check(
+            self,
+            *,
+            request: DiceExecutionRequest,
+            command_text: str,
+        ) -> DiceExecutionResult:
+            self.calls.append((request, command_text))
+            return DiceExecutionResult(
+                backend_name="dice_sidecar_stub",
+                roll=D100Roll(
+                    unit_die=4,
+                    tens_dice=[2],
+                    selected_tens=2,
+                    total=24,
+                    target=request.target_value,
+                    outcome=RollOutcome.HARD_SUCCESS,
+                ),
+                success=True,
+            )
+
+    dice_client = _ScriptedDiceClient()
+    client.app.state.session_service.dice_execution_backend = DiceStyleExecutionBackend(
+        client=dice_client
+    )
+
+    response = client.post(
+        f"/playtest/sessions/{session_id}/investigator/investigator-1/skill-check",
+        data={"skill_name": "图书馆使用"},
+    )
+
+    assert response.status_code == 200
+    html = response.text
+    assert "最近一次检定结果" in html
+    assert "已完成技能检定" in html
+    assert "类型：技能检定" in html
+    assert "项目：图书馆使用" in html
+    assert "数值：70" in html
+    assert "掷骰结果：24" in html
+    assert "判定：困难成功" in html
+    assert ".rc 图书馆使用70" not in html
+    assert len(dice_client.calls) == 1
+    request_payload, command_text = dice_client.calls[0]
+    assert request_payload.check_kind == DiceCheckKind.SKILL
+    assert request_payload.target_value == 70
+    assert command_text == ".rc 图书馆使用70"
+
+
+def test_investigator_playtest_page_attribute_check_can_use_optional_dice_backend_bridge(
+    client: TestClient,
+) -> None:
+    session_id = _start_investigator_ui_session(client)
+
+    class _ScriptedDiceClient:
+        def __init__(self) -> None:
+            self.calls: list[tuple[DiceExecutionRequest, str]] = []
+
+        def execute_check(
+            self,
+            *,
+            request: DiceExecutionRequest,
+            command_text: str,
+        ) -> DiceExecutionResult:
+            self.calls.append((request, command_text))
+            return DiceExecutionResult(
+                backend_name="dice_sidecar_stub",
+                roll=D100Roll(
+                    unit_die=5,
+                    tens_dice=[3],
+                    selected_tens=3,
+                    total=35,
+                    target=request.target_value,
+                    outcome=RollOutcome.HARD_SUCCESS,
+                ),
+                success=True,
+            )
+
+    dice_client = _ScriptedDiceClient()
+    client.app.state.session_service.dice_execution_backend = DiceStyleExecutionBackend(
+        client=dice_client
+    )
+
+    response = client.post(
+        f"/playtest/sessions/{session_id}/investigator/investigator-1/attribute-check",
+        data={"attribute_name": "education"},
+    )
+
+    assert response.status_code == 200
+    html = response.text
+    assert "最近一次检定结果" in html
+    assert "已完成属性检定" in html
+    assert "类型：属性检定" in html
+    assert "项目：教育" in html
+    assert "数值：75" in html
+    assert "掷骰结果：35" in html
+    assert "判定：困难成功" in html
+    assert ".rc 教育75" not in html
+    assert len(dice_client.calls) == 1
+    request_payload, command_text = dice_client.calls[0]
+    assert request_payload.check_kind == DiceCheckKind.ATTRIBUTE
+    assert request_payload.target_value == 75
+    assert command_text == ".rc 教育75"
+
+
 def test_investigator_playtest_page_san_check_submission_rerenders_with_persisted_san_result(
     client: TestClient,
     monkeypatch,
@@ -399,6 +517,77 @@ def test_investigator_playtest_page_san_check_submission_rerenders_with_persiste
     after_snapshot = _get_snapshot(client, session_id)
     assert before_sanity == 60
     assert after_snapshot["character_states"]["investigator-1"]["current_sanity"] == 57
+
+
+def test_investigator_san_check_keeps_authoritative_state_when_dice_bridge_falls_back_locally(
+    client: TestClient,
+    monkeypatch,
+) -> None:
+    session_id = _start_investigator_ui_session(client)
+
+    class _ExplodingDiceClient:
+        def __init__(self) -> None:
+            self.calls: list[tuple[DiceExecutionRequest, str]] = []
+
+        def execute_check(
+            self,
+            *,
+            request: DiceExecutionRequest,
+            command_text: str,
+        ) -> DiceExecutionResult:
+            self.calls.append((request, command_text))
+            raise AssertionError("sanity checks should not be sent to the Dice-style sidecar")
+
+    class _FixedFallbackBackend:
+        backend_name = "local_fallback"
+
+        def __init__(self) -> None:
+            self.calls: list[DiceExecutionRequest] = []
+
+        def execute_check(self, request: DiceExecutionRequest) -> DiceExecutionResult:
+            self.calls.append(request)
+            return DiceExecutionResult(
+                backend_name="local_fallback",
+                roll=D100Roll(
+                    unit_die=8,
+                    tens_dice=[8],
+                    selected_tens=8,
+                    total=88,
+                    target=request.target_value,
+                    outcome=RollOutcome.FAILURE,
+                ),
+                success=False,
+            )
+
+    fallback_backend = _FixedFallbackBackend()
+    client.app.state.session_service.dice_execution_backend = DiceStyleExecutionBackend(
+        client=_ExplodingDiceClient(),
+        fallback_backend=fallback_backend,
+    )
+    monkeypatch.setattr(session_service_module, "_roll_san_loss_value", lambda expression: 2)
+
+    response = client.post(
+        f"/playtest/sessions/{session_id}/investigator/investigator-1/san-check",
+        data={
+            "source_label": "黄衣之王的近距离显现",
+            "success_loss": "1",
+            "failure_loss": "1d6",
+        },
+    )
+
+    assert response.status_code == 200
+    html = response.text
+    assert "已完成理智检定，当前 SAN 已更新" in html
+    assert "项目：黄衣之王的近距离显现" in html
+    assert "检定前 SAN：60" in html
+    assert "本次 SAN 损失：2（依据 1d6）" in html
+    assert "检定后 SAN：58" in html
+    assert "SAN：58" in html
+    assert len(fallback_backend.calls) == 1
+    assert fallback_backend.calls[0].check_kind == DiceCheckKind.SANITY
+
+    after_snapshot = _get_snapshot(client, session_id)
+    assert after_snapshot["character_states"]["investigator-1"]["current_sanity"] == 58
 
 
 def test_investigator_san_check_zero_loss_keeps_san_and_large_loss_clamps_to_zero(

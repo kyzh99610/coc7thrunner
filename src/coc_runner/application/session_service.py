@@ -116,6 +116,15 @@ from coc_runner.application.template_card_import import (
     build_character_hook_seed_request_from_template_card,
     parse_coc7th_template_card_source,
 )
+from coc_runner.application.dice_execution import (
+    DiceCheckKind,
+    DiceExecutionBackend,
+    DiceExecutionRequest,
+    DiceExecutionResult,
+    DiceExecutionUnavailableError,
+    LocalDiceExecutionBackend,
+    UnsupportedDiceCheckError,
+)
 from coc_runner.error_details import (
     build_character_import_error_detail,
     build_session_action_error_detail,
@@ -154,6 +163,16 @@ from knowledge.terminology import extract_term_matches, normalize_chinese_text
 class SessionService:
     DEFAULT_KEEPER_ID = "keeper-1"
     MAX_REVIEW_VERSION_DRIFT = 2
+    _ATTRIBUTE_CHECK_LABELS = {
+        "strength": "力量",
+        "constitution": "体质",
+        "size": "体型",
+        "dexterity": "敏捷",
+        "appearance": "外貌",
+        "intelligence": "智力",
+        "power": "意志",
+        "education": "教育",
+    }
     _RULES_QUERY_FALLBACK_SIGNALS = (
         "检定",
         "判定",
@@ -242,13 +261,49 @@ class SessionService:
         repository: SessionRepository,
         *,
         knowledge_repository: KnowledgeRepository | None = None,
+        dice_execution_backend: DiceExecutionBackend | None = None,
         default_language: LanguagePreference = LanguagePreference.ZH_CN,
         behavior_memory_limit: int = 5,
     ) -> None:
         self.repository = repository
         self.knowledge_repository = knowledge_repository
+        self.dice_execution_backend = dice_execution_backend
         self.default_language = default_language
         self.behavior_memory_limit = behavior_memory_limit
+
+    def _resolve_dice_execution_backend(self) -> DiceExecutionBackend:
+        if self.dice_execution_backend is not None:
+            return self.dice_execution_backend
+        return LocalDiceExecutionBackend(roller=roll_d100)
+
+    def _execute_dice_check(
+        self,
+        *,
+        session_id: str,
+        actor_id: str,
+        check_kind: DiceCheckKind,
+        label: str,
+        target_value: int,
+        language: LanguagePreference,
+    ) -> DiceExecutionResult:
+        backend = self._resolve_dice_execution_backend()
+        try:
+            return backend.execute_check(
+                DiceExecutionRequest(
+                    session_id=session_id,
+                    actor_id=actor_id,
+                    check_kind=check_kind,
+                    label=label,
+                    target_value=target_value,
+                    language_preference=language,
+                )
+            )
+        except (DiceExecutionUnavailableError, UnsupportedDiceCheckError) as exc:
+            raise ValueError(self._message("dice_backend_unavailable", language)) from exc
+
+    @classmethod
+    def _attribute_check_label(cls, attribute_name: str) -> str:
+        return cls._ATTRIBUTE_CHECK_LABELS.get(attribute_name, attribute_name)
 
     def _build_initial_scene_state(
         self,
@@ -2286,7 +2341,14 @@ class SessionService:
                 )
 
             skill_value = int(skill_scores[normalized_skill_name])
-            roll = roll_d100(skill_value)
+            dice_result = self._execute_dice_check(
+                session_id=session.session_id,
+                actor_id=request.actor_id,
+                check_kind=DiceCheckKind.SKILL,
+                label=normalized_skill_name,
+                target_value=skill_value,
+                language=effective_language,
+            )
             return InvestigatorSkillCheckResponse(
                 message=self._message("skill_check_recorded", effective_language),
                 session_id=session.session_id,
@@ -2295,8 +2357,8 @@ class SessionService:
                 language_preference=effective_language,
                 skill_name=normalized_skill_name,
                 skill_value=skill_value,
-                roll=roll,
-                success=roll.total <= skill_value,
+                roll=dice_result.roll,
+                success=dice_result.success,
             )
         except ValueError as exc:
             message = exc.args[0] if exc.args and isinstance(exc.args[0], str) else self._message(
@@ -2378,7 +2440,14 @@ class SessionService:
                 )
 
             attribute_value = int(attribute_scores[normalized_attribute_name])
-            roll = roll_d100(attribute_value)
+            dice_result = self._execute_dice_check(
+                session_id=session.session_id,
+                actor_id=request.actor_id,
+                check_kind=DiceCheckKind.ATTRIBUTE,
+                label=self._attribute_check_label(normalized_attribute_name),
+                target_value=attribute_value,
+                language=effective_language,
+            )
             return InvestigatorAttributeCheckResponse(
                 message=self._message("attribute_check_recorded", effective_language),
                 session_id=session.session_id,
@@ -2387,8 +2456,8 @@ class SessionService:
                 language_preference=effective_language,
                 attribute_name=normalized_attribute_name,
                 attribute_value=attribute_value,
-                roll=roll,
-                success=roll.total <= attribute_value,
+                roll=dice_result.roll,
+                success=dice_result.success,
             )
         except ValueError as exc:
             message = exc.args[0] if exc.args and isinstance(exc.args[0], str) else self._message(
@@ -2557,8 +2626,16 @@ class SessionService:
             if previous_sanity <= 0:
                 raise ValueError(self._message("san_check_no_sanity_remaining", effective_language))
 
-            roll = roll_d100(previous_sanity)
-            success = roll.total <= previous_sanity
+            dice_result = self._execute_dice_check(
+                session_id=session.session_id,
+                actor_id=request.actor_id,
+                check_kind=DiceCheckKind.SANITY,
+                label=source_label,
+                target_value=previous_sanity,
+                language=effective_language,
+            )
+            roll = dice_result.roll
+            success = dice_result.success
             applied_loss_expression = success_loss if success else failure_loss
             resolved_sanity_loss = _roll_san_loss_value(applied_loss_expression)
             current_sanity = max(0, previous_sanity - resolved_sanity_loss)
@@ -8043,6 +8120,7 @@ class SessionService:
             "attribute_check_recorded": "已完成属性检定",
             "attribute_check_session_completed": "本局已结束，当前页面不再进行新的属性检定。",
             "attribute_check_attribute_not_found": "属性“{attribute_name}”不在当前角色的基础属性列表中。",
+            "dice_backend_unavailable": "当前可选判定后端不可用，且没有安全的本地回退可用。",
             "san_check_recorded": "已完成理智检定，当前 SAN 已更新",
             "san_aftermath_prompt_text": "理智后续待裁定：{actor_name}：{source_label}",
             "san_aftermath_prompt_reason": "SAN {previous_sanity} -> {current_sanity}（损失 {loss_applied}）",
@@ -8179,6 +8257,7 @@ class SessionService:
             "attribute_check_recorded": "Attribute check completed",
             "attribute_check_session_completed": "This session is completed and no longer accepts new attribute checks.",
             "attribute_check_attribute_not_found": "Attribute {attribute_name} is not available on this character.",
+            "dice_backend_unavailable": "The optional dice backend is unavailable and no safe local fallback is configured.",
             "san_check_recorded": "SAN check completed and current SAN was updated",
             "san_aftermath_prompt_text": "SAN aftermath pending: {actor_name}: {source_label}",
             "san_aftermath_prompt_reason": "SAN {previous_sanity} -> {current_sanity} (loss {loss_applied})",
