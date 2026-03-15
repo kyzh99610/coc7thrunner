@@ -7,6 +7,7 @@ from uuid import uuid4
 from pydantic import BaseModel, ConfigDict, Field, computed_field, field_validator, model_validator
 
 from coc_runner.compat import StrEnum
+from coc_runner.domain.dice import D100Roll
 
 
 def utc_now() -> datetime:
@@ -1580,6 +1581,24 @@ class PlayerActionResponse(BaseModel):
     authoritative_event: SessionEvent | None = None
     authoritative_action: AuthoritativeAction | None = None
     draft_action: DraftAction | None = None
+
+
+class InvestigatorSkillCheckRequest(BaseModel):
+    actor_id: str
+    skill_name: str = Field(min_length=1, max_length=80)
+    language_preference: LanguagePreference | None = None
+
+
+class InvestigatorSkillCheckResponse(BaseModel):
+    message: str
+    session_id: str
+    viewer_id: str
+    state_version: int
+    language_preference: LanguagePreference
+    skill_name: str
+    skill_value: int = Field(ge=0, le=100)
+    roll: D100Roll
+    success: bool
 
 
 class KPDraftRequest(BaseModel):

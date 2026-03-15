@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import shutil
 
+import coc_runner.application.session_service as session_service_module
 from fastapi.testclient import TestClient
+from coc_runner.domain.dice import D100Roll, RollOutcome
 
 from tests.helpers import make_participant
 from tests.test_session_import import (
@@ -51,6 +53,11 @@ def test_investigator_playtest_page_opens_with_summary_and_action_form(
     assert "提交玩家行动" in html
     assert 'name="action_text"' in html
     assert "提交行动" in html
+    assert "快速技能检定" in html
+    assert 'name="skill_name"' in html
+    assert 'value="图书馆使用"' in html
+    assert 'value="侦查"' in html
+    assert "开始检定" in html
     assert "本局已结束" not in html
     assert f'/playtest/sessions/{session_id}/home"' in html
     assert "最近可见事件" in html
@@ -96,12 +103,16 @@ def test_investigator_playtest_page_shows_completed_notice_and_hides_action_form
     assert "会话已创建：迷雾中的旅店" in html
     assert "提交玩家行动" in html
     assert "本局已结束，当前页面不再提交新的玩家行动。" in html
+    assert "快速技能检定" in html
+    assert "本局已结束，当前页面不再进行新的技能检定。" in html
     assert "职业：记者" in html
     assert "图书馆使用 70" in html
     assert "私有备注与记录" in html
     assert "林舟 的私人笔记" in html
     assert 'name="action_text"' not in html
+    assert 'name="skill_name"' not in html
     assert "提交行动" not in html
+    assert "开始检定" not in html
 
 
 def test_investigator_playtest_page_preserves_private_visibility_without_keeper_leakage(
@@ -226,6 +237,42 @@ def test_investigator_playtest_page_player_action_form_submission_rerenders_with
     assert "已记录玩家行动" in html
     assert "我检查前厅地板上的水痕。" in html
     assert "最近可见事件" in html
+
+
+def test_investigator_playtest_page_skill_check_submission_rerenders_with_result(
+    client: TestClient,
+    monkeypatch,
+) -> None:
+    session_id = _start_investigator_ui_session(client)
+
+    def _fixed_roll(target: int, *, seed: int | None = None, bonus_dice: int = 0, penalty_dice: int = 0) -> D100Roll:
+        return D100Roll(
+            seed=seed,
+            unit_die=5,
+            tens_dice=[3],
+            selected_tens=3,
+            total=35,
+            target=target,
+            bonus_dice=bonus_dice,
+            penalty_dice=penalty_dice,
+            outcome=RollOutcome.SUCCESS,
+        )
+
+    monkeypatch.setattr(session_service_module, "roll_d100", _fixed_roll)
+
+    response = client.post(
+        f"/playtest/sessions/{session_id}/investigator/investigator-1/skill-check",
+        data={"skill_name": "图书馆使用"},
+    )
+
+    assert response.status_code == 200
+    html = response.text
+    assert "最近一次技能检定" in html
+    assert "已完成技能检定" in html
+    assert "技能：图书馆使用" in html
+    assert "技能值：70" in html
+    assert "掷骰结果：35" in html
+    assert "判定：成功" in html
 
 
 def test_investigator_playtest_page_invalid_action_shows_structured_error(

@@ -30,6 +30,7 @@ from coc_runner.application.session_service import SessionService
 from coc_runner.domain.errors import ConflictError
 from coc_runner.domain.models import (
     CreateCheckpointRequest,
+    InvestigatorSkillCheckRequest,
     KeeperLiveControlRequest,
     PlayerActionRequest,
     ReviewDraftRequest,
@@ -2002,6 +2003,102 @@ def _render_investigator_action_result(action_result: dict[str, Any] | None) -> 
     )
 
 
+def _investigator_skill_options(
+    viewer_summary: dict[str, Any] | None,
+    own_character_state: dict[str, Any],
+) -> list[tuple[str, int]]:
+    viewer_character = (
+        viewer_summary.get("character")
+        if isinstance(viewer_summary, dict) and isinstance(viewer_summary.get("character"), dict)
+        else {}
+    )
+    merged_skills: dict[str, int] = {}
+    character_skills = viewer_character.get("skills")
+    if isinstance(character_skills, dict):
+        for skill_name, score in character_skills.items():
+            normalized_skill_name = str(skill_name).strip()
+            if normalized_skill_name:
+                merged_skills[normalized_skill_name] = int(score)
+    baseline_skills = own_character_state.get("skill_baseline")
+    if isinstance(baseline_skills, dict):
+        for skill_name, score in baseline_skills.items():
+            normalized_skill_name = str(skill_name).strip()
+            if normalized_skill_name:
+                merged_skills.setdefault(normalized_skill_name, int(score))
+    return sorted(merged_skills.items(), key=lambda item: (-item[1], item[0]))
+
+
+def _render_skill_check_outcome_label(outcome_value: Any) -> str:
+    return {
+        "critical_success": "大成功",
+        "extreme_success": "极难成功",
+        "hard_success": "困难成功",
+        "success": "成功",
+        "failure": "失败",
+        "fumble": "大失败",
+    }.get(str(outcome_value or ""), str(outcome_value or "未知"))
+
+
+def _render_investigator_skill_check_result(skill_check_result: dict[str, Any] | None) -> str:
+    if skill_check_result is None:
+        return ""
+    roll = skill_check_result.get("roll") or {}
+    return (
+        '<section class="feedback feedback-success">'
+        "<h2>最近一次技能检定</h2>"
+        f"<p>{escape(str(skill_check_result.get('message', '已完成技能检定')))}</p>"
+        f"<p>技能：{escape(str(skill_check_result.get('skill_name', '—')))}</p>"
+        f"<p>技能值：{escape(str(skill_check_result.get('skill_value', '—')))}</p>"
+        f"<p>掷骰结果：{escape(str(roll.get('total', '—')))}</p>"
+        f"<p>判定：{escape(_render_skill_check_outcome_label(roll.get('outcome')))}</p>"
+        "</section>"
+    )
+
+
+def _render_investigator_skill_check_panel(
+    *,
+    session_id: str,
+    viewer_id: str,
+    skill_options: list[tuple[str, int]],
+    selected_skill_name: str | None,
+    session_status: str,
+) -> str:
+    if session_status == SessionStatus.COMPLETED.value:
+        return """
+      <section class="panel">
+        <h2>快速技能检定</h2>
+        <p class="empty-state">本局已结束，当前页面不再进行新的技能检定。</p>
+      </section>
+        """
+    if not skill_options:
+        return """
+      <section class="panel">
+        <h2>快速技能检定</h2>
+        <p class="empty-state">当前角色没有可用于快速检定的技能。</p>
+      </section>
+        """
+    normalized_selected_skill = str(selected_skill_name or skill_options[0][0])
+    options_html = "".join(
+        f'<option value="{escape(skill_name)}"{" selected" if skill_name == normalized_selected_skill else ""}>{escape(skill_name)} ({escape(str(skill_score))})</option>'
+        for skill_name, skill_score in skill_options
+    )
+    return f"""
+      <section class="panel">
+        <h2>快速技能检定</h2>
+        <form method="post" action="/playtest/sessions/{escape(session_id)}/investigator/{escape(viewer_id)}/skill-check" data-submit-label="检定中...">
+          <label>
+            skill_name
+            <select name="skill_name">
+              {options_html}
+            </select>
+          </label>
+          <p class="help">从当前角色已有技能中选择一项，快速进行一次普通检定。</p>
+          <button type="submit">开始检定</button>
+        </form>
+      </section>
+    """
+
+
 def _render_investigator_recent_events(visible_events: list[dict[str, Any]]) -> str:
     recent_events = list(reversed(visible_events[-5:]))
     if not recent_events:
@@ -2167,7 +2264,9 @@ def _render_investigator_page(
     notice: str | None = None,
     detail: dict[str, Any] | str | None = None,
     action_result: dict[str, Any] | None = None,
+    skill_check_result: dict[str, Any] | None = None,
     action_text: str | None = None,
+    selected_skill_name: str | None = None,
     status_code: int = status.HTTP_200_OK,
 ) -> HTMLResponse:
     view = investigator_view or {}
@@ -2192,6 +2291,10 @@ def _render_investigator_page(
     state_version = view.get("state_version", "—")
     action_form_value = escape(action_text or "")
     normalized_session_status = str(session_status or SessionStatus.PLANNED.value)
+    skill_options = _investigator_skill_options(
+        viewer_summary if isinstance(viewer_summary, dict) else None,
+        own_character_state,
+    )
     completed_notice = (
         '<section class="warning-box"><h2>本局已结束</h2>'
         '<p>当前页面保留结束后的查看状态；你仍可查看自己的可见信息和最近结果。</p>'
@@ -2238,6 +2341,7 @@ def _render_investigator_page(
       {_render_notice(notice)}
       {_render_detail(detail)}
       {_render_investigator_action_result(action_result)}
+      {_render_investigator_skill_check_result(skill_check_result)}
       <section class="panel">
         <h2>我的摘要</h2>
         <div class="summary-grid">
@@ -2269,6 +2373,13 @@ def _render_investigator_page(
         </div>
       </section>
       {action_panel}
+      {_render_investigator_skill_check_panel(
+          session_id=session_id,
+          viewer_id=viewer_id,
+          skill_options=skill_options,
+          selected_skill_name=selected_skill_name,
+          session_status=normalized_session_status,
+      )}
       <section class="panel">
         <h2>最近可见事件</h2>
         <div class="recent-list">
@@ -2346,7 +2457,9 @@ def _render_investigator_page_from_service(
     notice: str | None = None,
     detail: dict[str, Any] | str | None = None,
     action_result: dict[str, Any] | None = None,
+    skill_check_result: dict[str, Any] | None = None,
     action_text: str | None = None,
+    selected_skill_name: str | None = None,
     status_code: int = status.HTTP_200_OK,
 ) -> HTMLResponse:
     try:
@@ -2362,7 +2475,9 @@ def _render_investigator_page_from_service(
             notice=notice,
             detail=fallback_detail,
             action_result=action_result,
+            skill_check_result=skill_check_result,
             action_text=action_text,
+            selected_skill_name=selected_skill_name,
             status_code=(
                 status_code
                 if status_code != status.HTTP_200_OK
@@ -2381,7 +2496,9 @@ def _render_investigator_page_from_service(
         notice=notice,
         detail=detail,
         action_result=action_result,
+        skill_check_result=skill_check_result,
         action_text=action_text,
+        selected_skill_name=selected_skill_name,
         status_code=status_code,
     )
 
@@ -2554,6 +2671,42 @@ async def submit_player_action_via_investigator_ui(
             session_id=session_id,
             viewer_id=viewer_id,
             action_text=action_text,
+        )
+
+
+@router.post("/sessions/{session_id}/investigator/{viewer_id}/skill-check", response_class=HTMLResponse)
+async def submit_investigator_skill_check_via_ui(
+    session_id: str,
+    viewer_id: str,
+    request: Request,
+    service: SessionService = Depends(get_session_service),
+) -> HTMLResponse:
+    form = await _read_form_payload(request)
+    skill_name = _normalize_form_text(form.get("skill_name")) or ""
+    try:
+        response = service.perform_investigator_skill_check(
+            session_id,
+            InvestigatorSkillCheckRequest(
+                actor_id=viewer_id,
+                skill_name=skill_name,
+            ),
+        )
+        return _render_investigator_page_from_service(
+            service=service,
+            session_id=session_id,
+            viewer_id=viewer_id,
+            notice=response.message,
+            skill_check_result=response.model_dump(mode="json"),
+            selected_skill_name=response.skill_name,
+        )
+    except (ValidationError, LookupError, ValueError) as exc:
+        return _render_playtest_exception(
+            _render_investigator_page_from_service,
+            exc=exc,
+            service=service,
+            session_id=session_id,
+            viewer_id=viewer_id,
+            selected_skill_name=skill_name,
         )
 
 

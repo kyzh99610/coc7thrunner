@@ -8,6 +8,7 @@ from uuid import uuid4
 from pydantic import ValidationError
 
 from coc_runner.domain.errors import ConflictError
+from coc_runner.domain.dice import roll_d100
 from coc_runner.domain.models import (
     ActiveSceneObjective,
     ActionEffects,
@@ -35,6 +36,8 @@ from coc_runner.domain.models import (
     EffectContractOrigin,
     EventType,
     InventoryEffect,
+    InvestigatorSkillCheckRequest,
+    InvestigatorSkillCheckResponse,
     InvestigatorView,
     ImportCheckpointResponse,
     KPDraftRequest,
@@ -1407,6 +1410,104 @@ class SessionService:
                     code="player_action_invalid",
                     message=message,
                     scope="player_action_execution",
+                    **error_context,
+                )
+            ) from exc
+
+    def perform_investigator_skill_check(
+        self,
+        session_id: str,
+        request: InvestigatorSkillCheckRequest,
+    ) -> InvestigatorSkillCheckResponse:
+        error_language = self._resolve_language(request.language_preference)
+        try:
+            session = self._load_session(session_id, language=error_language)
+        except LookupError as exc:
+            message = exc.args[0] if exc.args and isinstance(exc.args[0], str) else self._message(
+                "session_not_found",
+                error_language,
+                session_id=session_id,
+            )
+            raise LookupError(
+                build_session_action_error_detail(
+                    code="skill_check_session_not_found",
+                    message=message,
+                    scope="skill_check_session",
+                    session_id=session_id,
+                    actor_id=request.actor_id,
+                )
+            ) from exc
+
+        error_context = {
+            "session_id": session.session_id,
+            "actor_id": request.actor_id,
+            "skill_name": request.skill_name,
+        }
+        try:
+            participant = self._get_participant(session, request.actor_id, language=error_language)
+        except ValueError as exc:
+            message = exc.args[0] if exc.args and isinstance(exc.args[0], str) else self._message(
+                "actor_not_participant",
+                error_language,
+                actor_id=request.actor_id,
+            )
+            raise ValueError(
+                build_session_action_error_detail(
+                    code="skill_check_invalid",
+                    message=message,
+                    scope="skill_check_request",
+                    **error_context,
+                )
+            ) from exc
+
+        effective_language = self._resolve_language(
+            request.language_preference,
+            session.language_preference,
+        )
+        try:
+            if session.status == SessionStatus.COMPLETED:
+                raise ValueError(self._message("skill_check_session_completed", effective_language))
+
+            normalized_skill_name = request.skill_name.strip()
+            skill_scores = dict(participant.character.skills)
+            character_state = session.character_states.get(request.actor_id)
+            if character_state is not None:
+                for skill_name, score in character_state.skill_baseline.items():
+                    skill_scores.setdefault(skill_name, score)
+            if not skill_scores:
+                raise ValueError(self._message("skill_check_no_skills", effective_language))
+            if normalized_skill_name not in skill_scores:
+                raise ValueError(
+                    self._message(
+                        "skill_check_skill_not_found",
+                        effective_language,
+                        skill_name=normalized_skill_name,
+                    )
+                )
+
+            skill_value = int(skill_scores[normalized_skill_name])
+            roll = roll_d100(skill_value)
+            return InvestigatorSkillCheckResponse(
+                message=self._message("skill_check_recorded", effective_language),
+                session_id=session.session_id,
+                viewer_id=request.actor_id,
+                state_version=session.state_version,
+                language_preference=effective_language,
+                skill_name=normalized_skill_name,
+                skill_value=skill_value,
+                roll=roll,
+                success=roll.total <= skill_value,
+            )
+        except ValueError as exc:
+            message = exc.args[0] if exc.args and isinstance(exc.args[0], str) else self._message(
+                "invalid_scene_transition",
+                effective_language,
+            )
+            raise ValueError(
+                build_session_action_error_detail(
+                    code="skill_check_invalid",
+                    message=message,
+                    scope="skill_check_request",
                     **error_context,
                 )
             ) from exc
@@ -6746,6 +6847,10 @@ class SessionService:
             "session_created_detail": "会话已创建：{title}",
             "session_start_invalid": "会话初始化校验失败",
             "player_action_recorded": "已记录玩家行动",
+            "skill_check_recorded": "已完成技能检定",
+            "skill_check_session_completed": "本局已结束，当前页面不再进行新的技能检定。",
+            "skill_check_no_skills": "当前角色没有可用于快速检定的技能。",
+            "skill_check_skill_not_found": "技能“{skill_name}”不在当前角色的可用技能列表中。",
             "manual_action_recorded": "已记录手动权威行动",
             "draft_recorded": "已记录待审核行动草稿",
             "kp_draft_recorded": "已记录 KP 待审核草稿",
@@ -6859,6 +6964,10 @@ class SessionService:
             "session_created_detail": "Session created: {title}",
             "session_start_invalid": "Session bootstrap validation failed",
             "player_action_recorded": "Player action recorded",
+            "skill_check_recorded": "Skill check completed",
+            "skill_check_session_completed": "This session is completed and no longer accepts new skill checks.",
+            "skill_check_no_skills": "This character has no skills available for quick checks.",
+            "skill_check_skill_not_found": "Skill {skill_name} is not available on this character.",
             "manual_action_recorded": "Manual authoritative action recorded",
             "draft_recorded": "Reviewable AI draft recorded",
             "kp_draft_recorded": "Reviewable KP draft recorded",
