@@ -29,7 +29,9 @@ from coc_runner.application.knowledge_service import KnowledgeService
 from coc_runner.application.session_service import SessionService
 from coc_runner.domain.errors import ConflictError
 from coc_runner.domain.models import (
+    AuditActionType,
     CreateCheckpointRequest,
+    EventType,
     InvestigatorAttributeCheckRequest,
     InvestigatorSkillCheckRequest,
     KeeperLiveControlRequest,
@@ -100,6 +102,10 @@ def _render_checkpoint_import_result(import_result: dict[str, Any] | None) -> st
 
 def _render_launcher_link(session_id: str) -> str:
     return f'<a href="/playtest/sessions/{escape(session_id)}/home">返回 playtest 入口</a>'
+
+
+def _render_recap_link(session_id: str) -> str:
+    return f'<a href="/playtest/sessions/{escape(session_id)}/recap">查看会话回顾</a>'
 
 
 def _session_status_label(status_value: Any) -> str:
@@ -198,7 +204,7 @@ def _render_playtest_launcher_page(
       </section>
       {_render_detail(detail)}
       {
-          '<section class="feedback feedback-success"><h2>该局已完成</h2><p>可进入主持人工作台查看最小收尾摘要，或前往检查点页面继续导出/分支。</p></section>'
+          '<section class="feedback feedback-success"><h2>该局已完成</h2><p>可进入主持人工作台查看最小收尾摘要，或前往检查点页面继续导出/分支，也可查看会话回顾。</p></section>'
           if session_status == SessionStatus.COMPLETED.value
           else ''
       }
@@ -228,6 +234,7 @@ def _render_playtest_launcher_page(
       <section class="panel">
         <h2>主要入口</h2>
         <div class="quick-actions">
+          {_render_recap_link(session_id).replace('<a ', '<a class="action-link" ')}
           <a class="action-link" href="/playtest/sessions/{escape(session_id)}/keeper">打开主持人工作台</a>
           <a class="action-link" href="/playtest/sessions/{escape(session_id)}">打开检查点页面</a>
         </div>
@@ -241,6 +248,235 @@ def _render_playtest_launcher_page(
     """
     return _render_shell(
         title=f"Session {session_id} Playtest Home",
+        body=body,
+        status_code=status_code,
+    )
+
+
+def _build_recap_event_entries(session_snapshot: dict[str, Any]) -> list[dict[str, Any]]:
+    entries: list[dict[str, Any]] = []
+    control_labels = {
+        "session_lifecycle": "Session 状态",
+        "resolve_objective": "Objective 完成",
+        "reopen_objective": "Objective 重新打开",
+        "reveal_clue": "Reveal 线索",
+        "reveal_scene": "Reveal 场景",
+        "advance_beat": "Beat 推进",
+    }
+    event_labels = {
+        EventType.SESSION_STARTED.value: "会话启动",
+        EventType.PLAYER_ACTION.value: "玩家行动",
+        EventType.REVIEWED_ACTION.value: "已审动作",
+        EventType.IMPORT.value: "导入",
+        EventType.ROLLBACK.value: "回滚",
+    }
+    for event in session_snapshot.get("timeline") or []:
+        event_type = str(event.get("event_type") or "")
+        summary = str(event.get("text") or "").strip()
+        if not summary:
+            continue
+        if event_type == EventType.MANUAL_ACTION.value:
+            payload = event.get("structured_payload") or {}
+            category = control_labels.get(
+                str(payload.get("control_type") or ""),
+                "主持人控场",
+            )
+        else:
+            category = event_labels.get(event_type)
+        if not category:
+            continue
+        entries.append(
+            {
+                "created_at": _format_datetime(event.get("created_at")),
+                "category": category,
+                "summary": summary,
+                "meta_lines": [],
+            }
+        )
+    return entries
+
+
+def _build_recap_audit_entries(session_snapshot: dict[str, Any]) -> list[dict[str, Any]]:
+    entries: list[dict[str, Any]] = []
+    for audit_entry in session_snapshot.get("audit_log") or []:
+        action = str(audit_entry.get("action") or "")
+        details = audit_entry.get("details") or {}
+        subject_id = audit_entry.get("subject_id")
+        category: str | None = None
+        summary: str | None = None
+        meta_lines: list[str] = []
+
+        if action == AuditActionType.KEEPER_PROMPT_UPDATED.value:
+            category = "KP 提示处理"
+            if details.get("status"):
+                summary = f"KP 提示已更新为 {details['status']}"
+            elif details.get("reason") == "scene_changed":
+                affected = len(details.get("affected_prompt_ids") or [])
+                summary = f"场景切换后已自动收起旧提示（{affected}）"
+            elif details.get("reason") == "beat_expired":
+                affected = len(details.get("affected_prompt_ids") or [])
+                summary = f"Beat 过期后已自动收起旧提示（{affected}）"
+            else:
+                summary = "KP 提示已更新"
+            if subject_id:
+                meta_lines.append(f"prompt_id: {subject_id}")
+        elif action == AuditActionType.REVIEW_DECISION.value:
+            category = "草稿审阅"
+            review_status = str(details.get("review_status") or "")
+            summary = {
+                "approved": "草稿已批准并写入权威历史",
+                "edited": "草稿经编辑后已写入权威历史",
+                "rejected": "草稿已拒绝，未写入权威历史",
+                "regenerated": "草稿已要求重新生成",
+            }.get(review_status, "草稿审阅已完成")
+            draft_id = details.get("draft_id")
+            if draft_id:
+                meta_lines.append(f"draft_id: {draft_id}")
+            decision = details.get("decision")
+            if decision:
+                meta_lines.append(f"decision: {decision}")
+        elif action == AuditActionType.DRAFT_CREATED.value:
+            category = "草稿创建"
+            summary = "已生成待审草稿"
+            if subject_id:
+                meta_lines.append(f"draft_id: {subject_id}")
+
+        if not category or not summary:
+            continue
+        entries.append(
+            {
+                "created_at": _format_datetime(audit_entry.get("created_at")),
+                "category": category,
+                "summary": summary,
+                "meta_lines": meta_lines,
+            }
+        )
+    return entries
+
+
+def _render_recap_timeline(entries: list[dict[str, Any]]) -> str:
+    if not entries:
+        return '<p class="empty-state">当前还没有可回顾的关键事件。</p>'
+
+    ordered_entries = sorted(
+        entries,
+        key=lambda entry: str(entry.get("created_at") or ""),
+        reverse=True,
+    )
+    items: list[str] = []
+    for entry in ordered_entries[:18]:
+        meta_lines = "".join(
+            f'<p class="meta-line">{escape(str(line))}</p>'
+            for line in entry.get("meta_lines") or []
+        )
+        items.append(
+            f"""
+            <article class="attention-card">
+              <div class="activity-header">
+                <h3>{escape(str(entry.get("category") or "关键事件"))}</h3>
+                <span class="activity-meta">{escape(str(entry.get("created_at") or "—"))}</span>
+              </div>
+              <p>{escape(str(entry.get("summary") or ""))}</p>
+              {meta_lines}
+            </article>
+            """
+        )
+    return "".join(items)
+
+
+def _render_playtest_recap_page(
+    *,
+    session_id: str,
+    session_snapshot: dict[str, Any] | None,
+    detail: dict[str, Any] | str | None = None,
+    status_code: int = status.HTTP_200_OK,
+) -> HTMLResponse:
+    snapshot = session_snapshot or {}
+    scenario = snapshot.get("scenario") or {}
+    progress_state = snapshot.get("progress_state") or {}
+    current_scene = snapshot.get("current_scene") or {}
+    current_beat_id = progress_state.get("current_beat")
+    beats_by_id = {
+        str(beat.get("beat_id")): beat
+        for beat in scenario.get("beats") or []
+        if isinstance(beat, dict) and beat.get("beat_id")
+    }
+    current_beat_title = (
+        (beats_by_id.get(str(current_beat_id)) or {}).get("title")
+        if current_beat_id is not None
+        else None
+    )
+    session_status = snapshot.get("status") or SessionStatus.PLANNED.value
+    playtest_group = snapshot.get("playtest_group")
+    timeline_entries = _render_recap_timeline(
+        [
+            *_build_recap_event_entries(snapshot),
+            *_build_recap_audit_entries(snapshot),
+        ]
+    )
+
+    body = f"""
+      <section class="hero">
+        <h1>会话回顾</h1>
+        <div class="hero-meta">
+          <span>session_id: <code>{escape(session_id)}</code></span>
+          <span>KP：{escape(str(snapshot.get('keeper_name', 'KP')))}</span>
+          <span>当前状态：{_render_session_status_display(session_status)}</span>
+          {
+              f'<span>分组：{escape(_playtest_group_label(playtest_group))}</span>'
+              if playtest_group
+              else ''
+          }
+        </div>
+        <div class="nav-links">
+          {_render_session_index_link()}
+          {_render_launcher_link(session_id)}
+        </div>
+      </section>
+      {_render_detail(detail)}
+      {
+          '<section class="feedback feedback-success"><h2>该局已完成</h2><p>这是当前 session 的最小回顾页面，用于快速回看关键推进与管理动作。</p></section>'
+          if session_status == SessionStatus.COMPLETED.value
+          else ''
+      }
+      <section class="panel">
+        <h2>会话摘要</h2>
+        <div class="summary-grid">
+          <article class="summary-card">
+            <h3>当前状态</h3>
+            <ul>
+              <li>session_id：<code>{escape(session_id)}</code></li>
+              <li>keeper_name：{escape(str(snapshot.get('keeper_name', 'KP')))}</li>
+              <li>status：{escape(_session_status_label(session_status))} <span class="mono">{escape(str(session_status))}</span></li>
+              <li>当前场景：{escape(str(current_scene.get('title', '未知场景')))}</li>
+              <li>当前 beat：{escape(str(current_beat_id or '无'))}</li>
+              <li>当前 beat 标题：{escape(str(current_beat_title or '无'))}</li>
+              {
+                  f'<li>分组：{escape(_playtest_group_label(playtest_group))}</li>'
+                  if playtest_group
+                  else ''
+              }
+            </ul>
+          </article>
+          <article class="summary-card">
+            <h3>查看说明</h3>
+            <ul>
+              <li>时间线按最近事件在前展示。</li>
+              <li>这里只串起关键推进与管理动作，不展开原始 payload。</li>
+              <li>若当前局仍未 completed，也可把这里当作当前回顾页使用。</li>
+            </ul>
+          </article>
+        </div>
+      </section>
+      <section class="panel">
+        <h2>时间线</h2>
+        <div class="attention-grid">
+          {timeline_entries}
+        </div>
+      </section>
+    """
+    return _render_shell(
+        title=f"Session {session_id} Recap",
         body=body,
         status_code=status_code,
     )
@@ -1851,6 +2087,34 @@ def _render_playtest_launcher_from_service(
     )
 
 
+def _render_playtest_recap_from_service(
+    *,
+    service: SessionService,
+    session_id: str,
+    detail: dict[str, Any] | str | None = None,
+    status_code: int = status.HTTP_200_OK,
+) -> HTMLResponse:
+    try:
+        snapshot = service.snapshot_session(session_id)
+    except LookupError as exc:
+        return _render_playtest_recap_page(
+            session_id=session_id,
+            session_snapshot=None,
+            detail=detail or extract_error_detail(exc),
+            status_code=(
+                status_code
+                if status_code != status.HTTP_200_OK
+                else status.HTTP_404_NOT_FOUND
+            ),
+        )
+    return _render_playtest_recap_page(
+        session_id=session_id,
+        session_snapshot=snapshot,
+        detail=detail,
+        status_code=status_code,
+    )
+
+
 def _render_playtest_rules_query_from_service(
     *,
     service: SessionService,
@@ -2663,6 +2927,14 @@ def playtest_launcher_page(
     service: SessionService = Depends(get_session_service),
 ) -> HTMLResponse:
     return _render_playtest_launcher_from_service(service=service, session_id=session_id)
+
+
+@router.get("/sessions/{session_id}/recap", response_class=HTMLResponse)
+def playtest_recap_page(
+    session_id: str,
+    service: SessionService = Depends(get_session_service),
+) -> HTMLResponse:
+    return _render_playtest_recap_from_service(service=service, session_id=session_id)
 
 
 @router.get("/sessions/{session_id}/keeper", response_class=HTMLResponse)
