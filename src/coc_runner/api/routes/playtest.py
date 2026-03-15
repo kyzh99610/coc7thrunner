@@ -32,6 +32,8 @@ from coc_runner.domain.models import (
     AuditActionType,
     CreateCheckpointRequest,
     EventType,
+    ImportCharacterHookSeedRequest,
+    ImportSceneHookSeedRequest,
     InvestigatorAttributeCheckRequest,
     InvestigatorSanCheckRequest,
     InvestigatorSkillCheckRequest,
@@ -1978,6 +1980,7 @@ def _render_hook_materials_panel(
         <h2>钩子素材</h2>
         <p class="help">这些 very small 的角色/场景素材只会进入理智后续建议层，不会自动替 KP 完成最终裁定。</p>
         <p class="help">当前 seed 只会读取本局里已有的角色职业/角色备注与场景标题/摘要，不会读取 Excel 或 scenario 文件夹。</p>
+        <p class="help">external seed/import 只接收已解析结果/sidecar 字段，不会直接读取 Excel 或 scenario 文件夹。</p>
         <div class="summary-grid">
           <article class="summary-card">
             <h3>角色钩子</h3>
@@ -2012,6 +2015,28 @@ def _render_hook_materials_panel(
               </label>
               <button type="submit">从当前角色上下文生成初始钩子</button>
             </form>
+            <form method="post" action="/playtest/sessions/{escape(session_id)}/keeper/hooks/characters/import#hook-materials" data-submit-label="导入中...">
+              <input type="hidden" name="operator_id" value="{escape(operator_id)}" />
+              <label>
+                actor_id
+                <select name="actor_id">
+                  {character_options}
+                </select>
+              </label>
+              <label>
+                parsed_occupation
+                <input type="text" name="parsed_occupation" placeholder="例如：记者" />
+              </label>
+              <label>
+                parsed_notes
+                <textarea name="parsed_notes" rows="2" placeholder="来自模板卡解析结果的一句 very small 备注。"></textarea>
+              </label>
+              <label>
+                seed_hint
+                <input type="text" name="seed_hint" placeholder="例如：追踪执念" />
+              </label>
+              <button type="submit">导入解析角色素材</button>
+            </form>
           </article>
           <article class="summary-card">
             <h3>场景钩子</h3>
@@ -2045,6 +2070,28 @@ def _render_hook_materials_panel(
                 </select>
               </label>
               <button type="submit">从当前场景上下文生成初始钩子</button>
+            </form>
+            <form method="post" action="/playtest/sessions/{escape(session_id)}/keeper/hooks/scenes/import#hook-materials" data-submit-label="导入中...">
+              <input type="hidden" name="operator_id" value="{escape(operator_id)}" />
+              <label>
+                scene_id
+                <select name="scene_id">
+                  {scene_options}
+                </select>
+              </label>
+              <label>
+                parsed_title
+                <input type="text" name="parsed_title" placeholder="例如：雾港旅店大堂" />
+              </label>
+              <label>
+                parsed_context
+                <textarea name="parsed_context" rows="2" placeholder="来自 scenario sidecar 的一句 very small 场景上下文。"></textarea>
+              </label>
+              <label>
+                seed_hint
+                <input type="text" name="seed_hint" placeholder="例如：灯影压迫 sidecar" />
+              </label>
+              <button type="submit">导入 sidecar 场景素材</button>
             </form>
           </article>
         </div>
@@ -3698,6 +3745,78 @@ async def seed_scene_hook_via_keeper_dashboard(
             session_id,
             scene_id,
             SeedSuggestionHookRequest(operator_id=form.get("operator_id", "")),
+        )
+        return _render_keeper_dashboard_from_service(
+            service=service,
+            session_id=session_id,
+            notice=notice,
+        )
+    except (ValidationError, LookupError, PermissionError, ConflictError, ValueError) as exc:
+        return _render_playtest_exception(
+            _render_keeper_dashboard_from_service,
+            exc=exc,
+            service=service,
+            session_id=session_id,
+        )
+
+
+@router.post("/sessions/{session_id}/keeper/hooks/characters/import", response_class=HTMLResponse)
+async def import_character_hook_via_keeper_dashboard(
+    session_id: str,
+    request: Request,
+    service: SessionService = Depends(get_session_service),
+) -> HTMLResponse:
+    form = await _read_form_payload(request)
+    actor_id = _normalize_form_text(form.get("actor_id")) or ""
+    parsed_occupation = _normalize_form_text(form.get("parsed_occupation")) or ""
+    parsed_notes = _normalize_form_text(form.get("parsed_notes"))
+    seed_hint = _normalize_form_text(form.get("seed_hint"))
+    try:
+        notice = service.import_character_suggestion_hook_seed(
+            session_id,
+            actor_id,
+            ImportCharacterHookSeedRequest(
+                operator_id=form.get("operator_id", ""),
+                occupation=parsed_occupation,
+                notes=parsed_notes,
+                seed_hint=seed_hint,
+            ),
+        )
+        return _render_keeper_dashboard_from_service(
+            service=service,
+            session_id=session_id,
+            notice=notice,
+        )
+    except (ValidationError, LookupError, PermissionError, ConflictError, ValueError) as exc:
+        return _render_playtest_exception(
+            _render_keeper_dashboard_from_service,
+            exc=exc,
+            service=service,
+            session_id=session_id,
+        )
+
+
+@router.post("/sessions/{session_id}/keeper/hooks/scenes/import", response_class=HTMLResponse)
+async def import_scene_hook_via_keeper_dashboard(
+    session_id: str,
+    request: Request,
+    service: SessionService = Depends(get_session_service),
+) -> HTMLResponse:
+    form = await _read_form_payload(request)
+    scene_id = _normalize_form_text(form.get("scene_id")) or ""
+    parsed_title = _normalize_form_text(form.get("parsed_title"))
+    parsed_context = _normalize_form_text(form.get("parsed_context")) or ""
+    seed_hint = _normalize_form_text(form.get("seed_hint"))
+    try:
+        notice = service.import_scene_suggestion_hook_seed(
+            session_id,
+            scene_id,
+            ImportSceneHookSeedRequest(
+                operator_id=form.get("operator_id", ""),
+                title=parsed_title,
+                short_context=parsed_context,
+                seed_hint=seed_hint,
+            ),
         )
         return _render_keeper_dashboard_from_service(
             service=service,

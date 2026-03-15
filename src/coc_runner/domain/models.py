@@ -1795,6 +1795,38 @@ class SeedSuggestionHookRequest(BaseModel):
     language_preference: LanguagePreference | None = None
 
 
+class ImportCharacterHookSeedRequest(BaseModel):
+    operator_id: str = Field(min_length=1, max_length=80)
+    occupation: str = Field(min_length=1, max_length=80)
+    notes: str | None = Field(default=None, max_length=200)
+    seed_hint: str | None = Field(default=None, max_length=80)
+    language_preference: LanguagePreference | None = None
+
+    @field_validator("occupation", "notes", "seed_hint")
+    @classmethod
+    def _normalize_character_seed_fields(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        normalized = value.strip()
+        return normalized or None
+
+
+class ImportSceneHookSeedRequest(BaseModel):
+    operator_id: str = Field(min_length=1, max_length=80)
+    title: str | None = Field(default=None, max_length=120)
+    short_context: str = Field(min_length=1, max_length=200)
+    seed_hint: str | None = Field(default=None, max_length=80)
+    language_preference: LanguagePreference | None = None
+
+    @field_validator("title", "short_context", "seed_hint")
+    @classmethod
+    def _normalize_scene_seed_fields(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        normalized = value.strip()
+        return normalized or None
+
+
 class UpdateKeeperPromptResponse(BaseModel):
     message: str
     session_id: str

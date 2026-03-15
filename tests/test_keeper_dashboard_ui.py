@@ -963,6 +963,163 @@ def test_keeper_dashboard_san_suggestions_can_read_seeded_hook_materials_without
     assert "自动随机疯狂结果" not in html
 
 
+def test_keeper_dashboard_can_import_external_character_and_scene_hook_materials_without_file_system_dependency(
+    client: TestClient,
+) -> None:
+    session_id = _start_keeper_dashboard_session(client)
+
+    dashboard_response = client.get(f"/playtest/sessions/{session_id}/keeper")
+
+    assert dashboard_response.status_code == 200
+    dashboard_html = dashboard_response.text
+    assert "只接收已解析结果/sidecar 字段" in dashboard_html
+    assert 'name="parsed_occupation"' in dashboard_html
+    assert 'name="parsed_notes"' in dashboard_html
+    assert 'name="parsed_title"' in dashboard_html
+    assert 'name="parsed_context"' in dashboard_html
+    assert 'value="npc.innkeeper"' not in dashboard_html
+
+    character_response = client.post(
+        f"/playtest/sessions/{session_id}/keeper/hooks/characters/import",
+        data={
+            "operator_id": KEEPER_ID,
+            "actor_id": "investigator-1",
+            "parsed_occupation": "记者",
+            "parsed_notes": "长期追踪失踪报道，见到类似黄衣残影时会下意识追查到底。",
+            "seed_hint": "追踪执念",
+        },
+    )
+    assert character_response.status_code == 200
+    character_html = character_response.text
+    assert "已导入外部角色 hook seed" in character_html
+    assert "追踪执念" in character_html
+    assert "记者：长期追踪失踪报道，见到类似黄衣残影时会下意识追查到底。" in character_html
+
+    scene_response = client.post(
+        f"/playtest/sessions/{session_id}/keeper/hooks/scenes/import",
+        data={
+            "operator_id": KEEPER_ID,
+            "scene_id": "scene.guesthouse_lobby",
+            "parsed_title": "雾港旅店大堂",
+            "parsed_context": "煤气灯与柜台反光会把前台附近的异常显现放大成持续压迫。",
+            "seed_hint": "灯影压迫 sidecar",
+        },
+    )
+    assert scene_response.status_code == 200
+    scene_html = scene_response.text
+    assert "已导入外部场景 hook seed" in scene_html
+    assert "灯影压迫 sidecar" in scene_html
+    assert "煤气灯与柜台反光会把前台附近的异常显现放大成持续压迫。" in scene_html
+
+    snapshot = _get_snapshot(client, session_id)
+    investigator = next(
+        participant
+        for participant in snapshot["participants"]
+        if participant["actor_id"] == "investigator-1"
+    )
+    lobby_scene = next(
+        scene
+        for scene in snapshot["scenario"]["scenes"]
+        if scene["scene_id"] == "scene.guesthouse_lobby"
+    )
+    assert investigator["imported_character_source_id"] is None
+    assert investigator["suggestion_hooks"] == [
+        {
+            "hook_id": investigator["suggestion_hooks"][0]["hook_id"],
+            "hook_label": "追踪执念",
+            "hook_text": "记者：长期追踪失踪报道，见到类似黄衣残影时会下意识追查到底。",
+            "created_at": investigator["suggestion_hooks"][0]["created_at"],
+            "updated_at": investigator["suggestion_hooks"][0]["updated_at"],
+        }
+    ]
+    assert lobby_scene["suggestion_hooks"] == [
+        {
+            "hook_id": lobby_scene["suggestion_hooks"][0]["hook_id"],
+            "hook_label": "灯影压迫 sidecar",
+            "hook_text": "煤气灯与柜台反光会把前台附近的异常显现放大成持续压迫。",
+            "created_at": lobby_scene["suggestion_hooks"][0]["created_at"],
+            "updated_at": lobby_scene["suggestion_hooks"][0]["updated_at"],
+        }
+    ]
+
+
+def test_keeper_dashboard_san_suggestions_can_read_imported_hook_materials_from_external_seed(
+    client: TestClient,
+    monkeypatch,
+) -> None:
+    session_id = _start_keeper_dashboard_session(client)
+
+    character_response = client.post(
+        f"/playtest/sessions/{session_id}/keeper/hooks/characters/import",
+        data={
+            "operator_id": KEEPER_ID,
+            "actor_id": "investigator-1",
+            "parsed_occupation": "记者",
+            "parsed_notes": "长期追踪失踪报道，见到类似黄衣残影时会下意识追查到底。",
+            "seed_hint": "追踪执念",
+        },
+    )
+    assert character_response.status_code == 200
+
+    scene_response = client.post(
+        f"/playtest/sessions/{session_id}/keeper/hooks/scenes/import",
+        data={
+            "operator_id": KEEPER_ID,
+            "scene_id": "scene.guesthouse_lobby",
+            "parsed_title": "雾港旅店大堂",
+            "parsed_context": "煤气灯与柜台反光会把前台附近的异常显现放大成持续压迫。",
+            "seed_hint": "灯影压迫 sidecar",
+        },
+    )
+    assert scene_response.status_code == 200
+
+    def _fixed_roll(
+        target: int,
+        *,
+        seed: int | None = None,
+        bonus_dice: int = 0,
+        penalty_dice: int = 0,
+    ) -> D100Roll:
+        return D100Roll(
+            seed=seed,
+            unit_die=8,
+            tens_dice=[8],
+            selected_tens=8,
+            total=88,
+            target=target,
+            bonus_dice=bonus_dice,
+            penalty_dice=penalty_dice,
+            outcome=RollOutcome.FAILURE,
+        )
+
+    monkeypatch.setattr(session_service_module, "roll_d100", _fixed_roll)
+    monkeypatch.setattr(session_service_module, "_roll_san_loss_value", lambda expression: 3)
+
+    san_response = client.post(
+        f"/playtest/sessions/{session_id}/investigator/investigator-1/san-check",
+        data={
+            "source_label": "黄衣之王的近距离显现",
+            "success_loss": "1",
+            "failure_loss": "1d6",
+        },
+    )
+    assert san_response.status_code == 200
+
+    keeper_response = client.get(f"/playtest/sessions/{session_id}/keeper")
+
+    assert keeper_response.status_code == 200
+    html = keeper_response.text
+    assert "建议参考" in html
+    assert "建议标签：追踪执念" in html
+    assert "角色钩子：记者：长期追踪失踪报道，见到类似黄衣残影时会下意识追查到底。" in html
+    assert "建议标签：灯影压迫 sidecar" in html
+    assert "场景钩子：煤气灯与柜台反光会把前台附近的异常显现放大成持续压迫。" in html
+    assert 'name="aftermath_label"' in html
+    assert 'value="追踪执念"' not in html
+    assert 'value="灯影压迫 sidecar"' not in html
+    assert "自动随机疯狂结果" not in html
+
+
 def test_keeper_dashboard_lifecycle_controls_transition_status_and_render_closeout_summary(
     client: TestClient,
 ) -> None:
