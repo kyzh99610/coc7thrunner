@@ -30,6 +30,7 @@ from coc_runner.domain.models import (
     CharacterStatEffect,
     ImportCharacterHookSeedRequest,
     ImportSceneHookSeedRequest,
+    ImportTemplateCharacterHookRequest,
     ClueStateEffect,
     ClueProgressState,
     CreateCheckpointRequest,
@@ -110,6 +111,10 @@ from coc_runner.domain.models import (
     VisibilityEffectTarget,
     ViewerRole,
     VisibilityScope,
+)
+from coc_runner.application.template_card_import import (
+    build_character_hook_seed_request_from_template_card,
+    parse_coc7th_template_card_source,
 )
 from coc_runner.error_details import (
     build_character_import_error_detail,
@@ -1067,6 +1072,31 @@ class SessionService:
         )
         return self._message("scene_hook_material_imported", effective_language)
 
+    def import_character_suggestion_hook_from_template_card(
+        self,
+        session_id: str,
+        actor_id: str,
+        request: ImportTemplateCharacterHookRequest,
+    ) -> str:
+        error_language = self._resolve_language(request.language_preference)
+        source = self._load_character_import_source(request.source_id, language=error_language)
+        extraction = parse_coc7th_template_card_source(source)
+        adapted_request = build_character_hook_seed_request_from_template_card(
+            extraction,
+            operator_id=request.operator_id,
+            seed_hint=request.seed_hint,
+            language_preference=request.language_preference,
+        )
+        self.import_character_suggestion_hook_seed(
+            session_id,
+            actor_id,
+            adapted_request,
+        )
+        return self._message(
+            "character_hook_material_imported_from_template_card",
+            error_language,
+        )
+
     @staticmethod
     def _upsert_suggestion_hook_material(
         hooks: list[SuggestionHookMaterial],
@@ -1240,7 +1270,10 @@ class SessionService:
                 SanAftermathSuggestion(
                     label=character_hook.hook_label,
                     duration_rounds=max(1, min(loss_applied + 1, 4)),
-                    reason=f"角色钩子：{character_hook.hook_text}",
+                    reason=self._trim_seed_hook_text(
+                        f"角色钩子：{character_hook.hook_text}",
+                        max_length=160,
+                    ),
                 )
             )
         elif occupation:
@@ -1256,7 +1289,10 @@ class SessionService:
                 SanAftermathSuggestion(
                     label=scene_hook.hook_label,
                     duration_rounds=max(1, min(loss_applied, 3)),
-                    reason=f"场景钩子：{scene_hook.hook_text}",
+                    reason=self._trim_seed_hook_text(
+                        f"场景钩子：{scene_hook.hook_text}",
+                        max_length=160,
+                    ),
                 )
             )
         elif current_scene_title and current_beat_title:
@@ -8015,6 +8051,7 @@ class SessionService:
             "character_hook_material_seeded": "已从当前角色上下文生成初始钩子",
             "scene_hook_material_seeded": "已从当前场景上下文生成初始钩子",
             "character_hook_material_imported": "已导入外部角色 hook seed",
+            "character_hook_material_imported_from_template_card": "已从固定模板卡解析结果导入角色 hook",
             "scene_hook_material_imported": "已导入外部场景 hook seed",
             "san_check_session_completed": "本局已结束，当前页面不再进行新的理智检定。",
             "san_check_invalid": "理智检定参数无效",
@@ -8150,6 +8187,7 @@ class SessionService:
             "character_hook_material_seeded": "Seeded an initial character hook from current role context",
             "scene_hook_material_seeded": "Seeded an initial scene hook from current scene context",
             "character_hook_material_imported": "Imported an external character hook seed",
+            "character_hook_material_imported_from_template_card": "Imported a character hook from fixed template-card extraction",
             "scene_hook_material_imported": "Imported an external scene hook seed",
             "san_check_session_completed": "This session is completed and no longer accepts new SAN checks.",
             "san_check_invalid": "SAN check request is invalid",

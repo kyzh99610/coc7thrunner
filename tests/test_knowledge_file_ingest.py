@@ -331,6 +331,7 @@ def test_import_integrated_character_workbook_template_successfully(client: Test
     assert extraction["derived_stats"]["hp"] == 14
     assert extraction["derived_stats"]["san"] == 60
     assert extraction["derived_stats"]["mp"] == 12
+    assert extraction["derived_stats"]["luck"] == 80
     assert extraction["derived_stats"]["mov"] == 7
     assert extraction["derived_stats"]["armor"] == 5
     assert extraction["skills"]["侦查"] == 70
@@ -401,6 +402,11 @@ def test_integrated_character_workbook_provenance_is_present_for_key_fields(
         "source_workbook": "Bruce vain.xlsx",
         "source_sheet": "人物卡",
         "source_anchor": "E10",
+    }
+    assert provenance["derived_stats.luck"] == {
+        "source_workbook": "Bruce vain.xlsx",
+        "source_sheet": "人物卡",
+        "source_anchor": "AG7",
     }
     assert provenance["starting_inventory"] == {
         "source_workbook": "Bruce vain.xlsx",

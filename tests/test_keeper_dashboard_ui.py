@@ -1120,6 +1120,122 @@ def test_keeper_dashboard_san_suggestions_can_read_imported_hook_materials_from_
     assert "自动随机疯狂结果" not in html
 
 
+def test_keeper_dashboard_can_import_character_hook_from_template_card_extraction(
+    client: TestClient,
+) -> None:
+    session_id = _start_keeper_dashboard_session(client)
+    source_id = "character-sheet-template-hook-import"
+    _import_character_sheet_source(client, source_id=source_id)
+
+    dashboard_response = client.get(f"/playtest/sessions/{session_id}/keeper")
+
+    assert dashboard_response.status_code == 200
+    dashboard_html = dashboard_response.text
+    assert "固定模板卡导入只接收已解析好的 source_id" in dashboard_html
+    assert 'name="template_source_id"' in dashboard_html
+    assert 'type="file"' not in dashboard_html
+    assert 'value="npc.innkeeper"' not in dashboard_html
+
+    import_response = client.post(
+        f"/playtest/sessions/{session_id}/keeper/hooks/characters/import-template",
+        data={
+            "operator_id": KEEPER_ID,
+            "actor_id": "investigator-1",
+            "template_source_id": source_id,
+            "seed_hint": "模板卡执念",
+        },
+    )
+
+    assert import_response.status_code == 200
+    html = import_response.text
+    assert "已从固定模板卡解析结果导入角色 hook" in html
+    assert "模板卡执念" in html
+    assert "总裁：" in html
+    assert "小秘密：腹部的一条刀疤" in html
+
+    snapshot = _get_snapshot(client, session_id)
+    investigator = next(
+        participant
+        for participant in snapshot["participants"]
+        if participant["actor_id"] == "investigator-1"
+    )
+    assert investigator["imported_character_source_id"] is None
+    assert investigator["suggestion_hooks"] == [
+        {
+            "hook_id": investigator["suggestion_hooks"][0]["hook_id"],
+            "hook_label": "模板卡执念",
+            "hook_text": investigator["suggestion_hooks"][0]["hook_text"],
+            "created_at": investigator["suggestion_hooks"][0]["created_at"],
+            "updated_at": investigator["suggestion_hooks"][0]["updated_at"],
+        }
+    ]
+    assert "总裁：" in investigator["suggestion_hooks"][0]["hook_text"]
+    assert "小秘密：腹部的一条刀疤" in investigator["suggestion_hooks"][0]["hook_text"]
+
+
+def test_keeper_dashboard_san_suggestions_can_read_template_card_imported_hook_materials(
+    client: TestClient,
+    monkeypatch,
+) -> None:
+    session_id = _start_keeper_dashboard_session(client)
+    source_id = "character-sheet-template-hook-suggestion"
+    _import_character_sheet_source(client, source_id=source_id)
+
+    import_response = client.post(
+        f"/playtest/sessions/{session_id}/keeper/hooks/characters/import-template",
+        data={
+            "operator_id": KEEPER_ID,
+            "actor_id": "investigator-1",
+            "template_source_id": source_id,
+            "seed_hint": "模板卡执念",
+        },
+    )
+    assert import_response.status_code == 200
+
+    def _fixed_roll(
+        target: int,
+        *,
+        seed: int | None = None,
+        bonus_dice: int = 0,
+        penalty_dice: int = 0,
+    ) -> D100Roll:
+        return D100Roll(
+            seed=seed,
+            unit_die=8,
+            tens_dice=[8],
+            selected_tens=8,
+            total=88,
+            target=target,
+            bonus_dice=bonus_dice,
+            penalty_dice=penalty_dice,
+            outcome=RollOutcome.FAILURE,
+        )
+
+    monkeypatch.setattr(session_service_module, "roll_d100", _fixed_roll)
+    monkeypatch.setattr(session_service_module, "_roll_san_loss_value", lambda expression: 3)
+
+    san_response = client.post(
+        f"/playtest/sessions/{session_id}/investigator/investigator-1/san-check",
+        data={
+            "source_label": "黄衣之王的近距离显现",
+            "success_loss": "1",
+            "failure_loss": "1d6",
+        },
+    )
+    assert san_response.status_code == 200
+
+    keeper_response = client.get(f"/playtest/sessions/{session_id}/keeper")
+
+    assert keeper_response.status_code == 200
+    html = keeper_response.text
+    assert "建议参考" in html
+    assert "建议标签：模板卡执念" in html
+    assert "角色钩子：总裁：" in html
+    assert "小秘密：腹部的一条刀疤" in html
+    assert 'value="模板卡执念"' not in html
+    assert "自动随机疯狂结果" not in html
+
+
 def test_keeper_dashboard_lifecycle_controls_transition_status_and_render_closeout_summary(
     client: TestClient,
 ) -> None:

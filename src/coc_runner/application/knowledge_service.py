@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from coc_runner.application.template_card_import import parse_coc7th_template_card_source
 from knowledge.ingest import KnowledgeIngestor
 from knowledge.retrieval import KnowledgeRetriever
 from knowledge.schemas import (
@@ -12,6 +13,7 @@ from knowledge.schemas import (
     KnowledgeSourceRegistration,
     KnowledgeSourceResponse,
     KnowledgeSourceState,
+    KnowledgeSourceFormat,
     RuleChunk,
     RuleQueryRequest,
     RuleQueryResult,
@@ -73,7 +75,16 @@ class KnowledgeService:
         request: CharacterSheetImportRequest,
     ) -> CharacterSheetImportResponse:
         source = self._load_source(request.source_id)
-        updated_source, extraction = self.ingestor.import_character_sheet(source)
+        if source.source_format == KnowledgeSourceFormat.XLSX:
+            try:
+                extraction = parse_coc7th_template_card_source(source)
+                updated_source = source.model_copy(
+                    update={"character_sheet_extraction": extraction}
+                )
+            except ValueError:
+                updated_source, extraction = self.ingestor.import_character_sheet(source)
+        else:
+            updated_source, extraction = self.ingestor.import_character_sheet(source)
         review = self._build_character_import_review(extraction)
         updated_source = updated_source.model_copy(
             update={"character_sheet_review": review}

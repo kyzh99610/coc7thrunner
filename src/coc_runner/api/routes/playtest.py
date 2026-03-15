@@ -34,6 +34,7 @@ from coc_runner.domain.models import (
     EventType,
     ImportCharacterHookSeedRequest,
     ImportSceneHookSeedRequest,
+    ImportTemplateCharacterHookRequest,
     InvestigatorAttributeCheckRequest,
     InvestigatorSanCheckRequest,
     InvestigatorSkillCheckRequest,
@@ -1981,6 +1982,7 @@ def _render_hook_materials_panel(
         <p class="help">这些 very small 的角色/场景素材只会进入理智后续建议层，不会自动替 KP 完成最终裁定。</p>
         <p class="help">当前 seed 只会读取本局里已有的角色职业/角色备注与场景标题/摘要，不会读取 Excel 或 scenario 文件夹。</p>
         <p class="help">external seed/import 只接收已解析结果/sidecar 字段，不会直接读取 Excel 或 scenario 文件夹。</p>
+        <p class="help">固定模板卡导入只接收已解析好的 source_id，不会直接读取 Excel 文件或扫描 scenario 文件夹。</p>
         <div class="summary-grid">
           <article class="summary-card">
             <h3>角色钩子</h3>
@@ -2036,6 +2038,24 @@ def _render_hook_materials_panel(
                 <input type="text" name="seed_hint" placeholder="例如：追踪执念" />
               </label>
               <button type="submit">导入解析角色素材</button>
+            </form>
+            <form method="post" action="/playtest/sessions/{escape(session_id)}/keeper/hooks/characters/import-template#hook-materials" data-submit-label="导入中...">
+              <input type="hidden" name="operator_id" value="{escape(operator_id)}" />
+              <label>
+                actor_id
+                <select name="actor_id">
+                  {character_options}
+                </select>
+              </label>
+              <label>
+                template_source_id
+                <input type="text" name="template_source_id" placeholder="例如：character-sheet-template-bruce" />
+              </label>
+              <label>
+                seed_hint
+                <input type="text" name="seed_hint" placeholder="例如：模板卡执念" />
+              </label>
+              <button type="submit">导入固定模板卡角色素材</button>
             </form>
           </article>
           <article class="summary-card">
@@ -3779,6 +3799,40 @@ async def import_character_hook_via_keeper_dashboard(
                 operator_id=form.get("operator_id", ""),
                 occupation=parsed_occupation,
                 notes=parsed_notes,
+                seed_hint=seed_hint,
+            ),
+        )
+        return _render_keeper_dashboard_from_service(
+            service=service,
+            session_id=session_id,
+            notice=notice,
+        )
+    except (ValidationError, LookupError, PermissionError, ConflictError, ValueError) as exc:
+        return _render_playtest_exception(
+            _render_keeper_dashboard_from_service,
+            exc=exc,
+            service=service,
+            session_id=session_id,
+        )
+
+
+@router.post("/sessions/{session_id}/keeper/hooks/characters/import-template", response_class=HTMLResponse)
+async def import_character_hook_from_template_via_keeper_dashboard(
+    session_id: str,
+    request: Request,
+    service: SessionService = Depends(get_session_service),
+) -> HTMLResponse:
+    form = await _read_form_payload(request)
+    actor_id = _normalize_form_text(form.get("actor_id")) or ""
+    template_source_id = _normalize_form_text(form.get("template_source_id")) or ""
+    seed_hint = _normalize_form_text(form.get("seed_hint"))
+    try:
+        notice = service.import_character_suggestion_hook_from_template_card(
+            session_id,
+            actor_id,
+            ImportTemplateCharacterHookRequest(
+                operator_id=form.get("operator_id", ""),
+                source_id=template_source_id,
                 seed_hint=seed_hint,
             ),
         )

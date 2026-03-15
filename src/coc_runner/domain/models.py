@@ -1827,6 +1827,21 @@ class ImportSceneHookSeedRequest(BaseModel):
         return normalized or None
 
 
+class ImportTemplateCharacterHookRequest(BaseModel):
+    operator_id: str = Field(min_length=1, max_length=80)
+    source_id: str = Field(min_length=1, max_length=120)
+    seed_hint: str | None = Field(default=None, max_length=80)
+    language_preference: LanguagePreference | None = None
+
+    @field_validator("source_id", "seed_hint")
+    @classmethod
+    def _normalize_template_hook_fields(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        normalized = value.strip()
+        return normalized or None
+
+
 class UpdateKeeperPromptResponse(BaseModel):
     message: str
     session_id: str
