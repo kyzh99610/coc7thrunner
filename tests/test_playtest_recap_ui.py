@@ -56,6 +56,7 @@ def test_playtest_recap_page_displays_summary_and_key_timeline_entries(
     assert "我趁老板转身时抽出柜台后的旧图纸并溜进账房。" in html
     assert "KP 提示处理" in html
     assert "KP 提示已更新为 acknowledged" in html
+    assert 'href="/playtest/sessions"' in html
     assert f'/playtest/sessions/{session_id}/home"' in html
 
 
