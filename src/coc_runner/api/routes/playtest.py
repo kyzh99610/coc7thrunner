@@ -2073,19 +2073,39 @@ def _render_skill_check_outcome_label(outcome_value: Any) -> str:
     }.get(str(outcome_value or ""), str(outcome_value or "未知"))
 
 
+def _render_investigator_check_result(
+    *,
+    message: str,
+    check_type_label: str,
+    subject_value: str,
+    numeric_value: Any,
+    roll_total: Any,
+    outcome_value: Any,
+) -> str:
+    return (
+        '<section class="feedback feedback-success">'
+        "<h2>最近一次检定结果</h2>"
+        f"<p>{escape(str(message))}</p>"
+        f"<p>类型：{escape(check_type_label)}</p>"
+        f"<p>项目：{escape(subject_value)}</p>"
+        f"<p>数值：{escape(str(numeric_value))}</p>"
+        f"<p>掷骰结果：{escape(str(roll_total))}</p>"
+        f"<p>判定：{escape(_render_skill_check_outcome_label(outcome_value))}</p>"
+        "</section>"
+    )
+
+
 def _render_investigator_skill_check_result(skill_check_result: dict[str, Any] | None) -> str:
     if skill_check_result is None:
         return ""
     roll = skill_check_result.get("roll") or {}
-    return (
-        '<section class="feedback feedback-success">'
-        "<h2>最近一次技能检定</h2>"
-        f"<p>{escape(str(skill_check_result.get('message', '已完成技能检定')))}</p>"
-        f"<p>技能：{escape(str(skill_check_result.get('skill_name', '—')))}</p>"
-        f"<p>技能值：{escape(str(skill_check_result.get('skill_value', '—')))}</p>"
-        f"<p>掷骰结果：{escape(str(roll.get('total', '—')))}</p>"
-        f"<p>判定：{escape(_render_skill_check_outcome_label(roll.get('outcome')))}</p>"
-        "</section>"
+    return _render_investigator_check_result(
+        message=str(skill_check_result.get("message", "已完成技能检定")),
+        check_type_label="技能检定",
+        subject_value=str(skill_check_result.get("skill_name", "—")),
+        numeric_value=skill_check_result.get("skill_value", "—"),
+        roll_total=roll.get("total", "—"),
+        outcome_value=roll.get("outcome"),
     )
 
 
@@ -2095,15 +2115,13 @@ def _render_investigator_attribute_check_result(attribute_check_result: dict[str
     roll = attribute_check_result.get("roll") or {}
     attribute_name = str(attribute_check_result.get("attribute_name", ""))
     attribute_label = dict(_investigator_attribute_label_pairs()).get(attribute_name, attribute_name or "—")
-    return (
-        '<section class="feedback feedback-success">'
-        "<h2>最近一次属性检定</h2>"
-        f"<p>{escape(str(attribute_check_result.get('message', '已完成属性检定')))}</p>"
-        f"<p>属性：{escape(attribute_label)}</p>"
-        f"<p>属性值：{escape(str(attribute_check_result.get('attribute_value', '—')))}</p>"
-        f"<p>掷骰结果：{escape(str(roll.get('total', '—')))}</p>"
-        f"<p>判定：{escape(_render_skill_check_outcome_label(roll.get('outcome')))}</p>"
-        "</section>"
+    return _render_investigator_check_result(
+        message=str(attribute_check_result.get("message", "已完成属性检定")),
+        check_type_label="属性检定",
+        subject_value=attribute_label,
+        numeric_value=attribute_check_result.get("attribute_value", "—"),
+        roll_total=roll.get("total", "—"),
+        outcome_value=roll.get("outcome"),
     )
 
 

@@ -276,12 +276,17 @@ def test_investigator_playtest_page_skill_check_submission_rerenders_with_result
 
     assert response.status_code == 200
     html = response.text
-    assert "最近一次技能检定" in html
+    assert "最近一次检定结果" in html
     assert "已完成技能检定" in html
-    assert "技能：图书馆使用" in html
-    assert "技能值：70" in html
+    assert "类型：技能检定" in html
+    assert "项目：图书馆使用" in html
+    assert "数值：70" in html
     assert "掷骰结果：35" in html
     assert "判定：成功" in html
+    assert html.index("类型：技能检定") < html.index("项目：图书馆使用")
+    assert html.index("项目：图书馆使用") < html.index("数值：70")
+    assert html.index("数值：70") < html.index("掷骰结果：35")
+    assert html.index("掷骰结果：35") < html.index("判定：成功")
 
 
 def test_investigator_playtest_page_attribute_check_submission_rerenders_with_result(
@@ -312,12 +317,17 @@ def test_investigator_playtest_page_attribute_check_submission_rerenders_with_re
 
     assert response.status_code == 200
     html = response.text
-    assert "最近一次属性检定" in html
+    assert "最近一次检定结果" in html
     assert "已完成属性检定" in html
-    assert "属性：教育" in html
-    assert "属性值：75" in html
+    assert "类型：属性检定" in html
+    assert "项目：教育" in html
+    assert "数值：75" in html
     assert "掷骰结果：22" in html
     assert "判定：困难成功" in html
+    assert html.index("类型：属性检定") < html.index("项目：教育")
+    assert html.index("项目：教育") < html.index("数值：75")
+    assert html.index("数值：75") < html.index("掷骰结果：22")
+    assert html.index("掷骰结果：22") < html.index("判定：困难成功")
 
 
 def test_investigator_playtest_page_invalid_action_shows_structured_error(
