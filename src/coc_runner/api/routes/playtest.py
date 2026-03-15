@@ -40,6 +40,7 @@ from coc_runner.domain.models import (
     ReviewDraftRequest,
     RestoreCheckpointRequest,
     SessionStatus,
+    UpsertSuggestionHookRequest,
     UpdateSessionLifecycleRequest,
     UpdateCheckpointRequest,
     UpdateKeeperPromptRequest,
@@ -1909,6 +1910,126 @@ def _render_quick_actions(session_id: str) -> str:
     """
 
 
+def _render_hook_materials_panel(
+    *,
+    session_snapshot: dict[str, Any],
+    session_id: str,
+    operator_id: str,
+) -> str:
+    participants = [
+        participant
+        for participant in session_snapshot.get("participants") or []
+        if isinstance(participant, dict) and participant.get("actor_id") != session_snapshot.get("keeper_id")
+    ]
+    scenes = [
+        scene for scene in (session_snapshot.get("scenario") or {}).get("scenes") or [] if isinstance(scene, dict)
+    ]
+    character_hook_items = []
+    for participant in participants:
+        hooks = participant.get("suggestion_hooks") or []
+        if not hooks:
+            continue
+        hook_lines = "".join(
+            f"<li>{escape(str(hook.get('hook_label') or '未命名钩子'))}：{escape(str(hook.get('hook_text') or ''))}</li>"
+            for hook in hooks[:3]
+        )
+        character_hook_items.append(
+            f"""
+            <article class="activity-item">
+              <div class="activity-header">
+                <h3>{escape(str(participant.get('display_name') or participant.get('actor_id') or '调查员'))}</h3>
+                <span class="activity-meta">{escape(str(participant.get('actor_id') or ''))}</span>
+              </div>
+              <ul>{hook_lines}</ul>
+            </article>
+            """
+        )
+    scene_hook_items = []
+    for scene in scenes:
+        hooks = scene.get("suggestion_hooks") or []
+        if not hooks:
+            continue
+        hook_lines = "".join(
+            f"<li>{escape(str(hook.get('hook_label') or '未命名钩子'))}：{escape(str(hook.get('hook_text') or ''))}</li>"
+            for hook in hooks[:3]
+        )
+        scene_hook_items.append(
+            f"""
+            <article class="activity-item">
+              <div class="activity-header">
+                <h3>{escape(str(scene.get('title') or scene.get('scene_id') or '场景'))}</h3>
+                <span class="activity-meta">{escape(str(scene.get('scene_id') or ''))}</span>
+              </div>
+              <ul>{hook_lines}</ul>
+            </article>
+            """
+        )
+    character_options = "".join(
+        f'<option value="{escape(str(participant.get("actor_id") or ""), quote=True)}">{escape(str(participant.get("display_name") or participant.get("actor_id") or "调查员"))}</option>'
+        for participant in participants
+    )
+    scene_options = "".join(
+        f'<option value="{escape(str(scene.get("scene_id") or ""), quote=True)}">{escape(str(scene.get("title") or scene.get("scene_id") or "场景"))}</option>'
+        for scene in scenes
+    )
+    return f"""
+      <section class="panel" id="hook-materials">
+        <h2>钩子素材</h2>
+        <p class="help">这些 very small 的角色/场景素材只会进入理智后续建议层，不会自动替 KP 完成最终裁定。</p>
+        <div class="summary-grid">
+          <article class="summary-card">
+            <h3>角色钩子</h3>
+            <div class="recent-list">
+              {''.join(character_hook_items) if character_hook_items else '<p class="empty-state">当前还没有角色钩子素材。</p>'}
+            </div>
+            <form method="post" action="/playtest/sessions/{escape(session_id)}/keeper/hooks/characters#hook-materials" data-submit-label="提交中...">
+              <input type="hidden" name="operator_id" value="{escape(operator_id)}" />
+              <label>
+                actor_id
+                <select name="actor_id">
+                  {character_options}
+                </select>
+              </label>
+              <label>
+                hook_label
+                <input type="text" name="hook_label" placeholder="例如：文字残响" />
+              </label>
+              <label>
+                hook_text
+                <textarea name="hook_text" rows="2" placeholder="一句 very small 的角色钩子素材。"></textarea>
+              </label>
+              <button type="submit">保存角色钩子</button>
+            </form>
+          </article>
+          <article class="summary-card">
+            <h3>场景钩子</h3>
+            <div class="recent-list">
+              {''.join(scene_hook_items) if scene_hook_items else '<p class="empty-state">当前还没有场景钩子素材。</p>'}
+            </div>
+            <form method="post" action="/playtest/sessions/{escape(session_id)}/keeper/hooks/scenes#hook-materials" data-submit-label="提交中...">
+              <input type="hidden" name="operator_id" value="{escape(operator_id)}" />
+              <label>
+                scene_id
+                <select name="scene_id">
+                  {scene_options}
+                </select>
+              </label>
+              <label>
+                hook_label
+                <input type="text" name="hook_label" placeholder="例如：灯影压迫" />
+              </label>
+              <label>
+                hook_text
+                <textarea name="hook_text" rows="2" placeholder="一句 very small 的场景钩子素材。"></textarea>
+              </label>
+              <button type="submit">保存场景钩子</button>
+            </form>
+          </article>
+        </div>
+      </section>
+    """
+
+
 def _render_keeper_dashboard_page(
     *,
     session_id: str,
@@ -2021,6 +2142,11 @@ def _render_keeper_dashboard_page(
         </div>
       </section>
       {_render_san_aftermath_panel(queued_prompts, san_aftermath_suggestions=san_aftermath_suggestions)}
+      {_render_hook_materials_panel(
+          session_snapshot=snapshot,
+          session_id=session_id,
+          operator_id=keeper_id,
+      )}
       {_render_keeper_live_control_panel(
           keeper_view=current_view,
           session_id=session_id,
@@ -3438,6 +3564,74 @@ async def submit_investigator_san_check_via_ui(
             san_check_source_label=source_label,
             san_check_success_loss=success_loss,
             san_check_failure_loss=failure_loss,
+        )
+
+
+@router.post("/sessions/{session_id}/keeper/hooks/characters", response_class=HTMLResponse)
+async def upsert_character_hook_via_keeper_dashboard(
+    session_id: str,
+    request: Request,
+    service: SessionService = Depends(get_session_service),
+) -> HTMLResponse:
+    form = await _read_form_payload(request)
+    actor_id = _normalize_form_text(form.get("actor_id")) or ""
+    hook_label = _normalize_form_text(form.get("hook_label")) or ""
+    hook_text = _normalize_form_text(form.get("hook_text")) or ""
+    try:
+        notice = service.upsert_character_suggestion_hook(
+            session_id,
+            actor_id,
+            UpsertSuggestionHookRequest(
+                operator_id=form.get("operator_id", ""),
+                hook_label=hook_label,
+                hook_text=hook_text,
+            ),
+        )
+        return _render_keeper_dashboard_from_service(
+            service=service,
+            session_id=session_id,
+            notice=notice,
+        )
+    except (ValidationError, LookupError, PermissionError, ConflictError, ValueError) as exc:
+        return _render_playtest_exception(
+            _render_keeper_dashboard_from_service,
+            exc=exc,
+            service=service,
+            session_id=session_id,
+        )
+
+
+@router.post("/sessions/{session_id}/keeper/hooks/scenes", response_class=HTMLResponse)
+async def upsert_scene_hook_via_keeper_dashboard(
+    session_id: str,
+    request: Request,
+    service: SessionService = Depends(get_session_service),
+) -> HTMLResponse:
+    form = await _read_form_payload(request)
+    scene_id = _normalize_form_text(form.get("scene_id")) or ""
+    hook_label = _normalize_form_text(form.get("hook_label")) or ""
+    hook_text = _normalize_form_text(form.get("hook_text")) or ""
+    try:
+        notice = service.upsert_scene_suggestion_hook(
+            session_id,
+            scene_id,
+            UpsertSuggestionHookRequest(
+                operator_id=form.get("operator_id", ""),
+                hook_label=hook_label,
+                hook_text=hook_text,
+            ),
+        )
+        return _render_keeper_dashboard_from_service(
+            service=service,
+            session_id=session_id,
+            notice=notice,
+        )
+    except (ValidationError, LookupError, PermissionError, ConflictError, ValueError) as exc:
+        return _render_playtest_exception(
+            _render_keeper_dashboard_from_service,
+            exc=exc,
+            service=service,
+            session_id=session_id,
         )
 
 

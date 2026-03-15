@@ -665,6 +665,161 @@ def test_keeper_dashboard_requires_manual_adjudication_fields_to_complete_san_af
     assert 'class="meta-line">持续：' not in html
 
 
+def test_keeper_dashboard_can_maintain_character_and_scene_hook_materials_without_external_card_dependency(
+    client: TestClient,
+) -> None:
+    session_id = _start_keeper_dashboard_session(client)
+
+    dashboard_response = client.get(f"/playtest/sessions/{session_id}/keeper")
+
+    assert dashboard_response.status_code == 200
+    dashboard_html = dashboard_response.text
+    assert "钩子素材" in dashboard_html
+    assert 'name="actor_id"' in dashboard_html
+    assert 'name="scene_id"' in dashboard_html
+    assert 'value="investigator-1"' in dashboard_html
+    assert 'value="scene.guesthouse_lobby"' in dashboard_html
+    assert 'value="npc.innkeeper"' not in dashboard_html
+
+    character_response = client.post(
+        f"/playtest/sessions/{session_id}/keeper/hooks/characters",
+        data={
+            "operator_id": KEEPER_ID,
+            "actor_id": "investigator-1",
+            "hook_label": "文字残响",
+            "hook_text": "看到破碎文字或反光边缘时，容易短暂盯住细节不放。",
+        },
+    )
+    assert character_response.status_code == 200
+    character_html = character_response.text
+    assert "角色钩子素材已保存" in character_html
+    assert "文字残响" in character_html
+    assert "看到破碎文字或反光边缘时，容易短暂盯住细节不放。" in character_html
+
+    scene_response = client.post(
+        f"/playtest/sessions/{session_id}/keeper/hooks/scenes",
+        data={
+            "operator_id": KEEPER_ID,
+            "scene_id": "scene.guesthouse_lobby",
+            "hook_label": "灯影压迫",
+            "hook_text": "大堂煤气灯和柜台反光会把异常显现放大成持续压迫感。",
+        },
+    )
+    assert scene_response.status_code == 200
+    scene_html = scene_response.text
+    assert "场景钩子素材已保存" in scene_html
+    assert "灯影压迫" in scene_html
+    assert "大堂煤气灯和柜台反光会把异常显现放大成持续压迫感。" in scene_html
+
+    snapshot = _get_snapshot(client, session_id)
+    investigator = next(
+        participant
+        for participant in snapshot["participants"]
+        if participant["actor_id"] == "investigator-1"
+    )
+    lobby_scene = next(
+        scene
+        for scene in snapshot["scenario"]["scenes"]
+        if scene["scene_id"] == "scene.guesthouse_lobby"
+    )
+    assert investigator["imported_character_source_id"] is None
+    assert investigator["suggestion_hooks"] == [
+        {
+            "hook_id": investigator["suggestion_hooks"][0]["hook_id"],
+            "hook_label": "文字残响",
+            "hook_text": "看到破碎文字或反光边缘时，容易短暂盯住细节不放。",
+            "created_at": investigator["suggestion_hooks"][0]["created_at"],
+            "updated_at": investigator["suggestion_hooks"][0]["updated_at"],
+        }
+    ]
+    assert lobby_scene["suggestion_hooks"] == [
+        {
+            "hook_id": lobby_scene["suggestion_hooks"][0]["hook_id"],
+            "hook_label": "灯影压迫",
+            "hook_text": "大堂煤气灯和柜台反光会把异常显现放大成持续压迫感。",
+            "created_at": lobby_scene["suggestion_hooks"][0]["created_at"],
+            "updated_at": lobby_scene["suggestion_hooks"][0]["updated_at"],
+        }
+    ]
+
+
+def test_keeper_dashboard_san_suggestions_prefer_character_and_scene_hook_materials(
+    client: TestClient,
+    monkeypatch,
+) -> None:
+    session_id = _start_keeper_dashboard_session(client)
+    character_label = "文字残响"
+    character_text = "看到破碎文字或反光边缘时，容易短暂盯住细节不放。"
+    scene_label = "灯影压迫"
+    scene_text = "大堂煤气灯和柜台反光会把异常显现放大成持续压迫感。"
+
+    character_response = client.post(
+        f"/playtest/sessions/{session_id}/keeper/hooks/characters",
+        data={
+            "operator_id": KEEPER_ID,
+            "actor_id": "investigator-1",
+            "hook_label": character_label,
+            "hook_text": character_text,
+        },
+    )
+    assert character_response.status_code == 200
+
+    scene_response = client.post(
+        f"/playtest/sessions/{session_id}/keeper/hooks/scenes",
+        data={
+            "operator_id": KEEPER_ID,
+            "scene_id": "scene.guesthouse_lobby",
+            "hook_label": scene_label,
+            "hook_text": scene_text,
+        },
+    )
+    assert scene_response.status_code == 200
+
+    def _fixed_roll(
+        target: int,
+        *,
+        seed: int | None = None,
+        bonus_dice: int = 0,
+        penalty_dice: int = 0,
+    ) -> D100Roll:
+        return D100Roll(
+            seed=seed,
+            unit_die=8,
+            tens_dice=[8],
+            selected_tens=8,
+            total=88,
+            target=target,
+            bonus_dice=bonus_dice,
+            penalty_dice=penalty_dice,
+            outcome=RollOutcome.FAILURE,
+        )
+
+    monkeypatch.setattr(session_service_module, "roll_d100", _fixed_roll)
+    monkeypatch.setattr(session_service_module, "_roll_san_loss_value", lambda expression: 3)
+
+    san_response = client.post(
+        f"/playtest/sessions/{session_id}/investigator/investigator-1/san-check",
+        data={
+            "source_label": "黄衣之王的近距离显现",
+            "success_loss": "1",
+            "failure_loss": "1d6",
+        },
+    )
+    assert san_response.status_code == 200
+
+    keeper_response = client.get(f"/playtest/sessions/{session_id}/keeper")
+
+    assert keeper_response.status_code == 200
+    html = keeper_response.text
+    assert f"建议标签：{character_label}" in html
+    assert f"角色钩子：{character_text}" in html
+    assert f"建议标签：{scene_label}" in html
+    assert f"场景钩子：{scene_text}" in html
+    assert f'value="{character_label}"' not in html
+    assert f'value="{scene_label}"' not in html
+    assert "自动随机疯狂结果" not in html
+
+
 def test_keeper_dashboard_lifecycle_controls_transition_status_and_render_closeout_summary(
     client: TestClient,
 ) -> None:

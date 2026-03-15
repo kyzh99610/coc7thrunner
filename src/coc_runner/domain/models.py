@@ -101,6 +101,7 @@ class AuditActionType(StrEnum):
     DRAFT_CREATED = "draft_created"
     REVIEW_DECISION = "review_decision"
     KEEPER_PROMPT_UPDATED = "keeper_prompt_updated"
+    HOOK_MATERIAL_UPDATED = "hook_material_updated"
     KEEPER_LIVE_CONTROL = "keeper_live_control"
     IMPORT = "import"
     ROLLBACK = "rollback"
@@ -589,6 +590,14 @@ class SceneObjective(BaseModel):
     notes: str | None = None
 
 
+class SuggestionHookMaterial(BaseModel):
+    hook_id: str = Field(default_factory=lambda: f"hook-{uuid4().hex}")
+    hook_label: str = Field(min_length=1, max_length=80)
+    hook_text: str = Field(min_length=1, max_length=200)
+    created_at: datetime = Field(default_factory=utc_now)
+    updated_at: datetime = Field(default_factory=utc_now)
+
+
 class ScenarioScene(BaseModel):
     scene_id: str = Field(default_factory=lambda: f"scene-{uuid4().hex}")
     title: str = Field(min_length=1, max_length=120)
@@ -601,6 +610,7 @@ class ScenarioScene(BaseModel):
     scene_objectives: list[SceneObjective] = Field(default_factory=list)
     keeper_notes: list[str] = Field(default_factory=list)
     runtime_notes: list[str] = Field(default_factory=list)
+    suggestion_hooks: list[SuggestionHookMaterial] = Field(default_factory=list)
 
 
 class ScenarioNPC(BaseModel):
@@ -1467,6 +1477,7 @@ class SessionParticipant(BaseModel):
         CharacterImportSyncPolicy.INITIALIZE_IF_MISSING
     )
     secrets: CharacterSecrets = Field(default_factory=CharacterSecrets)
+    suggestion_hooks: list[SuggestionHookMaterial] = Field(default_factory=list)
 
 
 class SessionState(BaseModel):
@@ -1762,6 +1773,21 @@ class UpdateKeeperPromptRequest(BaseModel):
         if self.assigned_to is not None and not self.assigned_to.strip():
             raise ValueError("keeper prompt assignment must not be blank")
         return self
+
+
+class UpsertSuggestionHookRequest(BaseModel):
+    operator_id: str = Field(min_length=1, max_length=80)
+    hook_label: str = Field(min_length=1, max_length=80)
+    hook_text: str = Field(min_length=1, max_length=200)
+    language_preference: LanguagePreference | None = None
+
+    @field_validator("hook_label", "hook_text")
+    @classmethod
+    def _normalize_hook_fields(cls, value: str) -> str:
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("hook fields must not be empty")
+        return normalized
 
 
 class UpdateKeeperPromptResponse(BaseModel):

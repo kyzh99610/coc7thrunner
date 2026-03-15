@@ -477,6 +477,7 @@ def filter_session_for_viewer(
                                 "scene_objectives": [],
                                 "keeper_notes": [],
                                 "runtime_notes": [],
+                                "suggestion_hooks": [],
                             }
                         )
                         for scene in visible_scenes

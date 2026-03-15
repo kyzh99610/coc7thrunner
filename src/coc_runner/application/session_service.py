@@ -95,7 +95,9 @@ from coc_runner.domain.models import (
     SessionStartRequest,
     SessionStartResponse,
     SessionState,
+    SuggestionHookMaterial,
     StatusEffect,
+    UpsertSuggestionHookRequest,
     UpdateKeeperPromptRequest,
     UpdateSessionLifecycleRequest,
     UpdateKeeperPromptResponse,
@@ -564,6 +566,188 @@ class SessionService:
                 ]
         return suggestions_by_prompt_id
 
+    def upsert_character_suggestion_hook(
+        self,
+        session_id: str,
+        actor_id: str,
+        request: UpsertSuggestionHookRequest,
+    ) -> str:
+        error_language = self._resolve_language(request.language_preference)
+        try:
+            session = self._load_session(session_id, language=error_language)
+        except LookupError as exc:
+            message = exc.args[0] if exc.args and isinstance(exc.args[0], str) else self._message(
+                "session_not_found",
+                error_language,
+                session_id=session_id,
+            )
+            raise LookupError(
+                build_session_action_error_detail(
+                    code="character_hook_session_not_found",
+                    message=message,
+                    scope="character_hook_session",
+                    session_id=session_id,
+                    actor_id=actor_id,
+                )
+            ) from exc
+        effective_language = self._resolve_language(
+            request.language_preference,
+            session.language_preference,
+        )
+        participant = self._get_participant(session, actor_id, language=effective_language)
+        current_time = datetime.now(timezone.utc)
+        expected_version = session.state_version
+        self._authorize_operator(
+            session,
+            operator_id=request.operator_id,
+            language=effective_language,
+            error_detail=build_session_action_error_detail(
+                code="hook_material_operator_not_authorized",
+                message=self._message("keeper_prompt_operator_not_authorized", effective_language),
+                scope="hook_material_operator",
+                session_id=session_id,
+                operator_id=request.operator_id,
+            ),
+        )
+        hook = self._upsert_suggestion_hook_material(
+            participant.suggestion_hooks,
+            hook_label=request.hook_label,
+            hook_text=request.hook_text,
+            current_time=current_time,
+        )
+        session.audit_log.append(
+            AuditLogEntry(
+                action=AuditActionType.HOOK_MATERIAL_UPDATED,
+                actor_id=request.operator_id,
+                subject_id=participant.actor_id,
+                session_version=expected_version + 1,
+                details={
+                    "hook_scope": "character",
+                    "hook_id": hook.hook_id,
+                    "hook_label": hook.hook_label,
+                },
+                created_at=current_time,
+            )
+        )
+        session.state_version += 1
+        session.updated_at = current_time
+        self._save_session(
+            session,
+            expected_version=expected_version,
+            reason="character_hook_material_upserted",
+            language=effective_language,
+        )
+        return self._message("character_hook_material_saved", effective_language)
+
+    def upsert_scene_suggestion_hook(
+        self,
+        session_id: str,
+        scene_id: str,
+        request: UpsertSuggestionHookRequest,
+    ) -> str:
+        error_language = self._resolve_language(request.language_preference)
+        try:
+            session = self._load_session(session_id, language=error_language)
+        except LookupError as exc:
+            message = exc.args[0] if exc.args and isinstance(exc.args[0], str) else self._message(
+                "session_not_found",
+                error_language,
+                session_id=session_id,
+            )
+            raise LookupError(
+                build_session_action_error_detail(
+                    code="scene_hook_session_not_found",
+                    message=message,
+                    scope="scene_hook_session",
+                    session_id=session_id,
+                    scene_id=scene_id,
+                )
+            ) from exc
+        effective_language = self._resolve_language(
+            request.language_preference,
+            session.language_preference,
+        )
+        current_time = datetime.now(timezone.utc)
+        expected_version = session.state_version
+        self._authorize_operator(
+            session,
+            operator_id=request.operator_id,
+            language=effective_language,
+            error_detail=build_session_action_error_detail(
+                code="hook_material_operator_not_authorized",
+                message=self._message("keeper_prompt_operator_not_authorized", effective_language),
+                scope="hook_material_operator",
+                session_id=session_id,
+                operator_id=request.operator_id,
+            ),
+        )
+        scene = self._find_scenario_scene(
+            session.scenario.scenes,
+            scene_id=scene_id,
+            scene_title=None,
+        )
+        if scene is None:
+            raise LookupError(
+                build_session_action_error_detail(
+                    code="scene_hook_not_found",
+                    message=self._message("scene_not_found", effective_language, scene_id=scene_id),
+                    scope="scene_hook_scene",
+                    session_id=session_id,
+                    scene_id=scene_id,
+                )
+            )
+        hook = self._upsert_suggestion_hook_material(
+            scene.suggestion_hooks,
+            hook_label=request.hook_label,
+            hook_text=request.hook_text,
+            current_time=current_time,
+        )
+        session.audit_log.append(
+            AuditLogEntry(
+                action=AuditActionType.HOOK_MATERIAL_UPDATED,
+                actor_id=request.operator_id,
+                subject_id=scene.scene_id,
+                session_version=expected_version + 1,
+                details={
+                    "hook_scope": "scene",
+                    "hook_id": hook.hook_id,
+                    "hook_label": hook.hook_label,
+                },
+                created_at=current_time,
+            )
+        )
+        session.state_version += 1
+        session.updated_at = current_time
+        self._save_session(
+            session,
+            expected_version=expected_version,
+            reason="scene_hook_material_upserted",
+            language=effective_language,
+        )
+        return self._message("scene_hook_material_saved", effective_language)
+
+    @staticmethod
+    def _upsert_suggestion_hook_material(
+        hooks: list[SuggestionHookMaterial],
+        *,
+        hook_label: str,
+        hook_text: str,
+        current_time: datetime,
+    ) -> SuggestionHookMaterial:
+        for hook in hooks:
+            if hook.hook_label == hook_label:
+                hook.hook_text = hook_text
+                hook.updated_at = current_time
+                return hook
+        hook = SuggestionHookMaterial(
+            hook_label=hook_label,
+            hook_text=hook_text,
+            created_at=current_time,
+            updated_at=current_time,
+        )
+        hooks.append(hook)
+        return hook
+
     def _build_san_aftermath_suggestions(
         self,
         *,
@@ -584,24 +768,35 @@ class SessionService:
             if prompt.san_actor_id
             else None
         )
+        scene = self._find_scenario_scene(
+            session.scenario.scenes,
+            scene_id=prompt.scene_id,
+            scene_title=None,
+        )
         occupation = (
             participant.character.occupation.strip()
             if participant is not None and participant.character.occupation
             else None
         )
-        current_scene_title = session.current_scene.title.strip()
+        current_scene_title = (
+            scene.title.strip()
+            if scene is not None and scene.title
+            else session.current_scene.title.strip()
+        )
         current_beat_title: str | None = None
-        if session.progress_state.current_beat:
+        if prompt.beat_id:
             current_beat = next(
-                (
-                    beat
-                    for beat in session.scenario.beats
-                    if beat.beat_id == session.progress_state.current_beat
-                ),
+                (beat for beat in session.scenario.beats if beat.beat_id == prompt.beat_id),
                 None,
             )
             if current_beat is not None:
                 current_beat_title = current_beat.title.strip()
+        character_hook = (
+            participant.suggestion_hooks[-1]
+            if participant is not None and participant.suggestion_hooks
+            else None
+        )
+        scene_hook = scene.suggestion_hooks[-1] if scene is not None and scene.suggestion_hooks else None
 
         suggestions: list[SanAftermathSuggestion] = [
             SanAftermathSuggestion(
@@ -610,7 +805,15 @@ class SessionService:
                 reason=f"“{prompt.san_source_label}”直接造成了 {loss_applied} 点理智冲击。",
             )
         ]
-        if occupation:
+        if character_hook is not None:
+            suggestions.append(
+                SanAftermathSuggestion(
+                    label=character_hook.hook_label,
+                    duration_rounds=max(1, min(loss_applied + 1, 4)),
+                    reason=f"角色钩子：{character_hook.hook_text}",
+                )
+            )
+        elif occupation:
             suggestions.append(
                 SanAftermathSuggestion(
                     label="偏执警觉",
@@ -618,7 +821,15 @@ class SessionService:
                     reason=f"角色职业“{occupation}”可能会把这次冲击放大为过度警觉。",
                 )
             )
-        if current_scene_title and current_beat_title:
+        if scene_hook is not None:
+            suggestions.append(
+                SanAftermathSuggestion(
+                    label=scene_hook.hook_label,
+                    duration_rounds=max(1, min(loss_applied, 3)),
+                    reason=f"场景钩子：{scene_hook.hook_text}",
+                )
+            )
+        elif current_scene_title and current_beat_title:
             suggestions.append(
                 SanAftermathSuggestion(
                     label="强迫性回避",
@@ -1783,6 +1994,7 @@ class SessionService:
                 category="san_aftermath",
                 priority=KeeperPromptPriority.MEDIUM,
                 assigned_to=session.keeper_id,
+                beat_id=session.progress_state.current_beat,
                 notes=[],
                 status=KeeperPromptStatus.PENDING,
                 san_actor_id=participant.actor_id,
@@ -7368,6 +7580,8 @@ class SessionService:
             "san_check_recorded": "已完成理智检定，当前 SAN 已更新",
             "san_aftermath_prompt_text": "理智后续待裁定：{actor_name}：{source_label}",
             "san_aftermath_prompt_reason": "SAN {previous_sanity} -> {current_sanity}（损失 {loss_applied}）",
+            "character_hook_material_saved": "角色钩子素材已保存",
+            "scene_hook_material_saved": "场景钩子素材已保存",
             "san_check_session_completed": "本局已结束，当前页面不再进行新的理智检定。",
             "san_check_invalid": "理智检定参数无效",
             "san_check_loss_invalid": "理智损失表达式“{expression}”无效；当前只支持整数或 NdM，例如 0、1、1d3、1d6。",
@@ -7497,6 +7711,8 @@ class SessionService:
             "san_check_recorded": "SAN check completed and current SAN was updated",
             "san_aftermath_prompt_text": "SAN aftermath pending: {actor_name}: {source_label}",
             "san_aftermath_prompt_reason": "SAN {previous_sanity} -> {current_sanity} (loss {loss_applied})",
+            "character_hook_material_saved": "Character hook material saved",
+            "scene_hook_material_saved": "Scene hook material saved",
             "san_check_session_completed": "This session is completed and no longer accepts new SAN checks.",
             "san_check_invalid": "SAN check request is invalid",
             "san_check_loss_invalid": "SAN loss expression {expression} is invalid; only integers or NdM such as 0, 1, 1d3, or 1d6 are supported.",
