@@ -222,6 +222,8 @@ def test_playtest_knowledge_detail_ingest_text_form_updates_preview_after_succes
     assert response.status_code == 200
     html = response.text
     assert "文本知识已入库" in html
+    assert "继续去创建 session" in html
+    assert 'href="/playtest/sessions/create"' in html
     assert "旅店草案规则" in html
     assert "侦查检定用于发现地板缝里的隐藏纸条。" in html
     assert "已入库" in html
@@ -246,4 +248,5 @@ def test_playtest_knowledge_detail_ingest_text_failure_shows_error_without_silen
     html = response.text
     assert "操作失败" in html
     assert "request_validation_failed" in html
+    assert "继续去创建 session" not in html
     assert "旅店草案规则" in html

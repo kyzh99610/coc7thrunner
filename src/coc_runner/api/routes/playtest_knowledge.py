@@ -64,12 +64,13 @@ def _summarize_text_preview(text_value: Any, *, limit: int = 180) -> str:
     return text[: limit - 1].rstrip() + "…"
 
 
-def _render_notice(notice: str | None) -> str:
+def _render_notice(notice: str | None, *, follow_up_html: str = "") -> str:
     if not notice:
         return ""
     return (
         '<section class="feedback feedback-success">'
         f"<p>{escape(notice)}</p>"
+        f"{follow_up_html}"
         "</section>"
     )
 
@@ -234,6 +235,7 @@ def _render_playtest_knowledge_source_page(
     notice: str | None = None,
     detail: dict[str, Any] | str | None = None,
     ingest_text_value: str = "",
+    show_create_session_link: bool = False,
     status_code: int = status.HTTP_200_OK,
 ) -> HTMLResponse:
     source_state = source or {}
@@ -316,7 +318,14 @@ def _render_playtest_knowledge_source_page(
           {_render_knowledge_index_link("返回资料列表")}
         </div>
       </section>
-      {_render_notice(notice)}
+      {_render_notice(
+          notice,
+          follow_up_html=(
+              '<p class="help"><a href="/playtest/sessions/create">继续去创建 session</a></p>'
+              if show_create_session_link
+              else ""
+          ),
+      )}
       {_render_detail(detail)}
       <section class="panel">
         <h2>资料摘要</h2>
@@ -412,6 +421,7 @@ def _render_playtest_knowledge_source_from_service(
     notice: str | None = None,
     detail: dict[str, Any] | str | None = None,
     ingest_text_value: str = "",
+    show_create_session_link: bool = False,
     status_code: int = status.HTTP_200_OK,
 ) -> HTMLResponse:
     try:
@@ -424,6 +434,7 @@ def _render_playtest_knowledge_source_from_service(
             notice=notice,
             detail=detail or _playtest_knowledge_detail(exc, source_id=source_id),
             ingest_text_value=ingest_text_value,
+            show_create_session_link=show_create_session_link,
             status_code=(
                 status_code
                 if status_code != status.HTTP_200_OK
@@ -437,6 +448,7 @@ def _render_playtest_knowledge_source_from_service(
         notice=notice,
         detail=detail,
         ingest_text_value=ingest_text_value,
+        show_create_session_link=show_create_session_link,
         status_code=status_code,
     )
 
@@ -509,6 +521,7 @@ async def ingest_playtest_knowledge_text(
             knowledge_service=knowledge_service,
             source_id=source_id,
             notice=result.message,
+            show_create_session_link=True,
         )
     except (ValidationError, LookupError, ValueError) as exc:
         return _render_playtest_knowledge_source_from_service(
