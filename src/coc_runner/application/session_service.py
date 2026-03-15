@@ -66,6 +66,7 @@ from coc_runner.domain.models import (
     ReviewStatus,
     ReviewedAction,
     RiskLevel,
+    SanAftermathSuggestion,
     QueuedKPPrompt,
     RuleGroundingSummary,
     RollbackRequest,
@@ -543,6 +544,107 @@ class SessionService:
             "rule_hints": self._collect_keeper_runtime_rule_hints(keeper_view),
             "knowledge_hints": self._collect_keeper_runtime_knowledge_hints(keeper_view),
         }
+
+    def get_keeper_san_aftermath_suggestions(
+        self,
+        *,
+        session: SessionState,
+    ) -> dict[str, list[dict[str, Any]]]:
+        suggestions_by_prompt_id: dict[str, list[dict[str, Any]]] = {}
+        for prompt in session.progress_state.queued_kp_prompts:
+            if prompt.category != "san_aftermath":
+                continue
+            suggestions = self._build_san_aftermath_suggestions(
+                session=session,
+                prompt=prompt,
+            )
+            if suggestions:
+                suggestions_by_prompt_id[prompt.prompt_id] = [
+                    suggestion.model_dump(mode="json") for suggestion in suggestions
+                ]
+        return suggestions_by_prompt_id
+
+    def _build_san_aftermath_suggestions(
+        self,
+        *,
+        session: SessionState,
+        prompt: QueuedKPPrompt,
+    ) -> list[SanAftermathSuggestion]:
+        if (
+            prompt.category != "san_aftermath"
+            or not prompt.san_source_label
+            or prompt.san_loss_applied is None
+            or prompt.san_loss_applied <= 0
+        ):
+            return []
+
+        loss_applied = int(prompt.san_loss_applied)
+        participant = (
+            self._find_participant(session, prompt.san_actor_id)
+            if prompt.san_actor_id
+            else None
+        )
+        occupation = (
+            participant.character.occupation.strip()
+            if participant is not None and participant.character.occupation
+            else None
+        )
+        current_scene_title = session.current_scene.title.strip()
+        current_beat_title: str | None = None
+        if session.progress_state.current_beat:
+            current_beat = next(
+                (
+                    beat
+                    for beat in session.scenario.beats
+                    if beat.beat_id == session.progress_state.current_beat
+                ),
+                None,
+            )
+            if current_beat is not None:
+                current_beat_title = current_beat.title.strip()
+
+        suggestions: list[SanAftermathSuggestion] = [
+            SanAftermathSuggestion(
+                label="惊惧失措" if loss_applied >= 3 else "短暂惊惧",
+                duration_rounds=max(1, min(loss_applied, 4)),
+                reason=f"“{prompt.san_source_label}”直接造成了 {loss_applied} 点理智冲击。",
+            )
+        ]
+        if occupation:
+            suggestions.append(
+                SanAftermathSuggestion(
+                    label="偏执警觉",
+                    duration_rounds=max(1, min(loss_applied + 1, 4)),
+                    reason=f"角色职业“{occupation}”可能会把这次冲击放大为过度警觉。",
+                )
+            )
+        if current_scene_title and current_beat_title:
+            suggestions.append(
+                SanAftermathSuggestion(
+                    label="强迫性回避",
+                    duration_rounds=max(1, min(loss_applied, 3)),
+                    reason=(
+                        f"当前场景“{current_scene_title}”与节点“{current_beat_title}”仍在持续施压。"
+                    ),
+                )
+            )
+        elif current_scene_title:
+            suggestions.append(
+                SanAftermathSuggestion(
+                    label="强迫性回避",
+                    duration_rounds=max(1, min(loss_applied, 3)),
+                    reason=f"当前场景“{current_scene_title}”仍在持续施压。",
+                )
+            )
+        elif current_beat_title:
+            suggestions.append(
+                SanAftermathSuggestion(
+                    label="强迫性回避",
+                    duration_rounds=max(1, min(loss_applied, 3)),
+                    reason=f"当前节点“{current_beat_title}”仍在持续施压。",
+                )
+            )
+        return suggestions[:3]
 
     @staticmethod
     def _collect_keeper_runtime_rule_hints(
@@ -1683,6 +1785,12 @@ class SessionService:
                 assigned_to=session.keeper_id,
                 notes=[],
                 status=KeeperPromptStatus.PENDING,
+                san_actor_id=participant.actor_id,
+                san_actor_name=participant.display_name,
+                san_source_label=source_label,
+                san_previous_sanity=previous_sanity,
+                san_current_sanity=current_sanity,
+                san_loss_applied=loss_applied,
                 trigger_reason=self._message(
                     "san_aftermath_prompt_reason",
                     language,

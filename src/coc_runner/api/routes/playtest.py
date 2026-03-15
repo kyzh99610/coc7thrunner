@@ -907,6 +907,7 @@ def _render_prompt_jump_targets(
     *,
     session_id: str,
     operator_id: str,
+    san_aftermath_suggestions: dict[str, list[dict[str, Any]]] | None = None,
 ) -> str:
     if not prompts:
         return ""
@@ -921,6 +922,9 @@ def _render_prompt_jump_targets(
         scene_id = prompt.get("scene_id")
         aftermath_label = prompt.get("aftermath_label")
         duration_rounds = prompt.get("duration_rounds")
+        suggestion_block = _render_san_aftermath_suggestions_block(
+            (san_aftermath_suggestions or {}).get(prompt_id) or []
+        )
         notes = prompt.get("notes") or []
         notes_block = (
             "<ul>"
@@ -999,6 +1003,7 @@ def _render_prompt_jump_targets(
                 <p class="meta-line">当前备注</p>
                 {notes_block}
               </div>
+              {suggestion_block}
               {aftermath_resolution_block}
               <p class="meta-line">
                 处理入口：<code>/sessions/{escape(session_id)}/keeper-prompts/{escape(prompt_id)}/status</code>
@@ -1379,7 +1384,39 @@ def _render_keeper_live_control_panel(
     """
 
 
-def _render_san_aftermath_panel(prompts: list[dict[str, Any]]) -> str:
+def _render_san_aftermath_suggestions_block(suggestions: list[dict[str, Any]]) -> str:
+    if not suggestions:
+        return ""
+    cards = "".join(
+        f"""
+        <article class="activity-item">
+          <div class="activity-header">
+            <h4>建议标签：{escape(str(suggestion.get('label') or '未命名建议'))}</h4>
+            <span class="activity-meta">建议持续：{escape(str(suggestion.get('duration_rounds') or '—'))} 回合</span>
+          </div>
+          {
+              f"<p>{escape(str(suggestion.get('reason') or ''))}</p>"
+              if suggestion.get("reason")
+              else ""
+          }
+        </article>
+        """
+        for suggestion in suggestions[:3]
+    )
+    return (
+        '<div class="recent-list">'
+        '<p class="meta-line">建议参考</p>'
+        '<p class="help">以下建议仅供参考，最终仍由 KP 手动裁定。</p>'
+        f"{cards}"
+        "</div>"
+    )
+
+
+def _render_san_aftermath_panel(
+    prompts: list[dict[str, Any]],
+    *,
+    san_aftermath_suggestions: dict[str, list[dict[str, Any]]] | None = None,
+) -> str:
     san_prompts = [
         prompt for prompt in prompts if str(prompt.get("category") or "") == "san_aftermath"
     ]
@@ -1392,6 +1429,9 @@ def _render_san_aftermath_panel(prompts: list[dict[str, Any]]) -> str:
             notes = prompt.get("notes") or []
             aftermath_label = prompt.get("aftermath_label")
             duration_rounds = prompt.get("duration_rounds")
+            suggestion_block = _render_san_aftermath_suggestions_block(
+                (san_aftermath_suggestions or {}).get(prompt_id) or []
+            )
             notes_block = (
                 f'<p class="meta-line">备注：{escape(str(notes[-1]))}</p>' if notes else ""
             )
@@ -1421,6 +1461,7 @@ def _render_san_aftermath_panel(prompts: list[dict[str, Any]]) -> str:
                   </div>
                   <p>{escape(str(prompt.get('trigger_reason') or '当前没有额外的理智变化说明。'))}</p>
                   <p class="meta-line">状态：{escape(_render_keeper_prompt_status_label(prompt.get('status')))}</p>
+                  {suggestion_block}
                   {adjudication_block}
                   {notes_block}
                   {action_link}
@@ -1876,6 +1917,7 @@ def _render_keeper_dashboard_page(
     checkpoints: list[dict[str, Any]],
     warnings: list[dict[str, Any]],
     runtime_assistance: dict[str, list[dict[str, Any]]] | None = None,
+    san_aftermath_suggestions: dict[str, list[dict[str, Any]]] | None = None,
     notice: str | None = None,
     detail: dict[str, Any] | str | None = None,
     status_code: int = status.HTTP_200_OK,
@@ -1978,7 +2020,7 @@ def _render_keeper_dashboard_page(
           {_render_attention_block(title='未完成目标', items=objective_items, empty_text='当前没有未完成目标。')}
         </div>
       </section>
-      {_render_san_aftermath_panel(queued_prompts)}
+      {_render_san_aftermath_panel(queued_prompts, san_aftermath_suggestions=san_aftermath_suggestions)}
       {_render_keeper_live_control_panel(
           keeper_view=current_view,
           session_id=session_id,
@@ -1986,7 +2028,12 @@ def _render_keeper_dashboard_page(
       )}
       {_render_keeper_runtime_assistance_panel(runtime_assistance, session_id=session_id)}
       {_render_recent_result_panel(session_snapshot=snapshot, keeper_view=current_view)}
-      {_render_prompt_jump_targets(active_prompts, session_id=session_id, operator_id=keeper_id)}
+      {_render_prompt_jump_targets(
+          active_prompts,
+          session_id=session_id,
+          operator_id=keeper_id,
+          san_aftermath_suggestions=san_aftermath_suggestions,
+      )}
       {_render_draft_jump_targets(pending_drafts, session_id=session_id, reviewer_id=keeper_id)}
       <section class="panel" id="recent-activity">
         <h2>最近活动</h2>
@@ -2120,6 +2167,7 @@ def _load_keeper_workspace_context(
     list[dict[str, Any]],
     list[dict[str, Any]],
     dict[str, list[dict[str, Any]]],
+    dict[str, list[dict[str, Any]]],
 ]:
     session, keeper_view, checkpoints, warnings = service.get_keeper_workspace(session_id)
     return (
@@ -2128,6 +2176,7 @@ def _load_keeper_workspace_context(
         [checkpoint.model_dump(mode="json") for checkpoint in checkpoints],
         [warning.model_dump(mode="json") for warning in warnings],
         service.get_keeper_runtime_assistance(keeper_view=keeper_view),
+        service.get_keeper_san_aftermath_suggestions(session=session),
     )
 
 
@@ -2978,7 +3027,7 @@ def _render_keeper_dashboard_from_service(
     status_code: int = status.HTTP_200_OK,
 ) -> HTMLResponse:
     try:
-        snapshot, keeper_view, checkpoints, warnings, runtime_assistance = _load_keeper_workspace_context(
+        snapshot, keeper_view, checkpoints, warnings, runtime_assistance, san_aftermath_suggestions = _load_keeper_workspace_context(
             service,
             session_id,
         )
@@ -2990,6 +3039,7 @@ def _render_keeper_dashboard_from_service(
             checkpoints=[],
             warnings=[],
             runtime_assistance=None,
+            san_aftermath_suggestions=None,
             notice=notice,
             detail=detail or extract_error_detail(exc),
             status_code=(
@@ -3005,6 +3055,7 @@ def _render_keeper_dashboard_from_service(
         checkpoints=checkpoints,
         warnings=warnings,
         runtime_assistance=runtime_assistance,
+        san_aftermath_suggestions=san_aftermath_suggestions,
         notice=notice,
         detail=detail,
         status_code=status_code,

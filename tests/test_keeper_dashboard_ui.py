@@ -404,6 +404,62 @@ def test_keeper_dashboard_shows_san_aftermath_items_after_investigator_san_loss(
     assert "处理此理智后续" in html
 
 
+def test_keeper_dashboard_shows_contextual_san_aftermath_suggestions_without_auto_adjudication(
+    client: TestClient,
+    monkeypatch,
+) -> None:
+    session_id = _start_keeper_dashboard_session(client)
+
+    def _fixed_roll(
+        target: int,
+        *,
+        seed: int | None = None,
+        bonus_dice: int = 0,
+        penalty_dice: int = 0,
+    ) -> D100Roll:
+        return D100Roll(
+            seed=seed,
+            unit_die=8,
+            tens_dice=[8],
+            selected_tens=8,
+            total=88,
+            target=target,
+            bonus_dice=bonus_dice,
+            penalty_dice=penalty_dice,
+            outcome=RollOutcome.FAILURE,
+        )
+
+    monkeypatch.setattr(session_service_module, "roll_d100", _fixed_roll)
+    monkeypatch.setattr(session_service_module, "_roll_san_loss_value", lambda expression: 3)
+
+    san_response = client.post(
+        f"/playtest/sessions/{session_id}/investigator/investigator-1/san-check",
+        data={
+            "source_label": "黄衣之王的近距离显现",
+            "success_loss": "1",
+            "failure_loss": "1d6",
+        },
+    )
+    assert san_response.status_code == 200
+
+    keeper_response = client.get(f"/playtest/sessions/{session_id}/keeper")
+
+    assert keeper_response.status_code == 200
+    html = keeper_response.text
+    assert "建议参考" in html
+    assert "以下建议仅供参考，最终仍由 KP 手动裁定。" in html
+    assert "建议标签：惊惧失措" in html
+    assert "建议标签：偏执警觉" in html
+    assert "建议标签：强迫性回避" in html
+    assert "“黄衣之王的近距离显现”直接造成了 3 点理智冲击" in html
+    assert "角色职业“记者”可能会把这次冲击放大为过度警觉" in html
+    assert "当前场景“雾港旅店大堂”与节点“稳住老板并找到账房线索”仍在持续施压" in html
+    assert 'value="惊惧失措"' not in html
+    assert 'value="偏执警觉"' not in html
+    assert 'value="强迫性回避"' not in html
+    assert "自动随机疯狂结果" not in html
+
+
 def test_keeper_dashboard_can_acknowledge_san_aftermath_item_with_optional_note(
     client: TestClient,
     monkeypatch,
@@ -606,7 +662,7 @@ def test_keeper_dashboard_requires_manual_adjudication_fields_to_complete_san_af
     assert "理智后续裁定在标记完成前必须填写后续标签和持续回合" in html
     assert "状态：待处理" in html
     assert "后续标签：" not in html
-    assert "持续：" not in html
+    assert 'class="meta-line">持续：' not in html
 
 
 def test_keeper_dashboard_lifecycle_controls_transition_status_and_render_closeout_summary(

@@ -688,6 +688,14 @@ class QueuedKPPrompt(BaseModel):
     priority: KeeperPromptPriority = KeeperPromptPriority.MEDIUM
     assigned_to: str | None = None
     expires_after_beat: str | None = None
+    aftermath_label: str | None = Field(default=None, max_length=80)
+    duration_rounds: int | None = Field(default=None, ge=1)
+    san_actor_id: str | None = Field(default=None, max_length=80)
+    san_actor_name: str | None = Field(default=None, max_length=80)
+    san_source_label: str | None = Field(default=None, max_length=120)
+    san_previous_sanity: int | None = Field(default=None, ge=0, le=99)
+    san_current_sanity: int | None = Field(default=None, ge=0, le=99)
+    san_loss_applied: int | None = Field(default=None, ge=0)
     notes: list[str] = Field(default_factory=list)
     status: KeeperPromptStatus = KeeperPromptStatus.PENDING
     trigger_reason: str | None = None
@@ -696,6 +704,12 @@ class QueuedKPPrompt(BaseModel):
     acknowledged_at: datetime | None = None
     dismissed_at: datetime | None = None
     completed_at: datetime | None = None
+
+
+class SanAftermathSuggestion(BaseModel):
+    label: str = Field(min_length=1, max_length=80)
+    duration_rounds: int = Field(ge=1)
+    reason: str | None = Field(default=None, max_length=160)
 
 
 class KeeperWorkflowSummary(BaseModel):
@@ -1720,7 +1734,19 @@ class UpdateKeeperPromptRequest(BaseModel):
     add_notes: list[str] = Field(default_factory=list)
     priority: KeeperPromptPriority | None = None
     assigned_to: str | None = None
+    aftermath_label: str | None = Field(default=None, max_length=80)
+    duration_rounds: int | None = Field(default=None, ge=1)
     language_preference: LanguagePreference | None = None
+
+    @field_validator("aftermath_label")
+    @classmethod
+    def _normalize_aftermath_label(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("aftermath_label must not be empty")
+        return normalized
 
     @model_validator(mode="after")
     def validate_changes_requested(self) -> "UpdateKeeperPromptRequest":
@@ -1729,6 +1755,8 @@ class UpdateKeeperPromptRequest(BaseModel):
             and not self.add_notes
             and self.priority is None
             and self.assigned_to is None
+            and self.aftermath_label is None
+            and self.duration_rounds is None
         ):
             raise ValueError("keeper prompt update requires at least one change")
         if self.assigned_to is not None and not self.assigned_to.strip():
