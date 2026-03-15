@@ -2344,6 +2344,7 @@ def _render_investigator_check_result(
     check_type_label: str,
     subject_value: str,
     numeric_value: Any,
+    numeric_label: str = "数值",
     roll_total: Any,
     outcome_value: Any,
     extra_lines: list[str] | None = None,
@@ -2357,7 +2358,7 @@ def _render_investigator_check_result(
         f"<p>{escape(str(message))}</p>"
         f"<p>类型：{escape(check_type_label)}</p>"
         f"<p>项目：{escape(subject_value)}</p>"
-        f"<p>数值：{escape(str(numeric_value))}</p>"
+        f"<p>{escape(numeric_label)}：{escape(str(numeric_value))}</p>"
         f"<p>掷骰结果：{escape(str(roll_total))}</p>"
         f"<p>判定：{escape(_render_skill_check_outcome_label(outcome_value))}</p>"
         f"{rendered_extra_lines}"
@@ -2405,13 +2406,15 @@ def _render_investigator_san_check_result(san_check_result: dict[str, Any] | Non
         message=str(san_check_result.get("message", "已完成理智检定")),
         check_type_label="理智检定",
         subject_value=str(san_check_result.get("source_label", "—")),
-        numeric_value=san_check_result.get("current_sanity", "—"),
+        numeric_label="检定前 SAN",
+        numeric_value=san_check_result.get("previous_sanity", "—"),
         roll_total=roll.get("total", "—"),
         outcome_value=roll.get("outcome"),
         extra_lines=[
             f"成功损失：{san_check_result.get('success_loss', '—')}",
             f"失败损失：{san_check_result.get('failure_loss', '—')}",
             f"本次 SAN 损失：{resolved_loss}（依据 {applied_expression}）",
+            f"检定后 SAN：{san_check_result.get('current_sanity', '—')}",
         ],
     )
 
@@ -3186,7 +3189,7 @@ async def submit_investigator_skill_check_via_ui(
             skill_check_result=response.model_dump(mode="json"),
             selected_skill_name=response.skill_name,
         )
-    except (ValidationError, LookupError, ValueError) as exc:
+    except (ValidationError, LookupError, ConflictError, ValueError) as exc:
         return _render_playtest_exception(
             _render_investigator_page_from_service,
             exc=exc,

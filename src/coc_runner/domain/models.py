@@ -1634,6 +1634,7 @@ class InvestigatorSanCheckResponse(BaseModel):
     state_version: int
     language_preference: LanguagePreference
     source_label: str
+    previous_sanity: int = Field(ge=0, le=99)
     current_sanity: int = Field(ge=0, le=99)
     success_loss: str
     failure_loss: str

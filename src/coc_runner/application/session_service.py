@@ -1710,6 +1710,8 @@ class SessionService:
             if session.status == SessionStatus.COMPLETED:
                 raise ValueError(self._message("san_check_session_completed", effective_language))
 
+            current_time = datetime.now(timezone.utc)
+            expected_version = session.state_version
             source_label = request.source_label.strip()
             success_loss = self._normalize_san_loss_expression(
                 request.success_loss,
@@ -1719,19 +1721,31 @@ class SessionService:
                 request.failure_loss,
                 language=effective_language,
             )
-            character_state = session.character_states.get(request.actor_id)
-            current_sanity = (
-                int(character_state.current_sanity)
-                if character_state is not None
-                else int(participant.character.starting_sanity)
+            character_state = self._ensure_character_state(
+                session,
+                actor_id=request.actor_id,
+                current_time=current_time,
+                language=effective_language,
             )
-            if current_sanity <= 0:
+            previous_sanity = int(character_state.current_sanity)
+            if previous_sanity <= 0:
                 raise ValueError(self._message("san_check_no_sanity_remaining", effective_language))
 
-            roll = roll_d100(current_sanity)
-            success = roll.total <= current_sanity
+            roll = roll_d100(previous_sanity)
+            success = roll.total <= previous_sanity
             applied_loss_expression = success_loss if success else failure_loss
             resolved_sanity_loss = _roll_san_loss_value(applied_loss_expression)
+            current_sanity = max(0, previous_sanity - resolved_sanity_loss)
+            character_state.current_sanity = current_sanity
+            character_state.last_updated_at = current_time
+            session.state_version += 1
+            session.updated_at = current_time
+            self._save_session(
+                session,
+                expected_version=expected_version,
+                reason="investigator_san_check",
+                language=effective_language,
+            )
             return InvestigatorSanCheckResponse(
                 message=self._message("san_check_recorded", effective_language),
                 session_id=session.session_id,
@@ -1739,6 +1753,7 @@ class SessionService:
                 state_version=session.state_version,
                 language_preference=effective_language,
                 source_label=source_label,
+                previous_sanity=previous_sanity,
                 current_sanity=current_sanity,
                 success_loss=success_loss,
                 failure_loss=failure_loss,
@@ -1747,6 +1762,19 @@ class SessionService:
                 roll=roll,
                 success=success,
             )
+        except ConflictError as exc:
+            message = exc.args[0] if exc.args and isinstance(exc.args[0], str) else self._message(
+                "state_conflict",
+                effective_language,
+            )
+            raise ConflictError(
+                build_session_action_error_detail(
+                    code="san_check_state_conflict",
+                    message=message,
+                    scope="san_check_state",
+                    **error_context,
+                )
+            ) from exc
         except ValueError as exc:
             message = exc.args[0] if exc.args and isinstance(exc.args[0], str) else self._message(
                 "san_check_invalid",
@@ -7150,7 +7178,7 @@ class SessionService:
             "attribute_check_recorded": "已完成属性检定",
             "attribute_check_session_completed": "本局已结束，当前页面不再进行新的属性检定。",
             "attribute_check_attribute_not_found": "属性“{attribute_name}”不在当前角色的基础属性列表中。",
-            "san_check_recorded": "已完成理智检定（仅显示结果，未写入 SAN 变化）",
+            "san_check_recorded": "已完成理智检定，当前 SAN 已更新",
             "san_check_session_completed": "本局已结束，当前页面不再进行新的理智检定。",
             "san_check_invalid": "理智检定参数无效",
             "san_check_loss_invalid": "理智损失表达式“{expression}”无效；当前只支持整数或 NdM，例如 0、1、1d3、1d6。",
@@ -7275,7 +7303,7 @@ class SessionService:
             "attribute_check_recorded": "Attribute check completed",
             "attribute_check_session_completed": "This session is completed and no longer accepts new attribute checks.",
             "attribute_check_attribute_not_found": "Attribute {attribute_name} is not available on this character.",
-            "san_check_recorded": "SAN check completed (result only, no SAN change persisted)",
+            "san_check_recorded": "SAN check completed and current SAN was updated",
             "san_check_session_completed": "This session is completed and no longer accepts new SAN checks.",
             "san_check_invalid": "SAN check request is invalid",
             "san_check_loss_invalid": "SAN loss expression {expression} is invalid; only integers or NdM such as 0, 1, 1d3, or 1d6 are supported.",

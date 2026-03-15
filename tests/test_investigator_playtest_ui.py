@@ -341,7 +341,7 @@ def test_investigator_playtest_page_attribute_check_submission_rerenders_with_re
     assert html.index("掷骰结果：22") < html.index("判定：困难成功")
 
 
-def test_investigator_playtest_page_san_check_submission_rerenders_with_result_without_persisting_san(
+def test_investigator_playtest_page_san_check_submission_rerenders_with_persisted_san_result(
     client: TestClient,
     monkeypatch,
 ) -> None:
@@ -384,18 +384,92 @@ def test_investigator_playtest_page_san_check_submission_rerenders_with_result_w
     assert response.status_code == 200
     html = response.text
     assert "最近一次检定结果" in html
-    assert "已完成理智检定（仅显示结果，未写入 SAN 变化）" in html
+    assert "已完成理智检定，当前 SAN 已更新" in html
     assert "类型：理智检定" in html
     assert "项目：黄衣之王的近距离显现" in html
-    assert "数值：60" in html
+    assert "检定前 SAN：60" in html
     assert "掷骰结果：88" in html
     assert "判定：失败" in html
     assert "成功损失：1" in html
     assert "失败损失：1d6" in html
     assert "本次 SAN 损失：3（依据 1d6）" in html
+    assert "检定后 SAN：57" in html
+    assert "SAN：57" in html
 
     after_snapshot = _get_snapshot(client, session_id)
-    assert after_snapshot["character_states"]["investigator-1"]["current_sanity"] == before_sanity
+    assert before_sanity == 60
+    assert after_snapshot["character_states"]["investigator-1"]["current_sanity"] == 57
+
+
+def test_investigator_san_check_zero_loss_keeps_san_and_large_loss_clamps_to_zero(
+    client: TestClient,
+    monkeypatch,
+) -> None:
+    session_id = _start_investigator_ui_session(client)
+
+    def _fixed_failure_roll(
+        target: int,
+        *,
+        seed: int | None = None,
+        bonus_dice: int = 0,
+        penalty_dice: int = 0,
+    ) -> D100Roll:
+        return D100Roll(
+            seed=seed,
+            unit_die=8,
+            tens_dice=[8],
+            selected_tens=8,
+            total=88,
+            target=target,
+            bonus_dice=bonus_dice,
+            penalty_dice=penalty_dice,
+            outcome=RollOutcome.FAILURE,
+        )
+
+    monkeypatch.setattr(session_service_module, "roll_d100", _fixed_failure_roll)
+    monkeypatch.setattr(
+        session_service_module,
+        "_roll_san_loss_value",
+        lambda expression: int(expression),
+    )
+
+    zero_loss_response = client.post(
+        f"/playtest/sessions/{session_id}/investigator/investigator-1/san-check",
+        data={
+            "source_label": "远处传来的低语",
+            "success_loss": "0",
+            "failure_loss": "0",
+        },
+    )
+
+    assert zero_loss_response.status_code == 200
+    zero_loss_html = zero_loss_response.text
+    assert "项目：远处传来的低语" in zero_loss_html
+    assert "本次 SAN 损失：0（依据 0）" in zero_loss_html
+    assert "检定前 SAN：60" in zero_loss_html
+    assert "检定后 SAN：60" in zero_loss_html
+    assert "SAN：60" in zero_loss_html
+    zero_loss_snapshot = _get_snapshot(client, session_id)
+    assert zero_loss_snapshot["character_states"]["investigator-1"]["current_sanity"] == 60
+
+    clamp_response = client.post(
+        f"/playtest/sessions/{session_id}/investigator/investigator-1/san-check",
+        data={
+            "source_label": "黄印撕开帷幕的瞬间",
+            "success_loss": "0",
+            "failure_loss": "99",
+        },
+    )
+
+    assert clamp_response.status_code == 200
+    clamp_html = clamp_response.text
+    assert "项目：黄印撕开帷幕的瞬间" in clamp_html
+    assert "本次 SAN 损失：99（依据 99）" in clamp_html
+    assert "检定前 SAN：60" in clamp_html
+    assert "检定后 SAN：0" in clamp_html
+    assert "SAN：0" in clamp_html
+    clamped_snapshot = _get_snapshot(client, session_id)
+    assert clamped_snapshot["character_states"]["investigator-1"]["current_sanity"] == 0
 
 
 def test_investigator_san_check_supports_contextual_loss_parameters_without_fixed_monster_mapping(
@@ -457,6 +531,8 @@ def test_investigator_san_check_supports_contextual_loss_parameters_without_fixe
     assert "成功损失：0" in subtle_html
     assert "失败损失：1d3" in subtle_html
     assert "本次 SAN 损失：2（依据 1d3）" in subtle_html
+    assert "检定前 SAN：60" in subtle_html
+    assert "检定后 SAN：58" in subtle_html
 
     assert direct_response.status_code == 200
     direct_html = direct_response.text
@@ -464,6 +540,11 @@ def test_investigator_san_check_supports_contextual_loss_parameters_without_fixe
     assert "成功损失：1" in direct_html
     assert "失败损失：1d6" in direct_html
     assert "本次 SAN 损失：5（依据 1d6）" in direct_html
+    assert "检定前 SAN：58" in direct_html
+    assert "检定后 SAN：53" in direct_html
+
+    after_snapshot = _get_snapshot(client, session_id)
+    assert after_snapshot["character_states"]["investigator-1"]["current_sanity"] == 53
 
 
 def test_investigator_playtest_page_invalid_action_shows_structured_error(
