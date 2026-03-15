@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import shutil
 
+import coc_runner.application.session_service as session_service_module
 from fastapi.testclient import TestClient
+from coc_runner.domain.dice import D100Roll, RollOutcome
 
 from coc_runner.domain.scenario_examples import whispering_guesthouse_payload
 from tests.helpers import make_participant, make_scenario
@@ -350,6 +352,124 @@ def test_keeper_dashboard_displays_runtime_rules_and_knowledge_assistance_panel(
     assert "发现隐藏线索与可疑痕迹" in html
     assert "旅店笔记" in html
     assert "稳住老板并找到账房线索时，优先核对留言页码与账册涂改痕迹。" in html
+
+
+def test_keeper_dashboard_shows_san_aftermath_items_after_investigator_san_loss(
+    client: TestClient,
+    monkeypatch,
+) -> None:
+    session_id = _start_keeper_dashboard_session(client)
+
+    def _fixed_roll(
+        target: int,
+        *,
+        seed: int | None = None,
+        bonus_dice: int = 0,
+        penalty_dice: int = 0,
+    ) -> D100Roll:
+        return D100Roll(
+            seed=seed,
+            unit_die=8,
+            tens_dice=[8],
+            selected_tens=8,
+            total=88,
+            target=target,
+            bonus_dice=bonus_dice,
+            penalty_dice=penalty_dice,
+            outcome=RollOutcome.FAILURE,
+        )
+
+    monkeypatch.setattr(session_service_module, "roll_d100", _fixed_roll)
+    monkeypatch.setattr(session_service_module, "_roll_san_loss_value", lambda expression: 3)
+
+    san_response = client.post(
+        f"/playtest/sessions/{session_id}/investigator/investigator-1/san-check",
+        data={
+            "source_label": "黄衣之王的近距离显现",
+            "success_loss": "1",
+            "failure_loss": "1d6",
+        },
+    )
+    assert san_response.status_code == 200
+
+    keeper_response = client.get(f"/playtest/sessions/{session_id}/keeper")
+
+    assert keeper_response.status_code == 200
+    html = keeper_response.text
+    assert "理智后续待裁定" in html
+    assert "林舟：黄衣之王的近距离显现" in html
+    assert "SAN 60 -&gt; 57（损失 3）" in html
+    assert "状态：待处理" in html
+    assert 'category: <span class="mono">san_aftermath</span>' in html
+    assert "处理此理智后续" in html
+
+
+def test_keeper_dashboard_can_acknowledge_san_aftermath_item_with_optional_note(
+    client: TestClient,
+    monkeypatch,
+) -> None:
+    session_id = _start_keeper_dashboard_session(client)
+    note = "短暂惊惧，继续观察。"
+
+    def _fixed_roll(
+        target: int,
+        *,
+        seed: int | None = None,
+        bonus_dice: int = 0,
+        penalty_dice: int = 0,
+    ) -> D100Roll:
+        return D100Roll(
+            seed=seed,
+            unit_die=8,
+            tens_dice=[8],
+            selected_tens=8,
+            total=88,
+            target=target,
+            bonus_dice=bonus_dice,
+            penalty_dice=penalty_dice,
+            outcome=RollOutcome.FAILURE,
+        )
+
+    monkeypatch.setattr(session_service_module, "roll_d100", _fixed_roll)
+    monkeypatch.setattr(session_service_module, "_roll_san_loss_value", lambda expression: 3)
+
+    san_response = client.post(
+        f"/playtest/sessions/{session_id}/investigator/investigator-1/san-check",
+        data={
+            "source_label": "黄衣之王的近距离显现",
+            "success_loss": "1",
+            "failure_loss": "1d6",
+        },
+    )
+    assert san_response.status_code == 200
+
+    keeper_state = client.get(
+        f"/sessions/{session_id}/state",
+        params={"viewer_role": "keeper"},
+    )
+    assert keeper_state.status_code == 200
+    prompt_id = next(
+        prompt["prompt_id"]
+        for prompt in keeper_state.json()["keeper_workflow"]["active_prompts"]
+        if prompt.get("category") == "san_aftermath"
+    )
+
+    acknowledge_response = client.post(
+        f"/playtest/sessions/{session_id}/keeper/prompts/{prompt_id}/status",
+        data={
+            "operator_id": KEEPER_ID,
+            "status": "acknowledged",
+            "note": note,
+        },
+    )
+
+    assert acknowledge_response.status_code == 200
+    html = acknowledge_response.text
+    assert "KP 提示已更新" in html
+    assert "理智后续待裁定" in html
+    assert "林舟：黄衣之王的近距离显现" in html
+    assert "状态：已确认" in html
+    assert note in html
 
 
 def test_keeper_dashboard_lifecycle_controls_transition_status_and_render_closeout_summary(

@@ -866,6 +866,15 @@ def _render_attention_block(
     )
 
 
+def _render_keeper_prompt_status_label(status_value: Any) -> str:
+    return {
+        "pending": "待处理",
+        "acknowledged": "已确认",
+        "dismissed": "已忽略",
+        "completed": "已完成",
+    }.get(str(status_value or "pending"), str(status_value or "pending"))
+
+
 def _render_prompt_attention_item(prompt: dict[str, Any]) -> str:
     prompt_id = str(prompt.get("prompt_id", "prompt"))
     prompt_text = escape(str(prompt.get("prompt_text", "未命名提示")))
@@ -1326,6 +1335,43 @@ def _render_keeper_live_control_panel(
         </div>
       </section>
     """
+
+
+def _render_san_aftermath_panel(prompts: list[dict[str, Any]]) -> str:
+    san_prompts = [
+        prompt for prompt in prompts if str(prompt.get("category") or "") == "san_aftermath"
+    ]
+    if not san_prompts:
+        items = '<p class="empty-state">当前没有待裁定的理智后续。</p>'
+    else:
+        cards: list[str] = []
+        for prompt in san_prompts[:4]:
+            prompt_id = str(prompt.get("prompt_id") or "prompt")
+            notes = prompt.get("notes") or []
+            notes_block = (
+                f'<p class="meta-line">备注：{escape(str(notes[-1]))}</p>' if notes else ""
+            )
+            cards.append(
+                f"""
+                <article class="activity-item">
+                  <div class="activity-header">
+                    <h3>{escape(str(prompt.get('prompt_text') or '未命名理智后续'))}</h3>
+                    <span class="activity-meta">{escape(_render_keeper_prompt_status_label(prompt.get('status')))}</span>
+                  </div>
+                  <p>{escape(str(prompt.get('trigger_reason') or '当前没有额外的理智变化说明。'))}</p>
+                  <p class="meta-line">状态：{escape(_render_keeper_prompt_status_label(prompt.get('status')))}</p>
+                  {notes_block}
+                  <p class="meta-line"><a class="action-link" href="#prompt-{escape(prompt_id)}">处理此理智后续</a></p>
+                </article>
+                """
+            )
+        items = "".join(cards)
+    return (
+        '<section class="panel" id="san-aftermath">'
+        "<h2>理智后续待裁定</h2>"
+        f'<div class="recent-list">{items}</div>'
+        "</section>"
+    )
 
 
 def _resolve_live_control_jump_target(payload: dict[str, Any]) -> tuple[str, str] | None:
@@ -1869,6 +1915,7 @@ def _render_keeper_dashboard_page(
           {_render_attention_block(title='未完成目标', items=objective_items, empty_text='当前没有未完成目标。')}
         </div>
       </section>
+      {_render_san_aftermath_panel(active_prompts)}
       {_render_keeper_live_control_panel(
           keeper_view=current_view,
           session_id=session_id,

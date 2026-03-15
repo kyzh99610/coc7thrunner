@@ -1656,6 +1656,46 @@ class SessionService:
             )
         return f"{count}d{sides}"
 
+    def _queue_san_aftermath_prompt(
+        self,
+        *,
+        session: SessionState,
+        participant: SessionParticipant,
+        source_label: str,
+        previous_sanity: int,
+        current_sanity: int,
+        loss_applied: int,
+        current_time: datetime,
+        language: LanguagePreference,
+    ) -> None:
+        session.progress_state.queued_kp_prompts.append(
+            QueuedKPPrompt(
+                prompt_text=self._message(
+                    "san_aftermath_prompt_text",
+                    language,
+                    actor_name=participant.display_name,
+                    source_label=source_label,
+                ),
+                scene_id=session.current_scene.scene_id,
+                source_action_id=None,
+                category="san_aftermath",
+                priority=KeeperPromptPriority.MEDIUM,
+                assigned_to=session.keeper_id,
+                notes=[],
+                status=KeeperPromptStatus.PENDING,
+                trigger_reason=self._message(
+                    "san_aftermath_prompt_reason",
+                    language,
+                    previous_sanity=previous_sanity,
+                    current_sanity=current_sanity,
+                    loss_applied=loss_applied,
+                ),
+                created_at=current_time,
+                updated_at=current_time,
+            )
+        )
+        session.progress_state.last_updated_at = current_time
+
     def perform_investigator_san_check(
         self,
         session_id: str,
@@ -1738,6 +1778,17 @@ class SessionService:
             current_sanity = max(0, previous_sanity - resolved_sanity_loss)
             character_state.current_sanity = current_sanity
             character_state.last_updated_at = current_time
+            if resolved_sanity_loss > 0:
+                self._queue_san_aftermath_prompt(
+                    session=session,
+                    participant=participant,
+                    source_label=source_label,
+                    previous_sanity=previous_sanity,
+                    current_sanity=current_sanity,
+                    loss_applied=resolved_sanity_loss,
+                    current_time=current_time,
+                    language=effective_language,
+                )
             session.state_version += 1
             session.updated_at = current_time
             self._save_session(
@@ -7179,6 +7230,8 @@ class SessionService:
             "attribute_check_session_completed": "本局已结束，当前页面不再进行新的属性检定。",
             "attribute_check_attribute_not_found": "属性“{attribute_name}”不在当前角色的基础属性列表中。",
             "san_check_recorded": "已完成理智检定，当前 SAN 已更新",
+            "san_aftermath_prompt_text": "理智后续待裁定：{actor_name}：{source_label}",
+            "san_aftermath_prompt_reason": "SAN {previous_sanity} -> {current_sanity}（损失 {loss_applied}）",
             "san_check_session_completed": "本局已结束，当前页面不再进行新的理智检定。",
             "san_check_invalid": "理智检定参数无效",
             "san_check_loss_invalid": "理智损失表达式“{expression}”无效；当前只支持整数或 NdM，例如 0、1、1d3、1d6。",
@@ -7304,6 +7357,8 @@ class SessionService:
             "attribute_check_session_completed": "This session is completed and no longer accepts new attribute checks.",
             "attribute_check_attribute_not_found": "Attribute {attribute_name} is not available on this character.",
             "san_check_recorded": "SAN check completed and current SAN was updated",
+            "san_aftermath_prompt_text": "SAN aftermath pending: {actor_name}: {source_label}",
+            "san_aftermath_prompt_reason": "SAN {previous_sanity} -> {current_sanity} (loss {loss_applied})",
             "san_check_session_completed": "This session is completed and no longer accepts new SAN checks.",
             "san_check_invalid": "SAN check request is invalid",
             "san_check_loss_invalid": "SAN loss expression {expression} is invalid; only integers or NdM such as 0, 1, 1d3, or 1d6 are supported.",
