@@ -11,6 +11,11 @@ from coc_runner.api.routes.knowledge import router as knowledge_router
 from coc_runner.api.routes.playtest import router as playtest_router
 from coc_runner.api.routes.rules import router as rules_router
 from coc_runner.api.routes.sessions import router as sessions_router
+from coc_runner.application.dice_execution import (
+    DiceStyleExecutionBackend,
+    DiceStyleSubprocessClient,
+    build_default_dice_style_subprocess_command,
+)
 from coc_runner.application.knowledge_service import KnowledgeService
 from coc_runner.application.session_service import SessionService
 from coc_runner.config import Settings, get_settings
@@ -22,6 +27,14 @@ from coc_runner.infrastructure.repositories import SqlAlchemySessionRepository
 def create_app(settings: Settings | None = None) -> FastAPI:
     runtime_settings = settings or get_settings()
     database = Database(runtime_settings.db_url)
+    dice_execution_backend = None
+    if runtime_settings.dice_backend_mode == "dice_style_subprocess":
+        dice_execution_backend = DiceStyleExecutionBackend(
+            client=DiceStyleSubprocessClient(
+                command=build_default_dice_style_subprocess_command(),
+                timeout_seconds=runtime_settings.dice_subprocess_timeout_seconds,
+            )
+        )
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
@@ -31,6 +44,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         app.state.session_service = SessionService(
             session_repository,
             knowledge_repository=knowledge_repository,
+            dice_execution_backend=dice_execution_backend,
             default_language=runtime_settings.default_language,
             behavior_memory_limit=runtime_settings.behavior_memory_limit,
         )

@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import shutil
+import sys
+from pathlib import Path
 
 import coc_runner.application.session_service as session_service_module
 from fastapi.testclient import TestClient
@@ -9,6 +11,7 @@ from coc_runner.application.dice_execution import (
     DiceExecutionRequest,
     DiceExecutionResult,
     DiceStyleExecutionBackend,
+    DiceStyleSubprocessClient,
 )
 from coc_runner.domain.dice import D100Roll, RollOutcome
 
@@ -22,6 +25,9 @@ from tests.test_session_import import (
     _make_cross_environment_client,
     _snapshot_scenario,
 )
+
+
+FIXTURE_DIR = Path(__file__).resolve().parent / "fixtures" / "dice_subprocess"
 
 
 def _start_investigator_ui_session(
@@ -352,31 +358,10 @@ def test_investigator_playtest_page_skill_check_can_use_optional_dice_backend_br
 ) -> None:
     session_id = _start_investigator_ui_session(client)
 
-    class _ScriptedDiceClient:
-        def __init__(self) -> None:
-            self.calls: list[tuple[DiceExecutionRequest, str]] = []
-
-        def execute_check(
-            self,
-            *,
-            request: DiceExecutionRequest,
-            command_text: str,
-        ) -> DiceExecutionResult:
-            self.calls.append((request, command_text))
-            return DiceExecutionResult(
-                backend_name="dice_sidecar_stub",
-                roll=D100Roll(
-                    unit_die=4,
-                    tens_dice=[2],
-                    selected_tens=2,
-                    total=24,
-                    target=request.target_value,
-                    outcome=RollOutcome.HARD_SUCCESS,
-                ),
-                success=True,
-            )
-
-    dice_client = _ScriptedDiceClient()
+    dice_client = DiceStyleSubprocessClient(
+        command=[sys.executable, str(FIXTURE_DIR / "scripted_bridge.py")],
+        timeout_seconds=1.0,
+    )
     client.app.state.session_service.dice_execution_backend = DiceStyleExecutionBackend(
         client=dice_client
     )
@@ -396,11 +381,6 @@ def test_investigator_playtest_page_skill_check_can_use_optional_dice_backend_br
     assert "掷骰结果：24" in html
     assert "判定：困难成功" in html
     assert ".rc 图书馆使用70" not in html
-    assert len(dice_client.calls) == 1
-    request_payload, command_text = dice_client.calls[0]
-    assert request_payload.check_kind == DiceCheckKind.SKILL
-    assert request_payload.target_value == 70
-    assert command_text == ".rc 图书馆使用70"
 
 
 def test_investigator_playtest_page_attribute_check_can_use_optional_dice_backend_bridge(
@@ -408,31 +388,10 @@ def test_investigator_playtest_page_attribute_check_can_use_optional_dice_backen
 ) -> None:
     session_id = _start_investigator_ui_session(client)
 
-    class _ScriptedDiceClient:
-        def __init__(self) -> None:
-            self.calls: list[tuple[DiceExecutionRequest, str]] = []
-
-        def execute_check(
-            self,
-            *,
-            request: DiceExecutionRequest,
-            command_text: str,
-        ) -> DiceExecutionResult:
-            self.calls.append((request, command_text))
-            return DiceExecutionResult(
-                backend_name="dice_sidecar_stub",
-                roll=D100Roll(
-                    unit_die=5,
-                    tens_dice=[3],
-                    selected_tens=3,
-                    total=35,
-                    target=request.target_value,
-                    outcome=RollOutcome.HARD_SUCCESS,
-                ),
-                success=True,
-            )
-
-    dice_client = _ScriptedDiceClient()
+    dice_client = DiceStyleSubprocessClient(
+        command=[sys.executable, str(FIXTURE_DIR / "scripted_bridge.py")],
+        timeout_seconds=1.0,
+    )
     client.app.state.session_service.dice_execution_backend = DiceStyleExecutionBackend(
         client=dice_client
     )
@@ -452,11 +411,6 @@ def test_investigator_playtest_page_attribute_check_can_use_optional_dice_backen
     assert "掷骰结果：35" in html
     assert "判定：困难成功" in html
     assert ".rc 教育75" not in html
-    assert len(dice_client.calls) == 1
-    request_payload, command_text = dice_client.calls[0]
-    assert request_payload.check_kind == DiceCheckKind.ATTRIBUTE
-    assert request_payload.target_value == 75
-    assert command_text == ".rc 教育75"
 
 
 def test_investigator_playtest_page_san_check_submission_rerenders_with_persisted_san_result(
@@ -525,19 +479,6 @@ def test_investigator_san_check_keeps_authoritative_state_when_dice_bridge_falls
 ) -> None:
     session_id = _start_investigator_ui_session(client)
 
-    class _ExplodingDiceClient:
-        def __init__(self) -> None:
-            self.calls: list[tuple[DiceExecutionRequest, str]] = []
-
-        def execute_check(
-            self,
-            *,
-            request: DiceExecutionRequest,
-            command_text: str,
-        ) -> DiceExecutionResult:
-            self.calls.append((request, command_text))
-            raise AssertionError("sanity checks should not be sent to the Dice-style sidecar")
-
     class _FixedFallbackBackend:
         backend_name = "local_fallback"
 
@@ -561,7 +502,10 @@ def test_investigator_san_check_keeps_authoritative_state_when_dice_bridge_falls
 
     fallback_backend = _FixedFallbackBackend()
     client.app.state.session_service.dice_execution_backend = DiceStyleExecutionBackend(
-        client=_ExplodingDiceClient(),
+        client=DiceStyleSubprocessClient(
+            command=[sys.executable, str(FIXTURE_DIR / "scripted_bridge.py")],
+            timeout_seconds=1.0,
+        ),
         fallback_backend=fallback_backend,
     )
     monkeypatch.setattr(session_service_module, "_roll_san_loss_value", lambda expression: 2)

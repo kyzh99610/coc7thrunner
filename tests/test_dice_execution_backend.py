@@ -1,17 +1,29 @@
 from __future__ import annotations
 
+import sys
+from pathlib import Path
+
+from fastapi.testclient import TestClient
+
 from coc_runner.application.dice_execution import (
     DiceCheckKind,
     DiceExecutionRequest,
     DiceExecutionResult,
     DiceExecutionUnavailableError,
     DiceStyleExecutionBackend,
+    DiceStyleSubprocessClient,
     LocalDiceExecutionBackend,
     UnsupportedDiceCheckError,
+    build_default_dice_style_subprocess_command,
     render_dice_style_command,
 )
+from coc_runner.config import Settings
 from coc_runner.domain.dice import D100Roll, RollOutcome
 from coc_runner.domain.models import LanguagePreference
+from coc_runner.main import create_app
+
+
+FIXTURE_DIR = Path(__file__).resolve().parent / "fixtures" / "dice_subprocess"
 
 
 def _build_roll(*, total: int, target: int, outcome: RollOutcome) -> D100Roll:
@@ -172,3 +184,85 @@ def test_dice_style_backend_falls_back_when_sidecar_unavailable_or_check_not_sup
     except UnsupportedDiceCheckError:
         with_exception = True
     assert with_exception is True
+
+
+def test_dice_style_subprocess_client_executes_real_external_bridge_process() -> None:
+    request = DiceExecutionRequest(
+        session_id="session-1",
+        actor_id="investigator-1",
+        check_kind=DiceCheckKind.SKILL,
+        label="图书馆使用",
+        target_value=70,
+        language_preference=LanguagePreference.ZH_CN,
+    )
+    client = DiceStyleSubprocessClient(
+        command=[sys.executable, str(FIXTURE_DIR / "scripted_bridge.py")],
+        timeout_seconds=1.0,
+    )
+
+    result = client.execute_check(
+        request=request,
+        command_text=".rc 图书馆使用70",
+    )
+
+    assert result.backend_name == "dice_style_subprocess_bridge"
+    assert result.roll.total == 24
+    assert result.success is True
+
+
+def test_dice_style_subprocess_client_reports_invalid_output_and_timeout() -> None:
+    request = DiceExecutionRequest(
+        session_id="session-1",
+        actor_id="investigator-1",
+        check_kind=DiceCheckKind.SKILL,
+        label="图书馆使用",
+        target_value=70,
+        language_preference=LanguagePreference.ZH_CN,
+    )
+
+    invalid_client = DiceStyleSubprocessClient(
+        command=[sys.executable, str(FIXTURE_DIR / "invalid_bridge.py")],
+        timeout_seconds=1.0,
+    )
+    try:
+        invalid_client.execute_check(
+            request=request,
+            command_text=".rc 图书馆使用70",
+        )
+        invalid_failed = False
+    except DiceExecutionUnavailableError:
+        invalid_failed = True
+    assert invalid_failed is True
+
+    timeout_client = DiceStyleSubprocessClient(
+        command=[sys.executable, str(FIXTURE_DIR / "slow_bridge.py")],
+        timeout_seconds=0.1,
+    )
+    try:
+        timeout_client.execute_check(
+            request=request,
+            command_text=".rc 图书馆使用70",
+        )
+        timeout_failed = False
+    except DiceExecutionUnavailableError:
+        timeout_failed = True
+    assert timeout_failed is True
+
+
+def test_create_app_can_enable_dice_style_subprocess_backend_mode() -> None:
+    db_path = Path("test-artifacts") / "dice_backend_mode_test.db"
+    db_path.parent.mkdir(parents=True, exist_ok=True)
+    app = create_app(
+        Settings(
+            db_url=f"sqlite:///{db_path}",
+            dice_backend_mode="dice_style_subprocess",
+            dice_subprocess_timeout_seconds=1.0,
+        )
+    )
+
+    with TestClient(app) as client:
+        backend = client.app.state.session_service.dice_execution_backend
+
+    assert isinstance(backend, DiceStyleExecutionBackend)
+    assert isinstance(backend._client, DiceStyleSubprocessClient)  # noqa: SLF001
+    assert backend._client.command == build_default_dice_style_subprocess_command()  # noqa: SLF001

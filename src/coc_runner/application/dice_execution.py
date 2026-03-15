@@ -1,8 +1,14 @@
 from __future__ import annotations
 
+import json
+import os
+import subprocess
+import sys
+from pathlib import Path
 from typing import Callable, Protocol
 
 from pydantic import BaseModel, Field
+from pydantic import ValidationError
 
 from coc_runner.compat import StrEnum
 from coc_runner.domain.dice import D100Roll, roll_d100
@@ -31,6 +37,11 @@ class DiceExecutionResult(BaseModel):
     backend_name: str = Field(min_length=1, max_length=80)
     roll: D100Roll
     success: bool
+
+
+class DiceStyleSubprocessPayload(BaseModel):
+    request: DiceExecutionRequest
+    command_text: str = Field(min_length=1, max_length=240)
 
 
 class DiceExecutionError(RuntimeError):
@@ -86,6 +97,67 @@ class LocalDiceExecutionBackend:
         )
 
 
+class DiceStyleSubprocessClient:
+    def __init__(
+        self,
+        *,
+        command: list[str],
+        timeout_seconds: float = 3.0,
+    ) -> None:
+        if not command:
+            raise ValueError("dice subprocess command must not be empty")
+        if timeout_seconds <= 0:
+            raise ValueError("dice subprocess timeout must be positive")
+        self.command = command
+        self.timeout_seconds = timeout_seconds
+
+    def execute_check(
+        self,
+        *,
+        request: DiceExecutionRequest,
+        command_text: str,
+    ) -> DiceExecutionResult:
+        payload = DiceStyleSubprocessPayload(
+            request=request,
+            command_text=command_text,
+        )
+        try:
+            environment = os.environ.copy()
+            environment.setdefault("PYTHONIOENCODING", "utf-8")
+            completed = subprocess.run(
+                self.command,
+                input=payload.model_dump_json(),
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                env=environment,
+                timeout=self.timeout_seconds,
+                check=False,
+            )
+        except FileNotFoundError as exc:
+            raise DiceExecutionUnavailableError(
+                f"dice subprocess is unavailable: {exc}"
+            ) from exc
+        except subprocess.TimeoutExpired as exc:
+            raise DiceExecutionUnavailableError(
+                "dice subprocess timed out before returning a result"
+            ) from exc
+        if completed.returncode != 0:
+            stderr = completed.stderr.strip()
+            detail = f": {stderr}" if stderr else ""
+            raise DiceExecutionUnavailableError(
+                f"dice subprocess exited with code {completed.returncode}{detail}"
+            )
+        stdout = completed.stdout.strip()
+        try:
+            parsed = json.loads(stdout)
+            return DiceExecutionResult.model_validate(parsed)
+        except (json.JSONDecodeError, ValidationError) as exc:
+            raise DiceExecutionUnavailableError(
+                "dice subprocess returned invalid result payload"
+            ) from exc
+
+
 class DiceStyleExecutionBackend:
     backend_name = "dice_style"
 
@@ -127,3 +199,8 @@ def render_dice_style_command(request: DiceExecutionRequest) -> str:
     if not normalized_label:
         raise ValueError("dice execution label must not be blank")
     return f".rc {normalized_label}{request.target_value}"
+
+
+def build_default_dice_style_subprocess_command() -> list[str]:
+    bridge_module_path = Path(__file__).with_name("dice_style_subprocess_bridge.py")
+    return [sys.executable, str(bridge_module_path)]
