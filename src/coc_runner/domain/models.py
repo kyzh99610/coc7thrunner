@@ -1790,6 +1790,11 @@ class UpsertSuggestionHookRequest(BaseModel):
         return normalized
 
 
+class SeedSuggestionHookRequest(BaseModel):
+    operator_id: str = Field(min_length=1, max_length=80)
+    language_preference: LanguagePreference | None = None
+
+
 class UpdateKeeperPromptResponse(BaseModel):
     message: str
     session_id: str

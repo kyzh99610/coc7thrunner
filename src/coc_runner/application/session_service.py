@@ -95,6 +95,7 @@ from coc_runner.domain.models import (
     SessionStartRequest,
     SessionStartResponse,
     SessionState,
+    SeedSuggestionHookRequest,
     SuggestionHookMaterial,
     StatusEffect,
     UpsertSuggestionHookRequest,
@@ -726,6 +727,171 @@ class SessionService:
         )
         return self._message("scene_hook_material_saved", effective_language)
 
+    def seed_character_suggestion_hook(
+        self,
+        session_id: str,
+        actor_id: str,
+        request: SeedSuggestionHookRequest,
+    ) -> str:
+        error_language = self._resolve_language(request.language_preference)
+        try:
+            session = self._load_session(session_id, language=error_language)
+        except LookupError as exc:
+            message = exc.args[0] if exc.args and isinstance(exc.args[0], str) else self._message(
+                "session_not_found",
+                error_language,
+                session_id=session_id,
+            )
+            raise LookupError(
+                build_session_action_error_detail(
+                    code="character_hook_seed_session_not_found",
+                    message=message,
+                    scope="character_hook_seed_session",
+                    session_id=session_id,
+                    actor_id=actor_id,
+                )
+            ) from exc
+        effective_language = self._resolve_language(
+            request.language_preference,
+            session.language_preference,
+        )
+        participant = self._get_participant(session, actor_id, language=effective_language)
+        current_time = datetime.now(timezone.utc)
+        expected_version = session.state_version
+        self._authorize_operator(
+            session,
+            operator_id=request.operator_id,
+            language=effective_language,
+            error_detail=build_session_action_error_detail(
+                code="hook_material_operator_not_authorized",
+                message=self._message("keeper_prompt_operator_not_authorized", effective_language),
+                scope="hook_material_operator",
+                session_id=session_id,
+                operator_id=request.operator_id,
+            ),
+        )
+        seeded_hook = self._build_seeded_character_hook_material(
+            participant=participant,
+            current_time=current_time,
+        )
+        hook = self._upsert_suggestion_hook_material(
+            participant.suggestion_hooks,
+            hook_label=seeded_hook.hook_label,
+            hook_text=seeded_hook.hook_text,
+            current_time=current_time,
+        )
+        session.audit_log.append(
+            AuditLogEntry(
+                action=AuditActionType.HOOK_MATERIAL_UPDATED,
+                actor_id=request.operator_id,
+                subject_id=participant.actor_id,
+                session_version=expected_version + 1,
+                details={
+                    "hook_scope": "character_seed",
+                    "hook_id": hook.hook_id,
+                    "hook_label": hook.hook_label,
+                },
+                created_at=current_time,
+            )
+        )
+        session.state_version += 1
+        session.updated_at = current_time
+        self._save_session(
+            session,
+            expected_version=expected_version,
+            reason="character_hook_material_seeded",
+            language=effective_language,
+        )
+        return self._message("character_hook_material_seeded", effective_language)
+
+    def seed_scene_suggestion_hook(
+        self,
+        session_id: str,
+        scene_id: str,
+        request: SeedSuggestionHookRequest,
+    ) -> str:
+        error_language = self._resolve_language(request.language_preference)
+        try:
+            session = self._load_session(session_id, language=error_language)
+        except LookupError as exc:
+            message = exc.args[0] if exc.args and isinstance(exc.args[0], str) else self._message(
+                "session_not_found",
+                error_language,
+                session_id=session_id,
+            )
+            raise LookupError(
+                build_session_action_error_detail(
+                    code="scene_hook_seed_session_not_found",
+                    message=message,
+                    scope="scene_hook_seed_session",
+                    session_id=session_id,
+                    scene_id=scene_id,
+                )
+            ) from exc
+        effective_language = self._resolve_language(
+            request.language_preference,
+            session.language_preference,
+        )
+        current_time = datetime.now(timezone.utc)
+        expected_version = session.state_version
+        self._authorize_operator(
+            session,
+            operator_id=request.operator_id,
+            language=effective_language,
+            error_detail=build_session_action_error_detail(
+                code="hook_material_operator_not_authorized",
+                message=self._message("keeper_prompt_operator_not_authorized", effective_language),
+                scope="hook_material_operator",
+                session_id=session_id,
+                operator_id=request.operator_id,
+            ),
+        )
+        scene = self._find_scenario_scene(
+            session.scenario.scenes,
+            scene_id=scene_id,
+            scene_title=None,
+        )
+        if scene is None:
+            raise LookupError(
+                build_session_action_error_detail(
+                    code="scene_hook_not_found",
+                    message=self._message("scene_not_found", effective_language, scene_id=scene_id),
+                    scope="scene_hook_scene",
+                    session_id=session_id,
+                    scene_id=scene_id,
+                )
+            )
+        seeded_hook = self._build_seeded_scene_hook_material(scene=scene, current_time=current_time)
+        hook = self._upsert_suggestion_hook_material(
+            scene.suggestion_hooks,
+            hook_label=seeded_hook.hook_label,
+            hook_text=seeded_hook.hook_text,
+            current_time=current_time,
+        )
+        session.audit_log.append(
+            AuditLogEntry(
+                action=AuditActionType.HOOK_MATERIAL_UPDATED,
+                actor_id=request.operator_id,
+                subject_id=scene.scene_id,
+                session_version=expected_version + 1,
+                details={
+                    "hook_scope": "scene_seed",
+                    "hook_id": hook.hook_id,
+                    "hook_label": hook.hook_label,
+                },
+                created_at=current_time,
+            )
+        )
+        session.state_version += 1
+        session.updated_at = current_time
+        self._save_session(
+            session,
+            expected_version=expected_version,
+            reason="scene_hook_material_seeded",
+            language=effective_language,
+        )
+        return self._message("scene_hook_material_seeded", effective_language)
+
     @staticmethod
     def _upsert_suggestion_hook_material(
         hooks: list[SuggestionHookMaterial],
@@ -747,6 +913,57 @@ class SessionService:
         )
         hooks.append(hook)
         return hook
+
+    @staticmethod
+    def _trim_seed_hook_text(*parts: str, max_length: int = 200) -> str:
+        normalized_parts = [part.strip() for part in parts if part and part.strip()]
+        if not normalized_parts:
+            return ""
+        text = " ".join(normalized_parts)
+        if len(text) <= max_length:
+            return text
+        return text[: max_length - 1].rstrip() + "…"
+
+    def _build_seeded_character_hook_material(
+        self,
+        *,
+        participant: SessionParticipant,
+        current_time: datetime,
+    ) -> SuggestionHookMaterial:
+        occupation = participant.character.occupation.strip()
+        hook_label = f"职业钩子：{occupation}" if occupation else f"角色钩子：{participant.display_name}"
+        note_text = (
+            participant.character.notes.strip()
+            if isinstance(participant.character.notes, str) and participant.character.notes.strip()
+            else ""
+        )
+        hook_text = self._trim_seed_hook_text(
+            f"{occupation}的职业视角会放大对异常线索与失序叙述的敏感度。" if occupation else "",
+            note_text,
+        )
+        return SuggestionHookMaterial(
+            hook_label=hook_label,
+            hook_text=hook_text or f"{participant.display_name}会对异常刺激表现出更鲜明的个人反应。",
+            created_at=current_time,
+            updated_at=current_time,
+        )
+
+    def _build_seeded_scene_hook_material(
+        self,
+        *,
+        scene: ScenarioScene,
+        current_time: datetime,
+    ) -> SuggestionHookMaterial:
+        hook_label = f"场景钩子：{scene.title.strip()}"
+        hook_text = self._trim_seed_hook_text(
+            f"{scene.title.strip()}的压抑氛围会放大异常显现带来的不安。",
+        )
+        return SuggestionHookMaterial(
+            hook_label=hook_label,
+            hook_text=hook_text,
+            created_at=current_time,
+            updated_at=current_time,
+        )
 
     def _build_san_aftermath_suggestions(
         self,
@@ -7582,6 +7799,8 @@ class SessionService:
             "san_aftermath_prompt_reason": "SAN {previous_sanity} -> {current_sanity}（损失 {loss_applied}）",
             "character_hook_material_saved": "角色钩子素材已保存",
             "scene_hook_material_saved": "场景钩子素材已保存",
+            "character_hook_material_seeded": "已从当前角色上下文生成初始钩子",
+            "scene_hook_material_seeded": "已从当前场景上下文生成初始钩子",
             "san_check_session_completed": "本局已结束，当前页面不再进行新的理智检定。",
             "san_check_invalid": "理智检定参数无效",
             "san_check_loss_invalid": "理智损失表达式“{expression}”无效；当前只支持整数或 NdM，例如 0、1、1d3、1d6。",
@@ -7713,6 +7932,8 @@ class SessionService:
             "san_aftermath_prompt_reason": "SAN {previous_sanity} -> {current_sanity} (loss {loss_applied})",
             "character_hook_material_saved": "Character hook material saved",
             "scene_hook_material_saved": "Scene hook material saved",
+            "character_hook_material_seeded": "Seeded an initial character hook from current role context",
+            "scene_hook_material_seeded": "Seeded an initial scene hook from current scene context",
             "san_check_session_completed": "This session is completed and no longer accepts new SAN checks.",
             "san_check_invalid": "SAN check request is invalid",
             "san_check_loss_invalid": "SAN loss expression {expression} is invalid; only integers or NdM such as 0, 1, 1d3, or 1d6 are supported.",

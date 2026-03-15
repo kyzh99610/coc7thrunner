@@ -39,6 +39,7 @@ from coc_runner.domain.models import (
     PlayerActionRequest,
     ReviewDraftRequest,
     RestoreCheckpointRequest,
+    SeedSuggestionHookRequest,
     SessionStatus,
     UpsertSuggestionHookRequest,
     UpdateSessionLifecycleRequest,
@@ -1976,6 +1977,7 @@ def _render_hook_materials_panel(
       <section class="panel" id="hook-materials">
         <h2>钩子素材</h2>
         <p class="help">这些 very small 的角色/场景素材只会进入理智后续建议层，不会自动替 KP 完成最终裁定。</p>
+        <p class="help">当前 seed 只会读取本局里已有的角色职业/角色备注与场景标题/摘要，不会读取 Excel 或 scenario 文件夹。</p>
         <div class="summary-grid">
           <article class="summary-card">
             <h3>角色钩子</h3>
@@ -2000,6 +2002,16 @@ def _render_hook_materials_panel(
               </label>
               <button type="submit">保存角色钩子</button>
             </form>
+            <form method="post" action="/playtest/sessions/{escape(session_id)}/keeper/hooks/characters/seed#hook-materials" data-submit-label="生成中...">
+              <input type="hidden" name="operator_id" value="{escape(operator_id)}" />
+              <label>
+                actor_id
+                <select name="actor_id">
+                  {character_options}
+                </select>
+              </label>
+              <button type="submit">从当前角色上下文生成初始钩子</button>
+            </form>
           </article>
           <article class="summary-card">
             <h3>场景钩子</h3>
@@ -2023,6 +2035,16 @@ def _render_hook_materials_panel(
                 <textarea name="hook_text" rows="2" placeholder="一句 very small 的场景钩子素材。"></textarea>
               </label>
               <button type="submit">保存场景钩子</button>
+            </form>
+            <form method="post" action="/playtest/sessions/{escape(session_id)}/keeper/hooks/scenes/seed#hook-materials" data-submit-label="生成中...">
+              <input type="hidden" name="operator_id" value="{escape(operator_id)}" />
+              <label>
+                scene_id
+                <select name="scene_id">
+                  {scene_options}
+                </select>
+              </label>
+              <button type="submit">从当前场景上下文生成初始钩子</button>
             </form>
           </article>
         </div>
@@ -3620,6 +3642,62 @@ async def upsert_scene_hook_via_keeper_dashboard(
                 hook_label=hook_label,
                 hook_text=hook_text,
             ),
+        )
+        return _render_keeper_dashboard_from_service(
+            service=service,
+            session_id=session_id,
+            notice=notice,
+        )
+    except (ValidationError, LookupError, PermissionError, ConflictError, ValueError) as exc:
+        return _render_playtest_exception(
+            _render_keeper_dashboard_from_service,
+            exc=exc,
+            service=service,
+            session_id=session_id,
+        )
+
+
+@router.post("/sessions/{session_id}/keeper/hooks/characters/seed", response_class=HTMLResponse)
+async def seed_character_hook_via_keeper_dashboard(
+    session_id: str,
+    request: Request,
+    service: SessionService = Depends(get_session_service),
+) -> HTMLResponse:
+    form = await _read_form_payload(request)
+    actor_id = _normalize_form_text(form.get("actor_id")) or ""
+    try:
+        notice = service.seed_character_suggestion_hook(
+            session_id,
+            actor_id,
+            SeedSuggestionHookRequest(operator_id=form.get("operator_id", "")),
+        )
+        return _render_keeper_dashboard_from_service(
+            service=service,
+            session_id=session_id,
+            notice=notice,
+        )
+    except (ValidationError, LookupError, PermissionError, ConflictError, ValueError) as exc:
+        return _render_playtest_exception(
+            _render_keeper_dashboard_from_service,
+            exc=exc,
+            service=service,
+            session_id=session_id,
+        )
+
+
+@router.post("/sessions/{session_id}/keeper/hooks/scenes/seed", response_class=HTMLResponse)
+async def seed_scene_hook_via_keeper_dashboard(
+    session_id: str,
+    request: Request,
+    service: SessionService = Depends(get_session_service),
+) -> HTMLResponse:
+    form = await _read_form_payload(request)
+    scene_id = _normalize_form_text(form.get("scene_id")) or ""
+    try:
+        notice = service.seed_scene_suggestion_hook(
+            session_id,
+            scene_id,
+            SeedSuggestionHookRequest(operator_id=form.get("operator_id", "")),
         )
         return _render_keeper_dashboard_from_service(
             service=service,

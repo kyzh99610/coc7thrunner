@@ -820,6 +820,149 @@ def test_keeper_dashboard_san_suggestions_prefer_character_and_scene_hook_materi
     assert "自动随机疯狂结果" not in html
 
 
+def test_keeper_dashboard_can_seed_character_and_scene_hook_materials_from_current_context(
+    client: TestClient,
+) -> None:
+    session_id = _start_keeper_dashboard_session(client)
+
+    dashboard_response = client.get(f"/playtest/sessions/{session_id}/keeper")
+
+    assert dashboard_response.status_code == 200
+    dashboard_html = dashboard_response.text
+    assert "钩子素材" in dashboard_html
+    assert "不会读取 Excel 或 scenario 文件夹" in dashboard_html
+    assert "从当前角色上下文生成初始钩子" in dashboard_html
+    assert "从当前场景上下文生成初始钩子" in dashboard_html
+
+    character_seed_response = client.post(
+        f"/playtest/sessions/{session_id}/keeper/hooks/characters/seed",
+        data={
+            "operator_id": KEEPER_ID,
+            "actor_id": "investigator-1",
+        },
+    )
+    assert character_seed_response.status_code == 200
+    character_seed_html = character_seed_response.text
+    assert "已从当前角色上下文生成初始钩子" in character_seed_html
+    assert "职业钩子：记者" in character_seed_html
+    assert "记者的职业视角会放大对异常线索与失序叙述的敏感度。" in character_seed_html
+
+    scene_seed_response = client.post(
+        f"/playtest/sessions/{session_id}/keeper/hooks/scenes/seed",
+        data={
+            "operator_id": KEEPER_ID,
+            "scene_id": "scene.guesthouse_lobby",
+        },
+    )
+    assert scene_seed_response.status_code == 200
+    scene_seed_html = scene_seed_response.text
+    assert "已从当前场景上下文生成初始钩子" in scene_seed_html
+    assert "场景钩子：雾港旅店大堂" in scene_seed_html
+    assert "雾港旅店大堂的压抑氛围会放大异常显现带来的不安。" in scene_seed_html
+
+    snapshot = _get_snapshot(client, session_id)
+    investigator = next(
+        participant
+        for participant in snapshot["participants"]
+        if participant["actor_id"] == "investigator-1"
+    )
+    lobby_scene = next(
+        scene
+        for scene in snapshot["scenario"]["scenes"]
+        if scene["scene_id"] == "scene.guesthouse_lobby"
+    )
+    assert investigator["imported_character_source_id"] is None
+    assert investigator["suggestion_hooks"] == [
+        {
+            "hook_id": investigator["suggestion_hooks"][0]["hook_id"],
+            "hook_label": "职业钩子：记者",
+            "hook_text": "记者的职业视角会放大对异常线索与失序叙述的敏感度。",
+            "created_at": investigator["suggestion_hooks"][0]["created_at"],
+            "updated_at": investigator["suggestion_hooks"][0]["updated_at"],
+        }
+    ]
+    assert lobby_scene["suggestion_hooks"] == [
+        {
+            "hook_id": lobby_scene["suggestion_hooks"][0]["hook_id"],
+            "hook_label": "场景钩子：雾港旅店大堂",
+            "hook_text": "雾港旅店大堂的压抑氛围会放大异常显现带来的不安。",
+            "created_at": lobby_scene["suggestion_hooks"][0]["created_at"],
+            "updated_at": lobby_scene["suggestion_hooks"][0]["updated_at"],
+        }
+    ]
+
+
+def test_keeper_dashboard_san_suggestions_can_read_seeded_hook_materials_without_file_sync(
+    client: TestClient,
+    monkeypatch,
+) -> None:
+    session_id = _start_keeper_dashboard_session(client)
+
+    character_seed_response = client.post(
+        f"/playtest/sessions/{session_id}/keeper/hooks/characters/seed",
+        data={
+            "operator_id": KEEPER_ID,
+            "actor_id": "investigator-1",
+        },
+    )
+    assert character_seed_response.status_code == 200
+
+    scene_seed_response = client.post(
+        f"/playtest/sessions/{session_id}/keeper/hooks/scenes/seed",
+        data={
+            "operator_id": KEEPER_ID,
+            "scene_id": "scene.guesthouse_lobby",
+        },
+    )
+    assert scene_seed_response.status_code == 200
+
+    def _fixed_roll(
+        target: int,
+        *,
+        seed: int | None = None,
+        bonus_dice: int = 0,
+        penalty_dice: int = 0,
+    ) -> D100Roll:
+        return D100Roll(
+            seed=seed,
+            unit_die=8,
+            tens_dice=[8],
+            selected_tens=8,
+            total=88,
+            target=target,
+            bonus_dice=bonus_dice,
+            penalty_dice=penalty_dice,
+            outcome=RollOutcome.FAILURE,
+        )
+
+    monkeypatch.setattr(session_service_module, "roll_d100", _fixed_roll)
+    monkeypatch.setattr(session_service_module, "_roll_san_loss_value", lambda expression: 3)
+
+    san_response = client.post(
+        f"/playtest/sessions/{session_id}/investigator/investigator-1/san-check",
+        data={
+            "source_label": "黄衣之王的近距离显现",
+            "success_loss": "1",
+            "failure_loss": "1d6",
+        },
+    )
+    assert san_response.status_code == 200
+
+    keeper_response = client.get(f"/playtest/sessions/{session_id}/keeper")
+
+    assert keeper_response.status_code == 200
+    html = keeper_response.text
+    assert "建议参考" in html
+    assert "建议标签：职业钩子：记者" in html
+    assert "角色钩子：记者的职业视角会放大对异常线索与失序叙述的敏感度。" in html
+    assert "建议标签：场景钩子：雾港旅店大堂" in html
+    assert "场景钩子：雾港旅店大堂的压抑氛围会放大异常显现带来的不安。" in html
+    assert 'name="aftermath_label"' in html
+    assert 'value="职业钩子：记者"' not in html
+    assert 'value="场景钩子：雾港旅店大堂"' not in html
+    assert "自动随机疯狂结果" not in html
+
+
 def test_keeper_dashboard_lifecycle_controls_transition_status_and_render_closeout_summary(
     client: TestClient,
 ) -> None:
