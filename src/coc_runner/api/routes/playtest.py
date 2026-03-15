@@ -919,6 +919,8 @@ def _render_prompt_jump_targets(
         trigger_reason = prompt.get("trigger_reason")
         beat_id = prompt.get("beat_id")
         scene_id = prompt.get("scene_id")
+        aftermath_label = prompt.get("aftermath_label")
+        duration_rounds = prompt.get("duration_rounds")
         notes = prompt.get("notes") or []
         notes_block = (
             "<ul>"
@@ -926,6 +928,44 @@ def _render_prompt_jump_targets(
             + "</ul>"
             if notes
             else '<p class="muted">当前还没有备注。</p>'
+        )
+        aftermath_resolution_block = (
+            (
+                f'<p class="meta-line">后续标签：{escape(str(aftermath_label))}</p>'
+                if aftermath_label
+                else ""
+            )
+            + (
+                f'<p class="meta-line">持续：{escape(str(duration_rounds))} 回合</p>'
+                if duration_rounds not in (None, "")
+                else ""
+            )
+        )
+        aftermath_fields = (
+            f"""
+                <label>
+                  后续标签
+                  <input
+                    type="text"
+                    name="aftermath_label"
+                    value="{escape(str(aftermath_label or ''), quote=True)}"
+                    placeholder="例如：偏执怀疑"
+                  />
+                </label>
+                <label>
+                  持续回合
+                  <input
+                    type="number"
+                    name="duration_rounds"
+                    min="1"
+                    value="{escape(str(duration_rounds or ''), quote=True)}"
+                    placeholder="例如：3"
+                  />
+                </label>
+                <p class="help">理智后续以 KP 手动裁定为主：填写后续标签与持续回合，再决定是否标记完成。</p>
+            """
+            if category == "san_aftermath"
+            else ""
         )
         cards.append(
             f"""
@@ -959,11 +999,13 @@ def _render_prompt_jump_targets(
                 <p class="meta-line">当前备注</p>
                 {notes_block}
               </div>
+              {aftermath_resolution_block}
               <p class="meta-line">
                 处理入口：<code>/sessions/{escape(session_id)}/keeper-prompts/{escape(prompt_id)}/status</code>
               </p>
               <form method="post" action="/playtest/sessions/{escape(session_id)}/keeper/prompts/{escape(prompt_id)}/status#prompt-{escape(prompt_id)}" data-submit-label="提交中...">
                 <input type="hidden" name="operator_id" value="{escape(operator_id)}" />
+                {aftermath_fields}
                 <label>
                   备注（可选）
                   <textarea name="note" rows="2" placeholder="可选。顺手留一句处理说明。"></textarea>
@@ -1348,8 +1390,27 @@ def _render_san_aftermath_panel(prompts: list[dict[str, Any]]) -> str:
         for prompt in san_prompts[:4]:
             prompt_id = str(prompt.get("prompt_id") or "prompt")
             notes = prompt.get("notes") or []
+            aftermath_label = prompt.get("aftermath_label")
+            duration_rounds = prompt.get("duration_rounds")
             notes_block = (
                 f'<p class="meta-line">备注：{escape(str(notes[-1]))}</p>' if notes else ""
+            )
+            adjudication_block = (
+                (
+                    f'<p class="meta-line">后续标签：{escape(str(aftermath_label))}</p>'
+                    if aftermath_label
+                    else ""
+                )
+                + (
+                    f'<p class="meta-line">持续：{escape(str(duration_rounds))} 回合</p>'
+                    if duration_rounds not in (None, "")
+                    else ""
+                )
+            )
+            action_link = (
+                f'<p class="meta-line"><a class="action-link" href="#prompt-{escape(prompt_id)}">处理此理智后续</a></p>'
+                if prompt.get("status") in {None, "pending", "acknowledged"}
+                else ""
             )
             cards.append(
                 f"""
@@ -1360,8 +1421,9 @@ def _render_san_aftermath_panel(prompts: list[dict[str, Any]]) -> str:
                   </div>
                   <p>{escape(str(prompt.get('trigger_reason') or '当前没有额外的理智变化说明。'))}</p>
                   <p class="meta-line">状态：{escape(_render_keeper_prompt_status_label(prompt.get('status')))}</p>
+                  {adjudication_block}
                   {notes_block}
-                  <p class="meta-line"><a class="action-link" href="#prompt-{escape(prompt_id)}">处理此理智后续</a></p>
+                  {action_link}
                 </article>
                 """
             )
@@ -1831,6 +1893,7 @@ def _render_keeper_dashboard_page(
     current_beat_id = progress_state.get("current_beat")
     current_beat = beats.get(current_beat_id) if current_beat_id else None
     active_prompts = workflow.get("active_prompts") or []
+    queued_prompts = progress_state.get("queued_kp_prompts") or []
     pending_drafts = [
         draft
         for draft in current_view.get("visible_draft_actions") or []
@@ -1915,7 +1978,7 @@ def _render_keeper_dashboard_page(
           {_render_attention_block(title='未完成目标', items=objective_items, empty_text='当前没有未完成目标。')}
         </div>
       </section>
-      {_render_san_aftermath_panel(active_prompts)}
+      {_render_san_aftermath_panel(queued_prompts)}
       {_render_keeper_live_control_panel(
           keeper_view=current_view,
           session_id=session_id,
@@ -3476,6 +3539,8 @@ async def update_keeper_prompt_via_dashboard(
 ) -> HTMLResponse:
     form = await _read_form_payload(request)
     note = _normalize_form_text(form.get("note")) or None
+    aftermath_label = _normalize_form_text(form.get("aftermath_label")) or None
+    duration_rounds = _normalize_form_text(form.get("duration_rounds")) or None
     try:
         response = service.update_keeper_prompt_status(
             session_id,
@@ -3484,6 +3549,8 @@ async def update_keeper_prompt_via_dashboard(
                 operator_id=form.get("operator_id", ""),
                 status=form.get("status"),
                 add_notes=[note] if note else [],
+                aftermath_label=aftermath_label,
+                duration_rounds=duration_rounds,
             ),
         )
         notice = response.message

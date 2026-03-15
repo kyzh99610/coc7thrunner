@@ -2387,6 +2387,8 @@ class SessionService:
                 add_notes=request.add_notes,
                 priority=request.priority,
                 assigned_to=request.assigned_to,
+                aftermath_label=request.aftermath_label,
+                duration_rounds=request.duration_rounds,
                 current_time=current_time,
                 language=effective_language,
             )
@@ -2400,6 +2402,8 @@ class SessionService:
                     "status": request.status.value if request.status is not None else None,
                     "priority": request.priority.value if request.priority is not None else None,
                     "assigned_to": request.assigned_to,
+                    "aftermath_label": request.aftermath_label,
+                    "duration_rounds": request.duration_rounds,
                     "note_count_added": len(request.add_notes),
                 },
             )
@@ -3995,9 +3999,33 @@ class SessionService:
         add_notes: list[str],
         priority: KeeperPromptPriority | None,
         assigned_to: str | None,
+        aftermath_label: str | None,
+        duration_rounds: int | None,
         current_time: datetime,
         language: LanguagePreference,
     ) -> None:
+        if prompt.category != "san_aftermath" and (
+            aftermath_label is not None or duration_rounds is not None
+        ):
+            raise ValueError(
+                self._message("keeper_prompt_aftermath_fields_unsupported", language)
+            )
+        if prompt.category == "san_aftermath":
+            if aftermath_label is not None:
+                prompt.aftermath_label = aftermath_label.strip()
+                prompt.updated_at = current_time
+            if duration_rounds is not None:
+                prompt.duration_rounds = duration_rounds
+                prompt.updated_at = current_time
+            if status == KeeperPromptStatus.COMPLETED and (
+                not prompt.aftermath_label or prompt.duration_rounds is None
+            ):
+                raise ValueError(
+                    self._message(
+                        "san_aftermath_completion_requires_resolution",
+                        language,
+                    )
+                )
         if status is not None:
             self._transition_keeper_prompt(
                 prompt,
@@ -7280,6 +7308,8 @@ class SessionService:
             "keeper_prompt_status_updated": "KP 提示状态已更新为 {status}",
             "keeper_prompt_status_invalid": "KP 提示不能从 {from_status} 变更为 {to_status}",
             "keeper_prompt_terminal": "KP 提示 {prompt_id} 已结束，不能再次变更状态",
+            "keeper_prompt_aftermath_fields_unsupported": "当前 KP 提示不支持理智后续裁定字段。",
+            "san_aftermath_completion_requires_resolution": "理智后续裁定在标记完成前必须填写后续标签和持续回合。",
             "objective_not_found": "未找到目标 {objective_id}",
             "objective_already_completed": "目标“{objective}”已经完成",
             "objective_not_completed": "目标“{objective}”当前尚未完成",
@@ -7407,6 +7437,8 @@ class SessionService:
             "keeper_prompt_status_updated": "KP prompt status updated to {status}",
             "keeper_prompt_status_invalid": "KP prompt cannot transition from {from_status} to {to_status}",
             "keeper_prompt_terminal": "KP prompt {prompt_id} is terminal and cannot change again",
+            "keeper_prompt_aftermath_fields_unsupported": "This KP prompt does not support SAN aftermath adjudication fields.",
+            "san_aftermath_completion_requires_resolution": "SAN aftermath resolution requires both an aftermath label and duration before completion.",
             "objective_not_found": "Objective {objective_id} was not found",
             "objective_already_completed": "Objective {objective} is already completed",
             "objective_not_completed": "Objective {objective} is not completed",
