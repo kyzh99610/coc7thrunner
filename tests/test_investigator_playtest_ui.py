@@ -63,6 +63,11 @@ def test_investigator_playtest_page_opens_with_summary_and_action_form(
     assert 'value="strength"' in html
     assert 'value="education"' in html
     assert "开始属性检定" in html
+    assert "快速理智检定" in html
+    assert 'name="source_label"' in html
+    assert 'name="success_loss"' in html
+    assert 'name="failure_loss"' in html
+    assert "开始理智检定" in html
     assert "本局已结束" not in html
     assert f'/playtest/sessions/{session_id}/home"' in html
     assert "最近可见事件" in html
@@ -112,6 +117,8 @@ def test_investigator_playtest_page_shows_completed_notice_and_hides_action_form
     assert "本局已结束，当前页面不再进行新的技能检定。" in html
     assert "快速属性检定" in html
     assert "本局已结束，当前页面不再进行新的属性检定。" in html
+    assert "快速理智检定" in html
+    assert "本局已结束，当前页面不再进行新的理智检定。" in html
     assert "职业：记者" in html
     assert "图书馆使用 70" in html
     assert "私有备注与记录" in html
@@ -119,9 +126,13 @@ def test_investigator_playtest_page_shows_completed_notice_and_hides_action_form
     assert 'name="action_text"' not in html
     assert 'name="skill_name"' not in html
     assert 'name="attribute_name"' not in html
+    assert 'name="source_label"' not in html
+    assert 'name="success_loss"' not in html
+    assert 'name="failure_loss"' not in html
     assert "提交行动" not in html
     assert "开始检定" not in html
     assert "开始属性检定" not in html
+    assert "开始理智检定" not in html
 
 
 def test_investigator_playtest_page_preserves_private_visibility_without_keeper_leakage(
@@ -328,6 +339,131 @@ def test_investigator_playtest_page_attribute_check_submission_rerenders_with_re
     assert html.index("项目：教育") < html.index("数值：75")
     assert html.index("数值：75") < html.index("掷骰结果：22")
     assert html.index("掷骰结果：22") < html.index("判定：困难成功")
+
+
+def test_investigator_playtest_page_san_check_submission_rerenders_with_result_without_persisting_san(
+    client: TestClient,
+    monkeypatch,
+) -> None:
+    session_id = _start_investigator_ui_session(client)
+
+    def _fixed_roll(
+        target: int,
+        *,
+        seed: int | None = None,
+        bonus_dice: int = 0,
+        penalty_dice: int = 0,
+    ) -> D100Roll:
+        return D100Roll(
+            seed=seed,
+            unit_die=8,
+            tens_dice=[8],
+            selected_tens=8,
+            total=88,
+            target=target,
+            bonus_dice=bonus_dice,
+            penalty_dice=penalty_dice,
+            outcome=RollOutcome.FAILURE,
+        )
+
+    monkeypatch.setattr(session_service_module, "roll_d100", _fixed_roll)
+    monkeypatch.setattr(session_service_module, "_roll_san_loss_value", lambda expression: 3)
+
+    before_snapshot = _get_snapshot(client, session_id)
+    before_sanity = before_snapshot["character_states"]["investigator-1"]["current_sanity"]
+
+    response = client.post(
+        f"/playtest/sessions/{session_id}/investigator/investigator-1/san-check",
+        data={
+            "source_label": "黄衣之王的近距离显现",
+            "success_loss": "1",
+            "failure_loss": "1d6",
+        },
+    )
+
+    assert response.status_code == 200
+    html = response.text
+    assert "最近一次检定结果" in html
+    assert "已完成理智检定（仅显示结果，未写入 SAN 变化）" in html
+    assert "类型：理智检定" in html
+    assert "项目：黄衣之王的近距离显现" in html
+    assert "数值：60" in html
+    assert "掷骰结果：88" in html
+    assert "判定：失败" in html
+    assert "成功损失：1" in html
+    assert "失败损失：1d6" in html
+    assert "本次 SAN 损失：3（依据 1d6）" in html
+
+    after_snapshot = _get_snapshot(client, session_id)
+    assert after_snapshot["character_states"]["investigator-1"]["current_sanity"] == before_sanity
+
+
+def test_investigator_san_check_supports_contextual_loss_parameters_without_fixed_monster_mapping(
+    client: TestClient,
+    monkeypatch,
+) -> None:
+    session_id = _start_investigator_ui_session(client)
+
+    def _fixed_roll(
+        target: int,
+        *,
+        seed: int | None = None,
+        bonus_dice: int = 0,
+        penalty_dice: int = 0,
+    ) -> D100Roll:
+        return D100Roll(
+            seed=seed,
+            unit_die=7,
+            tens_dice=[7],
+            selected_tens=7,
+            total=77,
+            target=target,
+            bonus_dice=bonus_dice,
+            penalty_dice=penalty_dice,
+            outcome=RollOutcome.FAILURE,
+        )
+
+    def _fixed_san_loss(expression: str) -> int:
+        return {
+            "1d3": 2,
+            "1d6": 5,
+            "0": 0,
+            "1": 1,
+        }[expression]
+
+    monkeypatch.setattr(session_service_module, "roll_d100", _fixed_roll)
+    monkeypatch.setattr(session_service_module, "_roll_san_loss_value", _fixed_san_loss)
+
+    subtle_response = client.post(
+        f"/playtest/sessions/{session_id}/investigator/investigator-1/san-check",
+        data={
+            "source_label": "哈斯塔的模糊倒影",
+            "success_loss": "0",
+            "failure_loss": "1d3",
+        },
+    )
+    direct_response = client.post(
+        f"/playtest/sessions/{session_id}/investigator/investigator-1/san-check",
+        data={
+            "source_label": "哈斯塔的近距离显现",
+            "success_loss": "1",
+            "failure_loss": "1d6",
+        },
+    )
+
+    assert subtle_response.status_code == 200
+    subtle_html = subtle_response.text
+    assert "项目：哈斯塔的模糊倒影" in subtle_html
+    assert "成功损失：0" in subtle_html
+    assert "失败损失：1d3" in subtle_html
+    assert "本次 SAN 损失：2（依据 1d3）" in subtle_html
+
+    assert direct_response.status_code == 200
+    direct_html = direct_response.text
+    assert "项目：哈斯塔的近距离显现" in direct_html
+    assert "成功损失：1" in direct_html
+    assert "失败损失：1d6" in direct_html
+    assert "本次 SAN 损失：5（依据 1d6）" in direct_html
 
 
 def test_investigator_playtest_page_invalid_action_shows_structured_error(

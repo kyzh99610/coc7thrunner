@@ -33,6 +33,7 @@ from coc_runner.domain.models import (
     CreateCheckpointRequest,
     EventType,
     InvestigatorAttributeCheckRequest,
+    InvestigatorSanCheckRequest,
     InvestigatorSkillCheckRequest,
     KeeperLiveControlRequest,
     PlayerActionRequest,
@@ -2345,7 +2346,11 @@ def _render_investigator_check_result(
     numeric_value: Any,
     roll_total: Any,
     outcome_value: Any,
+    extra_lines: list[str] | None = None,
 ) -> str:
+    rendered_extra_lines = "".join(
+        f"<p>{escape(str(line))}</p>" for line in (extra_lines or [])
+    )
     return (
         '<section class="feedback feedback-success">'
         "<h2>最近一次检定结果</h2>"
@@ -2355,6 +2360,7 @@ def _render_investigator_check_result(
         f"<p>数值：{escape(str(numeric_value))}</p>"
         f"<p>掷骰结果：{escape(str(roll_total))}</p>"
         f"<p>判定：{escape(_render_skill_check_outcome_label(outcome_value))}</p>"
+        f"{rendered_extra_lines}"
         "</section>"
     )
 
@@ -2386,6 +2392,27 @@ def _render_investigator_attribute_check_result(attribute_check_result: dict[str
         numeric_value=attribute_check_result.get("attribute_value", "—"),
         roll_total=roll.get("total", "—"),
         outcome_value=roll.get("outcome"),
+    )
+
+
+def _render_investigator_san_check_result(san_check_result: dict[str, Any] | None) -> str:
+    if san_check_result is None:
+        return ""
+    roll = san_check_result.get("roll") or {}
+    applied_expression = str(san_check_result.get("applied_loss_expression") or "—")
+    resolved_loss = san_check_result.get("resolved_sanity_loss", "—")
+    return _render_investigator_check_result(
+        message=str(san_check_result.get("message", "已完成理智检定")),
+        check_type_label="理智检定",
+        subject_value=str(san_check_result.get("source_label", "—")),
+        numeric_value=san_check_result.get("current_sanity", "—"),
+        roll_total=roll.get("total", "—"),
+        outcome_value=roll.get("outcome"),
+        extra_lines=[
+            f"成功损失：{san_check_result.get('success_loss', '—')}",
+            f"失败损失：{san_check_result.get('failure_loss', '—')}",
+            f"本次 SAN 损失：{resolved_loss}（依据 {applied_expression}）",
+        ],
     )
 
 
@@ -2472,6 +2499,45 @@ def _render_investigator_attribute_check_panel(
           </label>
           <p class="help">从当前角色的 8 项基础属性中选择一项，快速进行一次普通检定。</p>
           <button type="submit">开始属性检定</button>
+        </form>
+      </section>
+    """
+
+
+def _render_investigator_san_check_panel(
+    *,
+    session_id: str,
+    viewer_id: str,
+    source_label: str | None,
+    success_loss: str | None,
+    failure_loss: str | None,
+    session_status: str,
+) -> str:
+    if session_status == SessionStatus.COMPLETED.value:
+        return """
+      <section class="panel">
+        <h2>快速理智检定</h2>
+        <p class="empty-state">本局已结束，当前页面不再进行新的理智检定。</p>
+      </section>
+        """
+    return f"""
+      <section class="panel">
+        <h2>快速理智检定</h2>
+        <form method="post" action="/playtest/sessions/{escape(session_id)}/investigator/{escape(viewer_id)}/san-check" data-submit-label="检定中...">
+          <label>
+            source_label
+            <input type="text" name="source_label" value="{escape(str(source_label or ''))}" placeholder="例如：哈斯塔的模糊倒影" required />
+          </label>
+          <label>
+            success_loss
+            <input type="text" name="success_loss" value="{escape(str(success_loss or ''))}" placeholder="例如：0 或 1" required />
+          </label>
+          <label>
+            failure_loss
+            <input type="text" name="failure_loss" value="{escape(str(failure_loss or ''))}" placeholder="例如：1d3 或 1d6" required />
+          </label>
+          <p class="help">按本次遭遇填写来源标签与 success/failure 损失；当前只支持整数或 NdM，不使用固定怪物 SAN 表。</p>
+          <button type="submit">开始理智检定</button>
         </form>
       </section>
     """
@@ -2635,9 +2701,13 @@ def _render_investigator_page(
     action_result: dict[str, Any] | None = None,
     skill_check_result: dict[str, Any] | None = None,
     attribute_check_result: dict[str, Any] | None = None,
+    san_check_result: dict[str, Any] | None = None,
     action_text: str | None = None,
     selected_skill_name: str | None = None,
     selected_attribute_name: str | None = None,
+    san_check_source_label: str | None = None,
+    san_check_success_loss: str | None = None,
+    san_check_failure_loss: str | None = None,
     status_code: int = status.HTTP_200_OK,
 ) -> HTMLResponse:
     view = investigator_view or {}
@@ -2717,6 +2787,7 @@ def _render_investigator_page(
       {_render_investigator_action_result(action_result)}
       {_render_investigator_skill_check_result(skill_check_result)}
       {_render_investigator_attribute_check_result(attribute_check_result)}
+      {_render_investigator_san_check_result(san_check_result)}
       <section class="panel">
         <h2>我的摘要</h2>
         <div class="summary-grid">
@@ -2760,6 +2831,14 @@ def _render_investigator_page(
           viewer_id=viewer_id,
           attribute_options=attribute_options,
           selected_attribute_name=selected_attribute_name,
+          session_status=normalized_session_status,
+      )}
+      {_render_investigator_san_check_panel(
+          session_id=session_id,
+          viewer_id=viewer_id,
+          source_label=san_check_source_label,
+          success_loss=san_check_success_loss,
+          failure_loss=san_check_failure_loss,
           session_status=normalized_session_status,
       )}
       <section class="panel">
@@ -2841,9 +2920,13 @@ def _render_investigator_page_from_service(
     action_result: dict[str, Any] | None = None,
     skill_check_result: dict[str, Any] | None = None,
     attribute_check_result: dict[str, Any] | None = None,
+    san_check_result: dict[str, Any] | None = None,
     action_text: str | None = None,
     selected_skill_name: str | None = None,
     selected_attribute_name: str | None = None,
+    san_check_source_label: str | None = None,
+    san_check_success_loss: str | None = None,
+    san_check_failure_loss: str | None = None,
     status_code: int = status.HTTP_200_OK,
 ) -> HTMLResponse:
     try:
@@ -2861,9 +2944,13 @@ def _render_investigator_page_from_service(
             action_result=action_result,
             skill_check_result=skill_check_result,
             attribute_check_result=attribute_check_result,
+            san_check_result=san_check_result,
             action_text=action_text,
             selected_skill_name=selected_skill_name,
             selected_attribute_name=selected_attribute_name,
+            san_check_source_label=san_check_source_label,
+            san_check_success_loss=san_check_success_loss,
+            san_check_failure_loss=san_check_failure_loss,
             status_code=(
                 status_code
                 if status_code != status.HTTP_200_OK
@@ -2884,9 +2971,13 @@ def _render_investigator_page_from_service(
         action_result=action_result,
         skill_check_result=skill_check_result,
         attribute_check_result=attribute_check_result,
+        san_check_result=san_check_result,
         action_text=action_text,
         selected_skill_name=selected_skill_name,
         selected_attribute_name=selected_attribute_name,
+        san_check_source_label=san_check_source_label,
+        san_check_success_loss=san_check_success_loss,
+        san_check_failure_loss=san_check_failure_loss,
         status_code=status_code,
     )
 
@@ -3139,6 +3230,50 @@ async def submit_investigator_attribute_check_via_ui(
             session_id=session_id,
             viewer_id=viewer_id,
             selected_attribute_name=attribute_name,
+        )
+
+
+@router.post("/sessions/{session_id}/investigator/{viewer_id}/san-check", response_class=HTMLResponse)
+async def submit_investigator_san_check_via_ui(
+    session_id: str,
+    viewer_id: str,
+    request: Request,
+    service: SessionService = Depends(get_session_service),
+) -> HTMLResponse:
+    form = await _read_form_payload(request)
+    source_label = _normalize_form_text(form.get("source_label")) or ""
+    success_loss = _normalize_form_text(form.get("success_loss")) or ""
+    failure_loss = _normalize_form_text(form.get("failure_loss")) or ""
+    try:
+        response = service.perform_investigator_san_check(
+            session_id,
+            InvestigatorSanCheckRequest(
+                actor_id=viewer_id,
+                source_label=source_label,
+                success_loss=success_loss,
+                failure_loss=failure_loss,
+            ),
+        )
+        return _render_investigator_page_from_service(
+            service=service,
+            session_id=session_id,
+            viewer_id=viewer_id,
+            notice=response.message,
+            san_check_result=response.model_dump(mode="json"),
+            san_check_source_label=response.source_label,
+            san_check_success_loss=response.success_loss,
+            san_check_failure_loss=response.failure_loss,
+        )
+    except (ValidationError, LookupError, ValueError) as exc:
+        return _render_playtest_exception(
+            _render_investigator_page_from_service,
+            exc=exc,
+            service=service,
+            session_id=session_id,
+            viewer_id=viewer_id,
+            san_check_source_label=source_label,
+            san_check_success_loss=success_loss,
+            san_check_failure_loss=failure_loss,
         )
 
 

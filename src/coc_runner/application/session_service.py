@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import re
 from datetime import datetime, timezone
+from random import randint
 from typing import Any
 from uuid import uuid4
 
@@ -38,6 +39,8 @@ from coc_runner.domain.models import (
     InventoryEffect,
     InvestigatorAttributeCheckRequest,
     InvestigatorAttributeCheckResponse,
+    InvestigatorSanCheckRequest,
+    InvestigatorSanCheckResponse,
     InvestigatorSkillCheckRequest,
     InvestigatorSkillCheckResponse,
     InvestigatorView,
@@ -118,6 +121,22 @@ from knowledge.schemas import (
     KnowledgeSourceState,
     RuleQueryResult,
 )
+
+
+_SAN_LOSS_EXPRESSION_PATTERN = re.compile(r"^(?:(\d+)|(\d+)d(\d+))$")
+
+
+def _roll_san_loss_value(expression: str) -> int:
+    normalized = expression.strip().lower()
+    match = _SAN_LOSS_EXPRESSION_PATTERN.fullmatch(normalized)
+    if match is None:
+        raise ValueError(f"invalid SAN loss expression: {expression}")
+    static_value, dice_count, dice_sides = match.groups()
+    if static_value is not None:
+        return int(static_value)
+    count = int(dice_count or "0")
+    sides = int(dice_sides or "0")
+    return sum(randint(1, sides) for _ in range(count))
 from knowledge.terminology import extract_term_matches, normalize_chinese_text
 
 
@@ -1556,6 +1575,189 @@ class SessionService:
                     code="attribute_check_invalid",
                     message=message,
                     scope="attribute_check_request",
+                    **error_context,
+                )
+            ) from exc
+
+        effective_language = self._resolve_language(
+            request.language_preference,
+            session.language_preference,
+        )
+        try:
+            if session.status == SessionStatus.COMPLETED:
+                raise ValueError(self._message("attribute_check_session_completed", effective_language))
+
+            normalized_attribute_name = request.attribute_name.strip()
+            attribute_scores = participant.character.attributes.model_dump(mode="json")
+            if normalized_attribute_name not in attribute_scores:
+                raise ValueError(
+                    self._message(
+                        "attribute_check_attribute_not_found",
+                        effective_language,
+                        attribute_name=normalized_attribute_name,
+                    )
+                )
+
+            attribute_value = int(attribute_scores[normalized_attribute_name])
+            roll = roll_d100(attribute_value)
+            return InvestigatorAttributeCheckResponse(
+                message=self._message("attribute_check_recorded", effective_language),
+                session_id=session.session_id,
+                viewer_id=request.actor_id,
+                state_version=session.state_version,
+                language_preference=effective_language,
+                attribute_name=normalized_attribute_name,
+                attribute_value=attribute_value,
+                roll=roll,
+                success=roll.total <= attribute_value,
+            )
+        except ValueError as exc:
+            message = exc.args[0] if exc.args and isinstance(exc.args[0], str) else self._message(
+                "invalid_scene_transition",
+                effective_language,
+            )
+            raise ValueError(
+                build_session_action_error_detail(
+                    code="attribute_check_invalid",
+                    message=message,
+                    scope="attribute_check_request",
+                    **error_context,
+                )
+            ) from exc
+
+    def _normalize_san_loss_expression(
+        self,
+        expression: str,
+        *,
+        language: LanguagePreference,
+    ) -> str:
+        normalized = expression.strip().lower()
+        match = _SAN_LOSS_EXPRESSION_PATTERN.fullmatch(normalized)
+        if match is None:
+            raise ValueError(
+                self._message(
+                    "san_check_loss_invalid",
+                    language,
+                    expression=expression,
+                )
+            )
+        static_value, dice_count, dice_sides = match.groups()
+        if static_value is not None:
+            return str(int(static_value))
+        count = int(dice_count or "0")
+        sides = int(dice_sides or "0")
+        if count <= 0 or sides <= 0:
+            raise ValueError(
+                self._message(
+                    "san_check_loss_invalid",
+                    language,
+                    expression=expression,
+                )
+            )
+        return f"{count}d{sides}"
+
+    def perform_investigator_san_check(
+        self,
+        session_id: str,
+        request: InvestigatorSanCheckRequest,
+    ) -> InvestigatorSanCheckResponse:
+        error_language = self._resolve_language(request.language_preference)
+        try:
+            session = self._load_session(session_id, language=error_language)
+        except LookupError as exc:
+            message = exc.args[0] if exc.args and isinstance(exc.args[0], str) else self._message(
+                "session_not_found",
+                error_language,
+                session_id=session_id,
+            )
+            raise LookupError(
+                build_session_action_error_detail(
+                    code="san_check_session_not_found",
+                    message=message,
+                    scope="san_check_session",
+                    session_id=session_id,
+                    actor_id=request.actor_id,
+                )
+            ) from exc
+
+        error_context = {
+            "session_id": session.session_id,
+            "actor_id": request.actor_id,
+            "source_label": request.source_label,
+        }
+        try:
+            participant = self._get_participant(session, request.actor_id, language=error_language)
+        except ValueError as exc:
+            message = exc.args[0] if exc.args and isinstance(exc.args[0], str) else self._message(
+                "actor_not_participant",
+                error_language,
+                actor_id=request.actor_id,
+            )
+            raise ValueError(
+                build_session_action_error_detail(
+                    code="san_check_invalid",
+                    message=message,
+                    scope="san_check_request",
+                    **error_context,
+                )
+            ) from exc
+
+        effective_language = self._resolve_language(
+            request.language_preference,
+            session.language_preference,
+        )
+        try:
+            if session.status == SessionStatus.COMPLETED:
+                raise ValueError(self._message("san_check_session_completed", effective_language))
+
+            source_label = request.source_label.strip()
+            success_loss = self._normalize_san_loss_expression(
+                request.success_loss,
+                language=effective_language,
+            )
+            failure_loss = self._normalize_san_loss_expression(
+                request.failure_loss,
+                language=effective_language,
+            )
+            character_state = session.character_states.get(request.actor_id)
+            current_sanity = (
+                int(character_state.current_sanity)
+                if character_state is not None
+                else int(participant.character.starting_sanity)
+            )
+            if current_sanity <= 0:
+                raise ValueError(self._message("san_check_no_sanity_remaining", effective_language))
+
+            roll = roll_d100(current_sanity)
+            success = roll.total <= current_sanity
+            applied_loss_expression = success_loss if success else failure_loss
+            resolved_sanity_loss = _roll_san_loss_value(applied_loss_expression)
+            return InvestigatorSanCheckResponse(
+                message=self._message("san_check_recorded", effective_language),
+                session_id=session.session_id,
+                viewer_id=request.actor_id,
+                state_version=session.state_version,
+                language_preference=effective_language,
+                source_label=source_label,
+                current_sanity=current_sanity,
+                success_loss=success_loss,
+                failure_loss=failure_loss,
+                applied_loss_expression=applied_loss_expression,
+                resolved_sanity_loss=resolved_sanity_loss,
+                roll=roll,
+                success=success,
+            )
+        except ValueError as exc:
+            message = exc.args[0] if exc.args and isinstance(exc.args[0], str) else self._message(
+                "san_check_invalid",
+                effective_language,
+                source_label=request.source_label,
+            )
+            raise ValueError(
+                build_session_action_error_detail(
+                    code="san_check_invalid",
+                    message=message,
+                    scope="san_check_request",
                     **error_context,
                 )
             ) from exc
@@ -6948,6 +7150,11 @@ class SessionService:
             "attribute_check_recorded": "已完成属性检定",
             "attribute_check_session_completed": "本局已结束，当前页面不再进行新的属性检定。",
             "attribute_check_attribute_not_found": "属性“{attribute_name}”不在当前角色的基础属性列表中。",
+            "san_check_recorded": "已完成理智检定（仅显示结果，未写入 SAN 变化）",
+            "san_check_session_completed": "本局已结束，当前页面不再进行新的理智检定。",
+            "san_check_invalid": "理智检定参数无效",
+            "san_check_loss_invalid": "理智损失表达式“{expression}”无效；当前只支持整数或 NdM，例如 0、1、1d3、1d6。",
+            "san_check_no_sanity_remaining": "当前 SAN 已为 0，不能再进行新的理智检定。",
             "manual_action_recorded": "已记录手动权威行动",
             "draft_recorded": "已记录待审核行动草稿",
             "kp_draft_recorded": "已记录 KP 待审核草稿",
@@ -7068,6 +7275,11 @@ class SessionService:
             "attribute_check_recorded": "Attribute check completed",
             "attribute_check_session_completed": "This session is completed and no longer accepts new attribute checks.",
             "attribute_check_attribute_not_found": "Attribute {attribute_name} is not available on this character.",
+            "san_check_recorded": "SAN check completed (result only, no SAN change persisted)",
+            "san_check_session_completed": "This session is completed and no longer accepts new SAN checks.",
+            "san_check_invalid": "SAN check request is invalid",
+            "san_check_loss_invalid": "SAN loss expression {expression} is invalid; only integers or NdM such as 0, 1, 1d3, or 1d6 are supported.",
+            "san_check_no_sanity_remaining": "Current SAN is already 0 and cannot take a new SAN check.",
             "manual_action_recorded": "Manual authoritative action recorded",
             "draft_recorded": "Reviewable AI draft recorded",
             "kp_draft_recorded": "Reviewable KP draft recorded",

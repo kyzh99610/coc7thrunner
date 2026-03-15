@@ -1619,6 +1619,30 @@ class InvestigatorAttributeCheckResponse(BaseModel):
     success: bool
 
 
+class InvestigatorSanCheckRequest(BaseModel):
+    actor_id: str
+    source_label: str = Field(min_length=1, max_length=120)
+    success_loss: str = Field(min_length=1, max_length=20)
+    failure_loss: str = Field(min_length=1, max_length=20)
+    language_preference: LanguagePreference | None = None
+
+
+class InvestigatorSanCheckResponse(BaseModel):
+    message: str
+    session_id: str
+    viewer_id: str
+    state_version: int
+    language_preference: LanguagePreference
+    source_label: str
+    current_sanity: int = Field(ge=0, le=99)
+    success_loss: str
+    failure_loss: str
+    applied_loss_expression: str
+    resolved_sanity_loss: int = Field(ge=0)
+    roll: D100Roll
+    success: bool
+
+
 class KPDraftRequest(BaseModel):
     draft_text: str = Field(min_length=1)
     structured_action: dict[str, Any] = Field(default_factory=lambda: {"type": "kp_note"})
