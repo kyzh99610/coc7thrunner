@@ -9,7 +9,16 @@ from uuid import uuid4
 from pydantic import ValidationError
 
 from coc_runner.domain.errors import ConflictError
-from coc_runner.domain.dice import OpposedCheckResolution, roll_d100
+from coc_runner.domain.dice import (
+    AttackDefenseMode,
+    AttackResolution,
+    OpposedCheckResolution,
+    compute_damage_bonus_expression,
+    evaluate_melee_attack_resolution,
+    evaluate_ranged_attack_resolution,
+    roll_d100,
+    roll_damage_expression,
+)
 from coc_runner.domain.models import (
     ActiveSceneObjective,
     ActionEffects,
@@ -40,10 +49,16 @@ from coc_runner.domain.models import (
     EffectContractOrigin,
     EventType,
     InventoryEffect,
+    InvestigatorDamageResolutionRequest,
+    InvestigatorDamageResolutionResponse,
     InvestigatorAttributeCheckRequest,
     InvestigatorAttributeCheckResponse,
+    InvestigatorMeleeAttackRequest,
+    InvestigatorMeleeAttackResponse,
     InvestigatorOpposedCheckRequest,
     InvestigatorOpposedCheckResponse,
+    InvestigatorRangedAttackRequest,
+    InvestigatorRangedAttackResponse,
     InvestigatorSanCheckRequest,
     InvestigatorSanCheckResponse,
     InvestigatorSkillCheckRequest,
@@ -100,6 +115,7 @@ from coc_runner.domain.models import (
     SessionStartRequest,
     SessionStartResponse,
     SessionState,
+    PendingDamageContext,
     SeedSuggestionHookRequest,
     SuggestionHookMaterial,
     StatusEffect,
@@ -2575,6 +2591,405 @@ class SessionService:
                     code="opposed_check_invalid",
                     message=message,
                     scope="opposed_check_request",
+                    **error_context,
+                )
+            ) from exc
+
+    def perform_investigator_melee_attack(
+        self,
+        session_id: str,
+        request: InvestigatorMeleeAttackRequest,
+    ) -> InvestigatorMeleeAttackResponse:
+        error_language = self._resolve_language(request.language_preference)
+        try:
+            session = self._load_session(session_id, language=error_language)
+        except LookupError as exc:
+            message = exc.args[0] if exc.args and isinstance(exc.args[0], str) else self._message(
+                "session_not_found",
+                error_language,
+                session_id=session_id,
+            )
+            raise LookupError(
+                build_session_action_error_detail(
+                    code="melee_attack_session_not_found",
+                    message=message,
+                    scope="melee_attack_session",
+                    session_id=session_id,
+                    actor_id=request.actor_id,
+                )
+            ) from exc
+
+        effective_language = self._resolve_language(
+            request.language_preference,
+            session.language_preference,
+        )
+        error_context = {
+            "session_id": session.session_id,
+            "actor_id": request.actor_id,
+            "target_actor_id": request.target_actor_id,
+            "attack_label": request.attack_label,
+        }
+        try:
+            attacker = self._get_participant(session, request.actor_id, language=error_language)
+            defender = self._get_participant(
+                session,
+                request.target_actor_id,
+                language=error_language,
+            )
+            if session.status == SessionStatus.COMPLETED:
+                raise ValueError(self._message("melee_attack_session_completed", effective_language))
+
+            current_time = datetime.now(timezone.utc)
+            expected_version = session.state_version
+            attacker_state = self._ensure_character_state(
+                session,
+                actor_id=request.actor_id,
+                current_time=current_time,
+                language=effective_language,
+            )
+            dice_result = self._execute_dice_check(
+                session_id=session.session_id,
+                actor_id=request.actor_id,
+                check_kind=DiceCheckKind.ATTACK_MELEE,
+                label=request.attack_label.strip(),
+                target_value=request.attack_target_value,
+                language=effective_language,
+                opposed_label=request.defense_label.strip(),
+                opposed_target_value=request.defense_target_value,
+            )
+            if dice_result.opposed_roll is None or dice_result.opposed_resolution is None:
+                raise ValueError("melee attack execution did not return a defender roll")
+
+            attack_resolution = evaluate_melee_attack_resolution(
+                actor_roll=dice_result.roll,
+                defender_roll=dice_result.opposed_roll,
+                defense_mode=request.defense_mode,
+            )
+            if attack_resolution == AttackResolution.HIT:
+                attacker_state.pending_damage_context = PendingDamageContext(
+                    source_actor_id=request.actor_id,
+                    target_actor_id=defender.actor_id,
+                    target_display_name=defender.display_name,
+                    attack_mode="melee",
+                    attack_label=request.attack_label.strip(),
+                    created_at=current_time,
+                )
+            else:
+                attacker_state.pending_damage_context = None
+            attacker_state.last_updated_at = current_time
+            session.state_version += 1
+            session.updated_at = current_time
+            self._save_session(
+                session,
+                expected_version=expected_version,
+                reason="investigator_melee_attack",
+                language=effective_language,
+            )
+            return InvestigatorMeleeAttackResponse(
+                message=self._message("melee_attack_recorded", effective_language),
+                session_id=session.session_id,
+                viewer_id=request.actor_id,
+                state_version=session.state_version,
+                language_preference=effective_language,
+                target_actor_id=defender.actor_id,
+                target_actor_name=defender.display_name,
+                attack_label=request.attack_label.strip(),
+                attack_target_value=request.attack_target_value,
+                defense_mode=request.defense_mode,
+                defense_label=request.defense_label.strip(),
+                defense_target_value=request.defense_target_value,
+                roll=dice_result.roll,
+                defender_roll=dice_result.opposed_roll,
+                opposed_resolution=dice_result.opposed_resolution,
+                attack_resolution=attack_resolution,
+                success=attack_resolution == AttackResolution.HIT,
+            )
+        except ConflictError as exc:
+            message = exc.args[0] if exc.args and isinstance(exc.args[0], str) else self._message(
+                "state_conflict",
+                effective_language,
+            )
+            raise ConflictError(
+                build_session_action_error_detail(
+                    code="melee_attack_state_conflict",
+                    message=message,
+                    scope="melee_attack_state",
+                    **error_context,
+                )
+            ) from exc
+        except ValueError as exc:
+            message = exc.args[0] if exc.args and isinstance(exc.args[0], str) else self._message(
+                "melee_attack_invalid",
+                effective_language,
+            )
+            raise ValueError(
+                build_session_action_error_detail(
+                    code="melee_attack_invalid",
+                    message=message,
+                    scope="melee_attack_request",
+                    **error_context,
+                )
+            ) from exc
+
+    def perform_investigator_ranged_attack(
+        self,
+        session_id: str,
+        request: InvestigatorRangedAttackRequest,
+    ) -> InvestigatorRangedAttackResponse:
+        error_language = self._resolve_language(request.language_preference)
+        try:
+            session = self._load_session(session_id, language=error_language)
+        except LookupError as exc:
+            message = exc.args[0] if exc.args and isinstance(exc.args[0], str) else self._message(
+                "session_not_found",
+                error_language,
+                session_id=session_id,
+            )
+            raise LookupError(
+                build_session_action_error_detail(
+                    code="ranged_attack_session_not_found",
+                    message=message,
+                    scope="ranged_attack_session",
+                    session_id=session_id,
+                    actor_id=request.actor_id,
+                )
+            ) from exc
+
+        effective_language = self._resolve_language(
+            request.language_preference,
+            session.language_preference,
+        )
+        error_context = {
+            "session_id": session.session_id,
+            "actor_id": request.actor_id,
+            "target_actor_id": request.target_actor_id,
+            "attack_label": request.attack_label,
+        }
+        try:
+            self._get_participant(session, request.actor_id, language=error_language)
+            defender = self._get_participant(
+                session,
+                request.target_actor_id,
+                language=effective_language,
+            )
+            if session.status == SessionStatus.COMPLETED:
+                raise ValueError(self._message("ranged_attack_session_completed", effective_language))
+
+            current_time = datetime.now(timezone.utc)
+            expected_version = session.state_version
+            attacker_state = self._ensure_character_state(
+                session,
+                actor_id=request.actor_id,
+                current_time=current_time,
+                language=effective_language,
+            )
+            dice_result = self._execute_dice_check(
+                session_id=session.session_id,
+                actor_id=request.actor_id,
+                check_kind=DiceCheckKind.ATTACK_RANGED,
+                label=request.attack_label.strip(),
+                target_value=request.attack_target_value,
+                language=effective_language,
+                bonus_dice=request.bonus_dice,
+                penalty_dice=request.penalty_dice,
+            )
+            attack_resolution = evaluate_ranged_attack_resolution(dice_result.roll)
+            if attack_resolution == AttackResolution.HIT:
+                attacker_state.pending_damage_context = PendingDamageContext(
+                    source_actor_id=request.actor_id,
+                    target_actor_id=defender.actor_id,
+                    target_display_name=defender.display_name,
+                    attack_mode="ranged",
+                    attack_label=request.attack_label.strip(),
+                    created_at=current_time,
+                )
+            else:
+                attacker_state.pending_damage_context = None
+            attacker_state.last_updated_at = current_time
+            session.state_version += 1
+            session.updated_at = current_time
+            self._save_session(
+                session,
+                expected_version=expected_version,
+                reason="investigator_ranged_attack",
+                language=effective_language,
+            )
+            return InvestigatorRangedAttackResponse(
+                message=self._message("ranged_attack_recorded", effective_language),
+                session_id=session.session_id,
+                viewer_id=request.actor_id,
+                state_version=session.state_version,
+                language_preference=effective_language,
+                target_actor_id=defender.actor_id,
+                target_actor_name=defender.display_name,
+                attack_label=request.attack_label.strip(),
+                attack_target_value=request.attack_target_value,
+                modifier_label=request.modifier_label,
+                roll=dice_result.roll,
+                attack_resolution=attack_resolution,
+                success=attack_resolution == AttackResolution.HIT,
+            )
+        except ConflictError as exc:
+            message = exc.args[0] if exc.args and isinstance(exc.args[0], str) else self._message(
+                "state_conflict",
+                effective_language,
+            )
+            raise ConflictError(
+                build_session_action_error_detail(
+                    code="ranged_attack_state_conflict",
+                    message=message,
+                    scope="ranged_attack_state",
+                    **error_context,
+                )
+            ) from exc
+        except ValueError as exc:
+            message = exc.args[0] if exc.args and isinstance(exc.args[0], str) else self._message(
+                "ranged_attack_invalid",
+                effective_language,
+            )
+            raise ValueError(
+                build_session_action_error_detail(
+                    code="ranged_attack_invalid",
+                    message=message,
+                    scope="ranged_attack_request",
+                    **error_context,
+                )
+            ) from exc
+
+    def resolve_investigator_damage(
+        self,
+        session_id: str,
+        request: InvestigatorDamageResolutionRequest,
+    ) -> InvestigatorDamageResolutionResponse:
+        error_language = self._resolve_language(request.language_preference)
+        try:
+            session = self._load_session(session_id, language=error_language)
+        except LookupError as exc:
+            message = exc.args[0] if exc.args and isinstance(exc.args[0], str) else self._message(
+                "session_not_found",
+                error_language,
+                session_id=session_id,
+            )
+            raise LookupError(
+                build_session_action_error_detail(
+                    code="damage_resolution_session_not_found",
+                    message=message,
+                    scope="damage_resolution_session",
+                    session_id=session_id,
+                    actor_id=request.actor_id,
+                )
+            ) from exc
+
+        effective_language = self._resolve_language(
+            request.language_preference,
+            session.language_preference,
+        )
+        error_context = {
+            "session_id": session.session_id,
+            "actor_id": request.actor_id,
+            "target_actor_id": request.target_actor_id,
+            "damage_expression": request.damage_expression,
+        }
+        try:
+            attacker = self._get_participant(session, request.actor_id, language=error_language)
+            target = self._get_participant(
+                session,
+                request.target_actor_id,
+                language=effective_language,
+            )
+            if session.status == SessionStatus.COMPLETED:
+                raise ValueError(self._message("damage_resolution_session_completed", effective_language))
+
+            current_time = datetime.now(timezone.utc)
+            expected_version = session.state_version
+            attacker_state = self._ensure_character_state(
+                session,
+                actor_id=request.actor_id,
+                current_time=current_time,
+                language=effective_language,
+            )
+            target_state = self._ensure_character_state(
+                session,
+                actor_id=request.target_actor_id,
+                current_time=current_time,
+                language=effective_language,
+            )
+            pending_context = attacker_state.pending_damage_context
+            if pending_context is None:
+                raise ValueError(self._message("damage_resolution_requires_hit", effective_language))
+            if pending_context.target_actor_id != target.actor_id:
+                raise ValueError(self._message("damage_resolution_target_mismatch", effective_language))
+
+            db_expression = compute_damage_bonus_expression(
+                strength=attacker.character.attributes.strength,
+                size=attacker.character.attributes.size,
+            )
+            raw_damage = roll_damage_expression(
+                request.damage_expression,
+                db_expression=db_expression,
+            )
+            if request.damage_bonus_expression:
+                raw_damage += roll_damage_expression(
+                    request.damage_bonus_expression,
+                    db_expression=db_expression,
+                )
+            raw_damage = max(0, raw_damage)
+            armor_absorbed = min(request.armor_value, raw_damage)
+            final_damage = max(0, raw_damage - armor_absorbed)
+            hp_before = target_state.current_hit_points
+            hp_after = max(0, hp_before - final_damage)
+            target_state.current_hit_points = hp_after
+            target_state.last_updated_at = current_time
+            attacker_state.pending_damage_context = None
+            attacker_state.last_updated_at = current_time
+            session.state_version += 1
+            session.updated_at = current_time
+            self._save_session(
+                session,
+                expected_version=expected_version,
+                reason="investigator_damage_resolution",
+                language=effective_language,
+            )
+            return InvestigatorDamageResolutionResponse(
+                message=self._message("damage_resolution_recorded", effective_language),
+                session_id=session.session_id,
+                viewer_id=request.actor_id,
+                state_version=session.state_version,
+                language_preference=effective_language,
+                target_actor_id=target.actor_id,
+                target_actor_name=target.display_name,
+                damage_expression=request.damage_expression,
+                damage_bonus_expression=request.damage_bonus_expression,
+                armor_value=request.armor_value,
+                raw_damage=raw_damage,
+                armor_absorbed=armor_absorbed,
+                final_damage=final_damage,
+                hp_before=hp_before,
+                hp_after=hp_after,
+            )
+        except ConflictError as exc:
+            message = exc.args[0] if exc.args and isinstance(exc.args[0], str) else self._message(
+                "state_conflict",
+                effective_language,
+            )
+            raise ConflictError(
+                build_session_action_error_detail(
+                    code="damage_resolution_state_conflict",
+                    message=message,
+                    scope="damage_resolution_state",
+                    **error_context,
+                )
+            ) from exc
+        except ValueError as exc:
+            message = exc.args[0] if exc.args and isinstance(exc.args[0], str) else self._message(
+                "damage_resolution_invalid",
+                effective_language,
+            )
+            raise ValueError(
+                build_session_action_error_detail(
+                    code="damage_resolution_invalid",
+                    message=message,
+                    scope="damage_resolution_request",
                     **error_context,
                 )
             ) from exc
@@ -8228,6 +8643,17 @@ class SessionService:
             "attribute_check_attribute_not_found": "属性“{attribute_name}”不在当前角色的基础属性列表中。",
             "opposed_check_recorded": "已完成对抗检定",
             "opposed_check_session_completed": "本局已结束，当前页面不再进行新的对抗检定。",
+            "melee_attack_recorded": "已完成近战攻击判定",
+            "melee_attack_session_completed": "本局已结束，当前页面不再进行新的近战攻击判定。",
+            "melee_attack_invalid": "近战攻击参数无效",
+            "ranged_attack_recorded": "已完成远程攻击判定",
+            "ranged_attack_session_completed": "本局已结束，当前页面不再进行新的远程攻击判定。",
+            "ranged_attack_invalid": "远程攻击参数无效",
+            "damage_resolution_recorded": "已完成伤害结算，目标 HP 已更新",
+            "damage_resolution_session_completed": "本局已结束，当前页面不再进行新的伤害结算。",
+            "damage_resolution_invalid": "伤害结算参数无效",
+            "damage_resolution_requires_hit": "需要先完成一次命中的攻击判定，才能继续结算伤害。",
+            "damage_resolution_target_mismatch": "当前待结算伤害的目标与本次提交的目标不一致。",
             "dice_backend_unavailable": "当前可选判定后端不可用，且没有安全的本地回退可用。",
             "san_check_recorded": "已完成理智检定，当前 SAN 已更新",
             "san_aftermath_prompt_text": "理智后续待裁定：{actor_name}：{source_label}",
@@ -8367,6 +8793,17 @@ class SessionService:
             "attribute_check_attribute_not_found": "Attribute {attribute_name} is not available on this character.",
             "opposed_check_recorded": "Opposed check completed",
             "opposed_check_session_completed": "This session is completed and no longer accepts new opposed checks.",
+            "melee_attack_recorded": "Melee attack check completed",
+            "melee_attack_session_completed": "This session is completed and no longer accepts new melee attack checks.",
+            "melee_attack_invalid": "Melee attack request is invalid",
+            "ranged_attack_recorded": "Ranged attack check completed",
+            "ranged_attack_session_completed": "This session is completed and no longer accepts new ranged attack checks.",
+            "ranged_attack_invalid": "Ranged attack request is invalid",
+            "damage_resolution_recorded": "Damage resolution completed and target HP was updated",
+            "damage_resolution_session_completed": "This session is completed and no longer accepts new damage resolutions.",
+            "damage_resolution_invalid": "Damage resolution request is invalid",
+            "damage_resolution_requires_hit": "A successful hit is required before damage can be resolved.",
+            "damage_resolution_target_mismatch": "The pending damage target does not match this damage resolution request.",
             "dice_backend_unavailable": "The optional dice backend is unavailable and no safe local fallback is configured.",
             "san_check_recorded": "SAN check completed and current SAN was updated",
             "san_aftermath_prompt_text": "SAN aftermath pending: {actor_name}: {source_label}",

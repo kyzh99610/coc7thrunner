@@ -153,7 +153,7 @@ def _parse_provider_output(
     raw_output: str,
     payload: DiceStyleSubprocessPayload,
 ) -> DiceExecutionResult:
-    if payload.request.check_kind == DiceCheckKind.OPPOSED:
+    if payload.request.check_kind in {DiceCheckKind.OPPOSED, DiceCheckKind.ATTACK_MELEE}:
         return _parse_opposed_provider_output(raw_output=raw_output, payload=payload)
     modified_match = _MODIFIED_DICE_RESULT_PATTERN.search(raw_output)
     if modified_match is not None:

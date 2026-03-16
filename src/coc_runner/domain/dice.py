@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import random
+import re
 
 from pydantic import BaseModel, Field
 
@@ -21,6 +22,19 @@ class OpposedCheckResolution(StrEnum):
     OPPONENT_WIN = "opponent_win"
     DRAW = "draw"
     DOUBLE_FAILURE = "double_failure"
+
+
+class AttackDefenseMode(StrEnum):
+    DODGE = "dodge"
+    COUNTERATTACK = "counterattack"
+
+
+class AttackResolution(StrEnum):
+    HIT = "hit"
+    MISS = "miss"
+    DODGE_SUCCESS = "dodge_success"
+    COUNTERATTACK_SUCCESS = "counterattack_success"
+    KP_REVIEW = "kp_review"
 
 
 class D100Roll(BaseModel):
@@ -82,6 +96,120 @@ def evaluate_opposed_rolls(
     if opponent_priority > actor_priority:
         return OpposedCheckResolution.OPPONENT_WIN
     return OpposedCheckResolution.DRAW
+
+
+def evaluate_melee_attack_resolution(
+    actor_roll: D100Roll,
+    defender_roll: D100Roll,
+    defense_mode: AttackDefenseMode,
+) -> AttackResolution:
+    opposed_resolution = evaluate_opposed_rolls(actor_roll, defender_roll)
+    if opposed_resolution == OpposedCheckResolution.ACTOR_WIN:
+        return AttackResolution.HIT
+    if opposed_resolution == OpposedCheckResolution.OPPONENT_WIN:
+        if defense_mode == AttackDefenseMode.COUNTERATTACK:
+            return AttackResolution.COUNTERATTACK_SUCCESS
+        return AttackResolution.DODGE_SUCCESS
+    if opposed_resolution == OpposedCheckResolution.DRAW:
+        return AttackResolution.KP_REVIEW
+    return AttackResolution.MISS
+
+
+def evaluate_ranged_attack_resolution(actor_roll: D100Roll) -> AttackResolution:
+    if actor_roll.outcome in {RollOutcome.FAILURE, RollOutcome.FUMBLE}:
+        return AttackResolution.MISS
+    return AttackResolution.HIT
+
+
+def compute_damage_bonus_expression(*, strength: int, size: int) -> str:
+    total = strength + size
+    if total <= 64:
+        return "-2"
+    if total <= 84:
+        return "-1"
+    if total <= 124:
+        return "0"
+    if total <= 164:
+        return "1d4"
+    if total <= 204:
+        return "1d6"
+    extra_d6 = 2 + max(0, (total - 205) // 80)
+    return f"{extra_d6}d6"
+
+
+_DAMAGE_TERM_PATTERN = re.compile(r"([+-]?)(db|\d+d\d+|\d+)")
+
+
+def roll_damage_expression(
+    expression: str,
+    *,
+    db_expression: str | None = None,
+    seed: int | None = None,
+) -> int:
+    rng = random.Random(seed)
+    total = _evaluate_damage_expression(
+        expression,
+        db_expression=db_expression,
+        rng=rng,
+        allow_db_term=True,
+    )
+    return max(0, total)
+
+
+def _evaluate_damage_expression(
+    expression: str,
+    *,
+    db_expression: str | None,
+    rng: random.Random,
+    allow_db_term: bool,
+) -> int:
+    normalized = expression.replace(" ", "").lower()
+    if not normalized:
+        raise ValueError("damage expression must not be empty")
+    total = 0
+    current_index = 0
+    for match in _DAMAGE_TERM_PATTERN.finditer(normalized):
+        if match.start() != current_index:
+            raise ValueError(f"unsupported damage expression: {expression}")
+        sign_token, term = match.groups()
+        sign = -1 if sign_token == "-" else 1
+        term_value = _resolve_damage_term(
+            term,
+            db_expression=db_expression,
+            rng=rng,
+            allow_db_term=allow_db_term,
+        )
+        total += sign * term_value
+        current_index = match.end()
+    if current_index != len(normalized):
+        raise ValueError(f"unsupported damage expression: {expression}")
+    return total
+
+
+def _resolve_damage_term(
+    term: str,
+    *,
+    db_expression: str | None,
+    rng: random.Random,
+    allow_db_term: bool,
+) -> int:
+    if term == "db":
+        if not allow_db_term or db_expression is None:
+            raise ValueError("damage expression references db without a resolved damage bonus")
+        return _evaluate_damage_expression(
+            db_expression,
+            db_expression=None,
+            rng=rng,
+            allow_db_term=False,
+        )
+    if "d" in term:
+        count_text, sides_text = term.split("d", maxsplit=1)
+        count = int(count_text)
+        sides = int(sides_text)
+        if count <= 0 or sides <= 0:
+            raise ValueError("damage dice counts and sides must be positive")
+        return sum(rng.randint(1, sides) for _ in range(count))
+    return int(term)
 
 
 def roll_d100(

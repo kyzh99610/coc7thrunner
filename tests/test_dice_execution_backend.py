@@ -250,6 +250,41 @@ def test_render_dice_style_command_supports_official_like_opposed_modifier_suffi
     assert render_dice_style_command(opponent_penalty_request) == ".rav 力量60 守卫力量60,p1"
 
 
+def test_render_dice_style_command_supports_minimal_melee_and_ranged_attack_variants() -> None:
+    melee_request = DiceExecutionRequest(
+        session_id="session-1",
+        actor_id="investigator-1",
+        check_kind=DiceCheckKind.ATTACK_MELEE,
+        label="斗殴",
+        target_value=55,
+        opposed_label="闪避",
+        opposed_target_value=40,
+        language_preference=LanguagePreference.ZH_CN,
+    )
+    aimed_ranged_request = DiceExecutionRequest(
+        session_id="session-1",
+        actor_id="investigator-1",
+        check_kind=DiceCheckKind.ATTACK_RANGED,
+        label="手枪",
+        target_value=60,
+        bonus_dice=1,
+        language_preference=LanguagePreference.ZH_CN,
+    )
+    hurried_ranged_request = DiceExecutionRequest(
+        session_id="session-1",
+        actor_id="investigator-1",
+        check_kind=DiceCheckKind.ATTACK_RANGED,
+        label="手枪",
+        target_value=60,
+        penalty_dice=1,
+        language_preference=LanguagePreference.ZH_CN,
+    )
+
+    assert render_dice_style_command(melee_request) == ".rav 斗殴55 闪避40"
+    assert render_dice_style_command(aimed_ranged_request) == ".ra b1 手枪60"
+    assert render_dice_style_command(hurried_ranged_request) == ".ra p1 手枪60"
+
+
 def test_dice_style_backend_falls_back_when_sidecar_unavailable_or_check_not_supported() -> None:
     unavailable_client = _UnavailableDiceStyleClient()
     fallback_backend = _FixedFallbackBackend(
@@ -543,6 +578,90 @@ def test_dice_style_subprocess_client_parses_official_like_bonus_and_penalty_rav
     assert opponent_penalty_result.opposed_roll.outcome == RollOutcome.FAILURE
     assert opponent_penalty_result.opposed_resolution == OpposedCheckResolution.ACTOR_WIN
     assert opponent_penalty_result.success is True
+
+
+def test_dice_style_subprocess_client_parses_melee_and_ranged_attack_outputs_without_promoting_provider_text_to_authoritative_truth() -> None:
+    client = DiceStyleSubprocessClient(
+        command=_bridge_command("scripted_dice_provider.py"),
+        timeout_seconds=1.0,
+    )
+    melee_hit_request = DiceExecutionRequest(
+        session_id="session-1",
+        actor_id="investigator-1",
+        check_kind=DiceCheckKind.ATTACK_MELEE,
+        label="斗殴",
+        target_value=55,
+        opposed_label="闪避",
+        opposed_target_value=40,
+        language_preference=LanguagePreference.ZH_CN,
+    )
+    melee_counter_request = DiceExecutionRequest(
+        session_id="session-1",
+        actor_id="investigator-1",
+        check_kind=DiceCheckKind.ATTACK_MELEE,
+        label="斗殴",
+        target_value=55,
+        opposed_label="反击",
+        opposed_target_value=50,
+        language_preference=LanguagePreference.ZH_CN,
+    )
+    aimed_ranged_request = DiceExecutionRequest(
+        session_id="session-1",
+        actor_id="investigator-1",
+        check_kind=DiceCheckKind.ATTACK_RANGED,
+        label="手枪",
+        target_value=60,
+        bonus_dice=1,
+        language_preference=LanguagePreference.ZH_CN,
+    )
+    hurried_ranged_request = DiceExecutionRequest(
+        session_id="session-1",
+        actor_id="investigator-1",
+        check_kind=DiceCheckKind.ATTACK_RANGED,
+        label="手枪",
+        target_value=60,
+        penalty_dice=1,
+        language_preference=LanguagePreference.ZH_CN,
+    )
+
+    melee_hit_result = client.execute_check(
+        request=melee_hit_request,
+        command_text=render_dice_style_command(melee_hit_request),
+    )
+    melee_counter_result = client.execute_check(
+        request=melee_counter_request,
+        command_text=render_dice_style_command(melee_counter_request),
+    )
+    aimed_ranged_result = client.execute_check(
+        request=aimed_ranged_request,
+        command_text=render_dice_style_command(aimed_ranged_request),
+    )
+    hurried_ranged_result = client.execute_check(
+        request=hurried_ranged_request,
+        command_text=render_dice_style_command(hurried_ranged_request),
+    )
+
+    assert melee_hit_result.roll.total == 23
+    assert melee_hit_result.opposed_roll is not None
+    assert melee_hit_result.opposed_roll.total == 62
+    assert melee_hit_result.opposed_resolution == OpposedCheckResolution.ACTOR_WIN
+    assert melee_hit_result.success is True
+
+    assert melee_counter_result.roll.total == 73
+    assert melee_counter_result.opposed_roll is not None
+    assert melee_counter_result.opposed_roll.total == 18
+    assert melee_counter_result.opposed_resolution == OpposedCheckResolution.OPPONENT_WIN
+    assert melee_counter_result.success is False
+
+    assert aimed_ranged_result.roll.total == 12
+    assert aimed_ranged_result.roll.bonus_dice == 1
+    assert aimed_ranged_result.roll.outcome == RollOutcome.EXTREME_SUCCESS
+    assert aimed_ranged_result.success is True
+
+    assert hurried_ranged_result.roll.total == 89
+    assert hurried_ranged_result.roll.penalty_dice == 1
+    assert hurried_ranged_result.roll.outcome == RollOutcome.FAILURE
+    assert hurried_ranged_result.success is False
 
 
 def test_dice_style_subprocess_client_keeps_opposed_resolution_authoritative_locally_even_if_provider_summary_disagrees() -> None:

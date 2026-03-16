@@ -25,6 +25,8 @@ class DiceCheckKind(StrEnum):
     ATTRIBUTE = "attribute"
     SANITY = "sanity"
     OPPOSED = "opposed"
+    ATTACK_MELEE = "attack_melee"
+    ATTACK_RANGED = "attack_ranged"
 
 
 class DiceExecutionRequest(BaseModel):
@@ -57,7 +59,7 @@ class DiceExecutionRequest(BaseModel):
             or self.opposed_bonus_dice > 0
             or self.opposed_penalty_dice > 0
         )
-        if self.check_kind == DiceCheckKind.OPPOSED:
+        if self.check_kind in {DiceCheckKind.OPPOSED, DiceCheckKind.ATTACK_MELEE}:
             if self.opposed_label is None or self.opposed_target_value is None:
                 raise ValueError(
                     "opposed checks require both opposed_label and opposed_target_value"
@@ -130,7 +132,7 @@ class LocalDiceExecutionBackend:
             bonus_dice=request.bonus_dice,
             penalty_dice=request.penalty_dice,
         )
-        if request.check_kind == DiceCheckKind.OPPOSED:
+        if request.check_kind in {DiceCheckKind.OPPOSED, DiceCheckKind.ATTACK_MELEE}:
             opponent_seed = request.seed + 1 if request.seed is not None else None
             opposed_roll = self._roller(
                 request.opposed_target_value or request.target_value,
@@ -259,7 +261,7 @@ def render_dice_style_command(request: DiceExecutionRequest) -> str:
         bonus_dice=request.bonus_dice,
         penalty_dice=request.penalty_dice,
     )
-    if request.check_kind == DiceCheckKind.OPPOSED:
+    if request.check_kind in {DiceCheckKind.OPPOSED, DiceCheckKind.ATTACK_MELEE}:
         if request.opposed_label is None or request.opposed_target_value is None:
             raise UnsupportedDiceCheckError(
                 "opposed checks require explicit opponent label and target value"

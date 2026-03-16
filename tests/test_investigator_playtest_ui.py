@@ -105,6 +105,22 @@ def test_investigator_playtest_page_opens_with_summary_and_action_form(
     assert 'name="opponent_label"' in html
     assert 'name="opponent_target_value"' in html
     assert "开始对抗检定" in html
+    assert "快速近战攻击" in html
+    assert 'name="melee_target_actor_id"' in html
+    assert 'name="attack_label"' in html
+    assert 'name="attack_target_value"' in html
+    assert 'name="defense_mode"' in html
+    assert 'name="defense_label"' in html
+    assert 'name="defense_target_value"' in html
+    assert "开始近战攻击" in html
+    assert "快速远程攻击" in html
+    assert 'name="ranged_target_actor_id"' in html
+    assert 'name="ranged_attack_label"' in html
+    assert 'name="ranged_attack_target_value"' in html
+    assert 'name="ranged_attack_modifier"' in html
+    assert "开始远程攻击" in html
+    assert "伤害结算" in html
+    assert "需要先完成一次命中的攻击判定，才能继续结算伤害。" in html
     assert "快速理智检定" in html
     assert 'name="source_label"' in html
     assert 'name="success_loss"' in html
@@ -163,6 +179,12 @@ def test_investigator_playtest_page_shows_completed_notice_and_hides_action_form
     assert "本局已结束，当前页面不再进行新的理智检定。" in html
     assert "快速对抗检定" in html
     assert "本局已结束，当前页面不再进行新的对抗检定。" in html
+    assert "快速近战攻击" in html
+    assert "本局已结束，当前页面不再进行新的近战攻击判定。" in html
+    assert "快速远程攻击" in html
+    assert "本局已结束，当前页面不再进行新的远程攻击判定。" in html
+    assert "伤害结算" in html
+    assert "本局已结束，当前页面不再进行新的伤害结算。" in html
     assert "职业：记者" in html
     assert "图书馆使用 70" in html
     assert "私有备注与记录" in html
@@ -177,11 +199,28 @@ def test_investigator_playtest_page_shows_completed_notice_and_hides_action_form
     assert 'name="actor_target_value"' not in html
     assert 'name="opponent_label"' not in html
     assert 'name="opponent_target_value"' not in html
+    assert 'name="melee_target_actor_id"' not in html
+    assert 'name="attack_label"' not in html
+    assert 'name="attack_target_value"' not in html
+    assert 'name="defense_mode"' not in html
+    assert 'name="defense_label"' not in html
+    assert 'name="defense_target_value"' not in html
+    assert 'name="ranged_target_actor_id"' not in html
+    assert 'name="ranged_attack_label"' not in html
+    assert 'name="ranged_attack_target_value"' not in html
+    assert 'name="ranged_attack_modifier"' not in html
+    assert 'name="damage_target_actor_id"' not in html
+    assert 'name="damage_expression"' not in html
+    assert 'name="damage_bonus_expression"' not in html
+    assert 'name="armor_value"' not in html
     assert "提交行动" not in html
     assert "开始检定" not in html
     assert "开始属性检定" not in html
     assert "开始对抗检定" not in html
     assert "开始理智检定" not in html
+    assert "开始近战攻击" not in html
+    assert "开始远程攻击" not in html
+    assert "结算伤害" not in html
 
 
 def test_investigator_playtest_page_preserves_private_visibility_without_keeper_leakage(
@@ -642,6 +681,160 @@ def test_investigator_playtest_page_opposed_check_can_use_real_dice_provider_wit
     assert "对手判定：失败" in html
     assert "对抗结果：发起方胜出" in html
     assert ".rav 话术50 守卫意志40" not in html
+
+
+def test_investigator_playtest_page_melee_attack_hit_can_open_damage_resolution_and_update_hp(
+    client: TestClient,
+    monkeypatch,
+) -> None:
+    session_id = _start_investigator_ui_session(client)
+
+    dice_client = DiceStyleSubprocessClient(
+        command=_bridge_command("scripted_dice_provider.py"),
+        timeout_seconds=1.0,
+    )
+    client.app.state.session_service.dice_execution_backend = DiceStyleExecutionBackend(
+        client=dice_client
+    )
+    monkeypatch.setattr(session_service_module, "roll_damage_expression", lambda expression, *, db_expression=None, seed=None: 6)
+
+    attack_response = client.post(
+        f"/playtest/sessions/{session_id}/investigator/investigator-1/melee-attack",
+        data={
+            "melee_target_actor_id": "investigator-1",
+            "attack_label": "斗殴",
+            "attack_target_value": "55",
+            "defense_mode": "dodge",
+            "defense_label": "闪避",
+            "defense_target_value": "40",
+        },
+    )
+
+    assert attack_response.status_code == 200
+    attack_html = attack_response.text
+    assert "最近一次攻击结果" in attack_html
+    assert "已完成近战攻击判定" in attack_html
+    assert "类型：近战攻击" in attack_html
+    assert "攻击项目：斗殴" in attack_html
+    assert "目标：林舟" in attack_html
+    assert "防守方式：闪避" in attack_html
+    assert "发起方掷骰结果：23" in attack_html
+    assert "防守方掷骰结果：62" in attack_html
+    assert "攻击结果：命中" in attack_html
+    assert "伤害结算" in attack_html
+    assert 'name="damage_target_actor_id"' in attack_html
+    assert 'name="damage_expression"' in attack_html
+    assert ".rav 斗殴55 闪避40" not in attack_html
+
+    damage_response = client.post(
+        f"/playtest/sessions/{session_id}/investigator/investigator-1/damage-resolution",
+        data={
+            "damage_target_actor_id": "investigator-1",
+            "damage_expression": "1d6+1",
+            "damage_bonus_expression": "",
+            "armor_value": "1",
+        },
+    )
+
+    assert damage_response.status_code == 200
+    damage_html = damage_response.text
+    assert "最近一次伤害结算" in damage_html
+    assert "已完成伤害结算，目标 HP 已更新" in damage_html
+    assert "目标：林舟" in damage_html
+    assert "伤害表达式：1d6+1" in damage_html
+    assert "原始伤害：6" in damage_html
+    assert "护甲吸收：1" in damage_html
+    assert "最终伤害：5" in damage_html
+    assert "结算前 HP：11" in damage_html
+    assert "结算后 HP：6" in damage_html
+    assert "HP：6" in damage_html
+
+
+def test_investigator_playtest_page_melee_attack_distinguishes_counterattack_execution_semantics(
+    client: TestClient,
+) -> None:
+    session_id = _start_investigator_ui_session(client)
+
+    dice_client = DiceStyleSubprocessClient(
+        command=_bridge_command("scripted_dice_provider.py"),
+        timeout_seconds=1.0,
+    )
+    client.app.state.session_service.dice_execution_backend = DiceStyleExecutionBackend(
+        client=dice_client
+    )
+
+    response = client.post(
+        f"/playtest/sessions/{session_id}/investigator/investigator-1/melee-attack",
+        data={
+            "melee_target_actor_id": "investigator-1",
+            "attack_label": "斗殴",
+            "attack_target_value": "55",
+            "defense_mode": "counterattack",
+            "defense_label": "反击",
+            "defense_target_value": "50",
+        },
+    )
+
+    assert response.status_code == 200
+    html = response.text
+    assert "类型：近战攻击" in html
+    assert "防守方式：反击" in html
+    assert "发起方掷骰结果：73" in html
+    assert "防守方掷骰结果：18" in html
+    assert "攻击结果：反击成功" in html
+    assert "需要先完成一次命中的攻击判定，才能继续结算伤害。" in html
+
+
+def test_investigator_playtest_page_ranged_attack_supports_aim_bonus_and_hurried_penalty(
+    client: TestClient,
+) -> None:
+    session_id = _start_investigator_ui_session(client)
+
+    dice_client = DiceStyleSubprocessClient(
+        command=_bridge_command("scripted_dice_provider.py"),
+        timeout_seconds=1.0,
+    )
+    client.app.state.session_service.dice_execution_backend = DiceStyleExecutionBackend(
+        client=dice_client
+    )
+
+    aimed_response = client.post(
+        f"/playtest/sessions/{session_id}/investigator/investigator-1/ranged-attack",
+        data={
+            "ranged_target_actor_id": "investigator-1",
+            "ranged_attack_label": "手枪",
+            "ranged_attack_target_value": "60",
+            "ranged_attack_modifier": "aim_bonus_1",
+        },
+    )
+    hurried_response = client.post(
+        f"/playtest/sessions/{session_id}/investigator/investigator-1/ranged-attack",
+        data={
+            "ranged_target_actor_id": "investigator-1",
+            "ranged_attack_label": "手枪",
+            "ranged_attack_target_value": "60",
+            "ranged_attack_modifier": "hurried_penalty_1",
+        },
+    )
+
+    assert aimed_response.status_code == 200
+    aimed_html = aimed_response.text
+    assert "最近一次攻击结果" in aimed_html
+    assert "已完成远程攻击判定" in aimed_html
+    assert "类型：远程攻击" in aimed_html
+    assert "攻击项目：手枪" in aimed_html
+    assert "攻击修正：瞄准一轮" in aimed_html
+    assert "掷骰结果：12" in aimed_html
+    assert "攻击结果：命中" in aimed_html
+    assert ".ra b1 手枪60" not in aimed_html
+
+    assert hurried_response.status_code == 200
+    hurried_html = hurried_response.text
+    assert "类型：远程攻击" in hurried_html
+    assert "攻击修正：仓促射击" in hurried_html
+    assert "掷骰结果：89" in hurried_html
+    assert "攻击结果：未命中" in hurried_html
+    assert ".ra p1 手枪60" not in hurried_html
 
 
 def test_investigator_playtest_page_san_check_submission_rerenders_with_persisted_san_result(

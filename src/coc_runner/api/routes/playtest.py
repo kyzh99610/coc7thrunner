@@ -36,7 +36,10 @@ from coc_runner.domain.models import (
     ImportSceneHookSeedRequest,
     ImportTemplateCharacterHookRequest,
     InvestigatorAttributeCheckRequest,
+    InvestigatorDamageResolutionRequest,
+    InvestigatorMeleeAttackRequest,
     InvestigatorOpposedCheckRequest,
+    InvestigatorRangedAttackRequest,
     InvestigatorSanCheckRequest,
     InvestigatorSkillCheckRequest,
     KeeperLiveControlRequest,
@@ -2702,6 +2705,16 @@ def _investigator_attribute_options(
     return options
 
 
+def _investigator_target_options(participants: list[dict[str, Any]]) -> list[tuple[str, str]]:
+    options: list[tuple[str, str]] = []
+    for participant in participants:
+        actor_id = str(participant.get("actor_id") or "").strip()
+        display_name = str(participant.get("display_name") or actor_id).strip()
+        if actor_id:
+            options.append((actor_id, display_name or actor_id))
+    return options
+
+
 def _render_skill_check_outcome_label(outcome_value: Any) -> str:
     return {
         "critical_success": "大成功",
@@ -2734,6 +2747,35 @@ def _parse_investigator_dice_modifier(dice_modifier: str) -> tuple[int, int]:
     if dice_modifier == "normal":
         return (0, 0)
     raise ValueError("invalid investigator dice modifier")
+
+
+def _parse_investigator_ranged_attack_modifier(ranged_modifier: str) -> tuple[int, int, str]:
+    if ranged_modifier == "aim_bonus_1":
+        return (1, 0, "瞄准一轮")
+    if ranged_modifier == "hurried_penalty_1":
+        return (0, 1, "仓促射击")
+    if ranged_modifier == "burst_penalty_1":
+        return (0, 1, "连发压制")
+    if ranged_modifier == "normal":
+        return (0, 0, "普通攻击")
+    raise ValueError("invalid ranged attack modifier")
+
+
+def _render_attack_resolution_label(resolution_value: Any) -> str:
+    return {
+        "hit": "命中",
+        "miss": "未命中",
+        "dodge_success": "闪避成功",
+        "counterattack_success": "反击成功",
+        "kp_review": "平手待 KP 裁定",
+    }.get(str(resolution_value or ""), str(resolution_value or "未知"))
+
+
+def _render_defense_mode_label(defense_mode: str | None) -> str:
+    return {
+        "dodge": "闪避",
+        "counterattack": "反击",
+    }.get(str(defense_mode or ""), str(defense_mode or "未知"))
 
 
 def _render_investigator_check_result(
@@ -2841,6 +2883,73 @@ def _render_investigator_opposed_check_result(opposed_check_result: dict[str, An
             f"对手判定：{_render_skill_check_outcome_label(opponent_roll.get('outcome'))}",
             f"对抗结果：{_render_opposed_resolution_label(opposed_check_result.get('resolution'))}",
         ],
+    )
+
+
+def _render_investigator_melee_attack_result(melee_attack_result: dict[str, Any] | None) -> str:
+    if melee_attack_result is None:
+        return ""
+    roll = melee_attack_result.get("roll") or {}
+    defender_roll = melee_attack_result.get("defender_roll") or {}
+    return (
+        '<section class="feedback feedback-success">'
+        "<h2>最近一次攻击结果</h2>"
+        f"<p>{escape(str(melee_attack_result.get('message', '已完成近战攻击判定')))}</p>"
+        "<p>类型：近战攻击</p>"
+        f"<p>攻击项目：{escape(str(melee_attack_result.get('attack_label', '—')))}</p>"
+        f"<p>目标：{escape(str(melee_attack_result.get('target_actor_name', '—')))}</p>"
+        f"<p>防守方式：{escape(_render_defense_mode_label(melee_attack_result.get('defense_mode')))}</p>"
+        f"<p>发起方掷骰结果：{escape(str(roll.get('total', '—')))}</p>"
+        f"<p>发起方判定：{escape(_render_skill_check_outcome_label(roll.get('outcome')))}</p>"
+        f"<p>防守方掷骰结果：{escape(str(defender_roll.get('total', '—')))}</p>"
+        f"<p>防守方判定：{escape(_render_skill_check_outcome_label(defender_roll.get('outcome')))}</p>"
+        f"<p>对抗结果：{escape(_render_opposed_resolution_label(melee_attack_result.get('opposed_resolution')))}</p>"
+        f"<p>攻击结果：{escape(_render_attack_resolution_label(melee_attack_result.get('attack_resolution')))}</p>"
+        "</section>"
+    )
+
+
+def _render_investigator_ranged_attack_result(ranged_attack_result: dict[str, Any] | None) -> str:
+    if ranged_attack_result is None:
+        return ""
+    roll = ranged_attack_result.get("roll") or {}
+    return (
+        '<section class="feedback feedback-success">'
+        "<h2>最近一次攻击结果</h2>"
+        f"<p>{escape(str(ranged_attack_result.get('message', '已完成远程攻击判定')))}</p>"
+        "<p>类型：远程攻击</p>"
+        f"<p>攻击项目：{escape(str(ranged_attack_result.get('attack_label', '—')))}</p>"
+        f"<p>目标：{escape(str(ranged_attack_result.get('target_actor_name', '—')))}</p>"
+        f"<p>攻击修正：{escape(str(ranged_attack_result.get('modifier_label', '普通攻击')))}</p>"
+        f"<p>掷骰结果：{escape(str(roll.get('total', '—')))}</p>"
+        f"<p>判定：{escape(_render_skill_check_outcome_label(roll.get('outcome')))}</p>"
+        f"<p>攻击结果：{escape(_render_attack_resolution_label(ranged_attack_result.get('attack_resolution')))}</p>"
+        "</section>"
+    )
+
+
+def _render_investigator_damage_resolution_result(
+    damage_resolution_result: dict[str, Any] | None,
+) -> str:
+    if damage_resolution_result is None:
+        return ""
+    return (
+        '<section class="feedback feedback-success">'
+        "<h2>最近一次伤害结算</h2>"
+        f"<p>{escape(str(damage_resolution_result.get('message', '已完成伤害结算')))}</p>"
+        f"<p>目标：{escape(str(damage_resolution_result.get('target_actor_name', '—')))}</p>"
+        f"<p>伤害表达式：{escape(str(damage_resolution_result.get('damage_expression', '—')))}</p>"
+        + (
+            f"<p>伤害加值：{escape(str(damage_resolution_result.get('damage_bonus_expression')))}</p>"
+            if damage_resolution_result.get("damage_bonus_expression")
+            else ""
+        )
+        + f"<p>原始伤害：{escape(str(damage_resolution_result.get('raw_damage', '—')))}</p>"
+        + f"<p>护甲吸收：{escape(str(damage_resolution_result.get('armor_absorbed', '—')))}</p>"
+        + f"<p>最终伤害：{escape(str(damage_resolution_result.get('final_damage', '—')))}</p>"
+        + f"<p>结算前 HP：{escape(str(damage_resolution_result.get('hp_before', '—')))}</p>"
+        + f"<p>结算后 HP：{escape(str(damage_resolution_result.get('hp_after', '—')))}</p>"
+        + "</section>"
     )
 
 
@@ -3043,6 +3152,183 @@ def _render_investigator_opposed_check_panel(
     """
 
 
+def _render_investigator_melee_attack_panel(
+    *,
+    session_id: str,
+    viewer_id: str,
+    target_options: list[tuple[str, str]],
+    selected_target_actor_id: str | None,
+    session_status: str,
+    attack_label: str | None,
+    attack_target_value: str | None,
+    defense_mode: str | None,
+    defense_label: str | None,
+    defense_target_value: str | None,
+) -> str:
+    if session_status == SessionStatus.COMPLETED.value:
+        return """
+      <section class="panel">
+        <h2>快速近战攻击</h2>
+        <p class="empty-state">本局已结束，当前页面不再进行新的近战攻击判定。</p>
+      </section>
+        """
+    normalized_target_actor_id = selected_target_actor_id or (target_options[0][0] if target_options else "")
+    target_options_html = "".join(
+        f'<option value="{escape(actor_id)}"{" selected" if actor_id == normalized_target_actor_id else ""}>{escape(display_name)}</option>'
+        for actor_id, display_name in target_options
+    )
+    selected_defense_mode = defense_mode or "dodge"
+    return f"""
+      <section class="panel">
+        <h2>快速近战攻击</h2>
+        <form method="post" action="/playtest/sessions/{escape(session_id)}/investigator/{escape(viewer_id)}/melee-attack" data-submit-label="攻击中...">
+          <label>
+            melee_target_actor_id
+            <select name="melee_target_actor_id">
+              {target_options_html}
+            </select>
+          </label>
+          <label>
+            attack_label
+            <input type="text" name="attack_label" value="{escape(attack_label or '')}" placeholder="例如：斗殴" required>
+          </label>
+          <label>
+            attack_target_value
+            <input type="number" name="attack_target_value" value="{escape(attack_target_value or '')}" min="1" max="100" required>
+          </label>
+          <label>
+            defense_mode
+            <select name="defense_mode">
+              <option value="dodge"{" selected" if selected_defense_mode == "dodge" else ""}>闪避</option>
+              <option value="counterattack"{" selected" if selected_defense_mode == "counterattack" else ""}>反击</option>
+            </select>
+          </label>
+          <label>
+            defense_label
+            <input type="text" name="defense_label" value="{escape(defense_label or '')}" placeholder="例如：闪避" required>
+          </label>
+          <label>
+            defense_target_value
+            <input type="number" name="defense_target_value" value="{escape(defense_target_value or '')}" min="1" max="100" required>
+          </label>
+          <p class="help">默认按近战对抗检定执行；复杂叙事条件、特殊怪物或平手后果仍由 KP 裁定。</p>
+          <button type="submit">开始近战攻击</button>
+        </form>
+      </section>
+    """
+
+
+def _render_investigator_ranged_attack_panel(
+    *,
+    session_id: str,
+    viewer_id: str,
+    target_options: list[tuple[str, str]],
+    selected_target_actor_id: str | None,
+    session_status: str,
+    attack_label: str | None,
+    attack_target_value: str | None,
+    attack_modifier: str | None,
+) -> str:
+    if session_status == SessionStatus.COMPLETED.value:
+        return """
+      <section class="panel">
+        <h2>快速远程攻击</h2>
+        <p class="empty-state">本局已结束，当前页面不再进行新的远程攻击判定。</p>
+      </section>
+        """
+    normalized_target_actor_id = selected_target_actor_id or (target_options[0][0] if target_options else "")
+    target_options_html = "".join(
+        f'<option value="{escape(actor_id)}"{" selected" if actor_id == normalized_target_actor_id else ""}>{escape(display_name)}</option>'
+        for actor_id, display_name in target_options
+    )
+    selected_modifier = attack_modifier or "normal"
+    return f"""
+      <section class="panel">
+        <h2>快速远程攻击</h2>
+        <form method="post" action="/playtest/sessions/{escape(session_id)}/investigator/{escape(viewer_id)}/ranged-attack" data-submit-label="攻击中...">
+          <label>
+            ranged_target_actor_id
+            <select name="ranged_target_actor_id">
+              {target_options_html}
+            </select>
+          </label>
+          <label>
+            ranged_attack_label
+            <input type="text" name="ranged_attack_label" value="{escape(attack_label or '')}" placeholder="例如：手枪" required>
+          </label>
+          <label>
+            ranged_attack_target_value
+            <input type="number" name="ranged_attack_target_value" value="{escape(attack_target_value or '')}" min="1" max="100" required>
+          </label>
+          <label>
+            ranged_attack_modifier
+            <select name="ranged_attack_modifier">
+              <option value="normal"{" selected" if selected_modifier == "normal" else ""}>普通攻击</option>
+              <option value="aim_bonus_1"{" selected" if selected_modifier == "aim_bonus_1" else ""}>瞄准一轮</option>
+              <option value="hurried_penalty_1"{" selected" if selected_modifier == "hurried_penalty_1" else ""}>仓促射击</option>
+              <option value="burst_penalty_1"{" selected" if selected_modifier == "burst_penalty_1" else ""}>连发压制</option>
+            </select>
+          </label>
+          <p class="help">默认只做 very small 的单边命中检定；距离、遮蔽、爆炸范围和复杂火力仍交给 KP 裁定。</p>
+          <button type="submit">开始远程攻击</button>
+        </form>
+      </section>
+    """
+
+
+def _render_investigator_damage_resolution_panel(
+    *,
+    session_status: str,
+    session_id: str,
+    viewer_id: str,
+    pending_damage_context: dict[str, Any] | None,
+    damage_expression: str | None,
+    damage_bonus_expression: str | None,
+    armor_value: str | None,
+) -> str:
+    if session_status == SessionStatus.COMPLETED.value:
+        return """
+      <section class="panel">
+        <h2>伤害结算</h2>
+        <p class="empty-state">本局已结束，当前页面不再进行新的伤害结算。</p>
+      </section>
+        """
+    if not isinstance(pending_damage_context, dict):
+        return """
+      <section class="panel">
+        <h2>伤害结算</h2>
+        <p class="empty-state">需要先完成一次命中的攻击判定，才能继续结算伤害。</p>
+      </section>
+        """
+    target_actor_id = str(pending_damage_context.get("target_actor_id") or "")
+    target_actor_name = str(pending_damage_context.get("target_display_name") or target_actor_id or "—")
+    attack_mode = str(pending_damage_context.get("attack_mode") or "未知")
+    attack_label = str(pending_damage_context.get("attack_label") or "—")
+    return f"""
+      <section class="panel">
+        <h2>伤害结算</h2>
+        <p class="help">当前待结算：{escape(target_actor_name)} · {escape(attack_mode)} · {escape(attack_label)}</p>
+        <form method="post" action="/playtest/sessions/{escape(session_id)}/investigator/{escape(viewer_id)}/damage-resolution" data-submit-label="结算中...">
+          <input type="hidden" name="damage_target_actor_id" value="{escape(target_actor_id)}">
+          <label>
+            damage_expression
+            <input type="text" name="damage_expression" value="{escape(damage_expression or '')}" placeholder="例如：1d6+1 或 1d3+db" required>
+          </label>
+          <label>
+            damage_bonus_expression
+            <input type="text" name="damage_bonus_expression" value="{escape(damage_bonus_expression or '')}" placeholder="例如：db（可选）">
+          </label>
+          <label>
+            armor_value
+            <input type="number" name="armor_value" value="{escape(armor_value or '0')}" min="0" max="99">
+          </label>
+          <p class="help">默认按 very small 伤害表达式、护甲吸收与 HP 扣减结算；部位命中、爆炸物和复杂武器仍由 KP 裁定。</p>
+          <button type="submit">结算伤害</button>
+        </form>
+      </section>
+    """
+
+
 def _render_investigator_recent_events(visible_events: list[dict[str, Any]]) -> str:
     recent_events = list(reversed(visible_events[-5:]))
     if not recent_events:
@@ -3201,11 +3487,27 @@ def _render_investigator_page(
     action_result: dict[str, Any] | None = None,
     skill_check_result: dict[str, Any] | None = None,
     attribute_check_result: dict[str, Any] | None = None,
+    melee_attack_result: dict[str, Any] | None = None,
+    ranged_attack_result: dict[str, Any] | None = None,
+    damage_resolution_result: dict[str, Any] | None = None,
     opposed_check_result: dict[str, Any] | None = None,
     san_check_result: dict[str, Any] | None = None,
     action_text: str | None = None,
     selected_skill_name: str | None = None,
     selected_attribute_name: str | None = None,
+    melee_target_actor_id: str | None = None,
+    melee_attack_label: str | None = None,
+    melee_attack_target_value: str | None = None,
+    melee_defense_mode: str | None = None,
+    melee_defense_label: str | None = None,
+    melee_defense_target_value: str | None = None,
+    ranged_target_actor_id: str | None = None,
+    ranged_attack_label: str | None = None,
+    ranged_attack_target_value: str | None = None,
+    ranged_attack_modifier: str | None = None,
+    damage_expression: str | None = None,
+    damage_bonus_expression: str | None = None,
+    damage_armor_value: str | None = None,
     opposed_actor_label: str | None = None,
     opposed_actor_target_value: str | None = None,
     opposed_opponent_label: str | None = None,
@@ -3244,6 +3546,10 @@ def _render_investigator_page(
     attribute_options = _investigator_attribute_options(
         viewer_summary if isinstance(viewer_summary, dict) else None
     )
+    target_options = _investigator_target_options(
+        [participant for participant in participants if isinstance(participant, dict)]
+    )
+    pending_damage_context = own_character_state.get("pending_damage_context")
     completed_notice = (
         '<section class="warning-box"><h2>本局已结束</h2>'
         '<p>当前页面保留结束后的查看状态；你仍可查看自己的可见信息和最近结果。</p>'
@@ -3292,6 +3598,9 @@ def _render_investigator_page(
       {_render_investigator_action_result(action_result)}
       {_render_investigator_skill_check_result(skill_check_result)}
       {_render_investigator_attribute_check_result(attribute_check_result)}
+      {_render_investigator_melee_attack_result(melee_attack_result)}
+      {_render_investigator_ranged_attack_result(ranged_attack_result)}
+      {_render_investigator_damage_resolution_result(damage_resolution_result)}
       {_render_investigator_opposed_check_result(opposed_check_result)}
       {_render_investigator_san_check_result(san_check_result)}
       <section class="panel">
@@ -3346,6 +3655,37 @@ def _render_investigator_page(
           success_loss=san_check_success_loss,
           failure_loss=san_check_failure_loss,
           session_status=normalized_session_status,
+      )}
+      {_render_investigator_melee_attack_panel(
+          session_id=session_id,
+          viewer_id=viewer_id,
+          target_options=target_options,
+          selected_target_actor_id=melee_target_actor_id,
+          session_status=normalized_session_status,
+          attack_label=melee_attack_label,
+          attack_target_value=melee_attack_target_value,
+          defense_mode=melee_defense_mode,
+          defense_label=melee_defense_label,
+          defense_target_value=melee_defense_target_value,
+      )}
+      {_render_investigator_ranged_attack_panel(
+          session_id=session_id,
+          viewer_id=viewer_id,
+          target_options=target_options,
+          selected_target_actor_id=ranged_target_actor_id,
+          session_status=normalized_session_status,
+          attack_label=ranged_attack_label,
+          attack_target_value=ranged_attack_target_value,
+          attack_modifier=ranged_attack_modifier,
+      )}
+      {_render_investigator_damage_resolution_panel(
+          session_status=normalized_session_status,
+          session_id=session_id,
+          viewer_id=viewer_id,
+          pending_damage_context=pending_damage_context if isinstance(pending_damage_context, dict) else None,
+          damage_expression=damage_expression,
+          damage_bonus_expression=damage_bonus_expression,
+          armor_value=damage_armor_value,
       )}
       {_render_investigator_opposed_check_panel(
           session_id=session_id,
@@ -3437,11 +3777,27 @@ def _render_investigator_page_from_service(
     action_result: dict[str, Any] | None = None,
     skill_check_result: dict[str, Any] | None = None,
     attribute_check_result: dict[str, Any] | None = None,
+    melee_attack_result: dict[str, Any] | None = None,
+    ranged_attack_result: dict[str, Any] | None = None,
+    damage_resolution_result: dict[str, Any] | None = None,
     opposed_check_result: dict[str, Any] | None = None,
     san_check_result: dict[str, Any] | None = None,
     action_text: str | None = None,
     selected_skill_name: str | None = None,
     selected_attribute_name: str | None = None,
+    melee_target_actor_id: str | None = None,
+    melee_attack_label: str | None = None,
+    melee_attack_target_value: str | None = None,
+    melee_defense_mode: str | None = None,
+    melee_defense_label: str | None = None,
+    melee_defense_target_value: str | None = None,
+    ranged_target_actor_id: str | None = None,
+    ranged_attack_label: str | None = None,
+    ranged_attack_target_value: str | None = None,
+    ranged_attack_modifier: str | None = None,
+    damage_expression: str | None = None,
+    damage_bonus_expression: str | None = None,
+    damage_armor_value: str | None = None,
     opposed_actor_label: str | None = None,
     opposed_actor_target_value: str | None = None,
     opposed_opponent_label: str | None = None,
@@ -3466,11 +3822,27 @@ def _render_investigator_page_from_service(
             action_result=action_result,
             skill_check_result=skill_check_result,
             attribute_check_result=attribute_check_result,
+            melee_attack_result=melee_attack_result,
+            ranged_attack_result=ranged_attack_result,
+            damage_resolution_result=damage_resolution_result,
             opposed_check_result=opposed_check_result,
             san_check_result=san_check_result,
             action_text=action_text,
             selected_skill_name=selected_skill_name,
             selected_attribute_name=selected_attribute_name,
+            melee_target_actor_id=melee_target_actor_id,
+            melee_attack_label=melee_attack_label,
+            melee_attack_target_value=melee_attack_target_value,
+            melee_defense_mode=melee_defense_mode,
+            melee_defense_label=melee_defense_label,
+            melee_defense_target_value=melee_defense_target_value,
+            ranged_target_actor_id=ranged_target_actor_id,
+            ranged_attack_label=ranged_attack_label,
+            ranged_attack_target_value=ranged_attack_target_value,
+            ranged_attack_modifier=ranged_attack_modifier,
+            damage_expression=damage_expression,
+            damage_bonus_expression=damage_bonus_expression,
+            damage_armor_value=damage_armor_value,
             opposed_actor_label=opposed_actor_label,
             opposed_actor_target_value=opposed_actor_target_value,
             opposed_opponent_label=opposed_opponent_label,
@@ -3498,11 +3870,27 @@ def _render_investigator_page_from_service(
         action_result=action_result,
         skill_check_result=skill_check_result,
         attribute_check_result=attribute_check_result,
+        melee_attack_result=melee_attack_result,
+        ranged_attack_result=ranged_attack_result,
+        damage_resolution_result=damage_resolution_result,
         opposed_check_result=opposed_check_result,
         san_check_result=san_check_result,
         action_text=action_text,
         selected_skill_name=selected_skill_name,
         selected_attribute_name=selected_attribute_name,
+        melee_target_actor_id=melee_target_actor_id,
+        melee_attack_label=melee_attack_label,
+        melee_attack_target_value=melee_attack_target_value,
+        melee_defense_mode=melee_defense_mode,
+        melee_defense_label=melee_defense_label,
+        melee_defense_target_value=melee_defense_target_value,
+        ranged_target_actor_id=ranged_target_actor_id,
+        ranged_attack_label=ranged_attack_label,
+        ranged_attack_target_value=ranged_attack_target_value,
+        ranged_attack_modifier=ranged_attack_modifier,
+        damage_expression=damage_expression,
+        damage_bonus_expression=damage_bonus_expression,
+        damage_armor_value=damage_armor_value,
         opposed_actor_label=opposed_actor_label,
         opposed_actor_target_value=opposed_actor_target_value,
         opposed_opponent_label=opposed_opponent_label,
@@ -3774,6 +4162,159 @@ async def submit_investigator_attribute_check_via_ui(
             session_id=session_id,
             viewer_id=viewer_id,
             selected_attribute_name=attribute_name,
+        )
+
+
+@router.post("/sessions/{session_id}/investigator/{viewer_id}/melee-attack", response_class=HTMLResponse)
+async def submit_investigator_melee_attack_via_ui(
+    session_id: str,
+    viewer_id: str,
+    request: Request,
+    service: SessionService = Depends(get_session_service),
+) -> HTMLResponse:
+    form = await _read_form_payload(request)
+    target_actor_id = _normalize_form_text(form.get("melee_target_actor_id")) or ""
+    attack_label = _normalize_form_text(form.get("attack_label")) or ""
+    attack_target_value = _normalize_form_text(form.get("attack_target_value")) or ""
+    defense_mode = _normalize_form_text(form.get("defense_mode")) or "dodge"
+    defense_label = _normalize_form_text(form.get("defense_label")) or ""
+    defense_target_value = _normalize_form_text(form.get("defense_target_value")) or ""
+    try:
+        response = service.perform_investigator_melee_attack(
+            session_id,
+            InvestigatorMeleeAttackRequest(
+                actor_id=viewer_id,
+                target_actor_id=target_actor_id,
+                attack_label=attack_label,
+                attack_target_value=attack_target_value,
+                defense_mode=defense_mode,
+                defense_label=defense_label,
+                defense_target_value=defense_target_value,
+            ),
+        )
+        return _render_investigator_page_from_service(
+            service=service,
+            session_id=session_id,
+            viewer_id=viewer_id,
+            notice=response.message,
+            melee_attack_result=response.model_dump(mode="json"),
+            melee_target_actor_id=response.target_actor_id,
+            melee_attack_label=response.attack_label,
+            melee_attack_target_value=str(response.attack_target_value),
+            melee_defense_mode=response.defense_mode.value,
+            melee_defense_label=response.defense_label,
+            melee_defense_target_value=str(response.defense_target_value),
+        )
+    except (ValidationError, LookupError, ConflictError, ValueError) as exc:
+        return _render_playtest_exception(
+            _render_investigator_page_from_service,
+            exc=exc,
+            service=service,
+            session_id=session_id,
+            viewer_id=viewer_id,
+            melee_target_actor_id=target_actor_id,
+            melee_attack_label=attack_label,
+            melee_attack_target_value=attack_target_value,
+            melee_defense_mode=defense_mode,
+            melee_defense_label=defense_label,
+            melee_defense_target_value=defense_target_value,
+        )
+
+
+@router.post("/sessions/{session_id}/investigator/{viewer_id}/ranged-attack", response_class=HTMLResponse)
+async def submit_investigator_ranged_attack_via_ui(
+    session_id: str,
+    viewer_id: str,
+    request: Request,
+    service: SessionService = Depends(get_session_service),
+) -> HTMLResponse:
+    form = await _read_form_payload(request)
+    target_actor_id = _normalize_form_text(form.get("ranged_target_actor_id")) or ""
+    attack_label = _normalize_form_text(form.get("ranged_attack_label")) or ""
+    attack_target_value = _normalize_form_text(form.get("ranged_attack_target_value")) or ""
+    modifier = _normalize_form_text(form.get("ranged_attack_modifier")) or "normal"
+    try:
+        bonus_dice, penalty_dice, modifier_label = _parse_investigator_ranged_attack_modifier(modifier)
+        response = service.perform_investigator_ranged_attack(
+            session_id,
+            InvestigatorRangedAttackRequest(
+                actor_id=viewer_id,
+                target_actor_id=target_actor_id,
+                attack_label=attack_label,
+                attack_target_value=attack_target_value,
+                bonus_dice=bonus_dice,
+                penalty_dice=penalty_dice,
+                modifier_label=modifier_label,
+            ),
+        )
+        return _render_investigator_page_from_service(
+            service=service,
+            session_id=session_id,
+            viewer_id=viewer_id,
+            notice=response.message,
+            ranged_attack_result=response.model_dump(mode="json"),
+            ranged_target_actor_id=response.target_actor_id,
+            ranged_attack_label=response.attack_label,
+            ranged_attack_target_value=str(response.attack_target_value),
+            ranged_attack_modifier=modifier,
+        )
+    except (ValidationError, LookupError, ConflictError, ValueError) as exc:
+        return _render_playtest_exception(
+            _render_investigator_page_from_service,
+            exc=exc,
+            service=service,
+            session_id=session_id,
+            viewer_id=viewer_id,
+            ranged_target_actor_id=target_actor_id,
+            ranged_attack_label=attack_label,
+            ranged_attack_target_value=attack_target_value,
+            ranged_attack_modifier=modifier,
+        )
+
+
+@router.post("/sessions/{session_id}/investigator/{viewer_id}/damage-resolution", response_class=HTMLResponse)
+async def submit_investigator_damage_resolution_via_ui(
+    session_id: str,
+    viewer_id: str,
+    request: Request,
+    service: SessionService = Depends(get_session_service),
+) -> HTMLResponse:
+    form = await _read_form_payload(request)
+    target_actor_id = _normalize_form_text(form.get("damage_target_actor_id")) or ""
+    damage_expression = _normalize_form_text(form.get("damage_expression")) or ""
+    damage_bonus_expression = _normalize_form_text(form.get("damage_bonus_expression"))
+    armor_value = _normalize_form_text(form.get("armor_value")) or "0"
+    try:
+        response = service.resolve_investigator_damage(
+            session_id,
+            InvestigatorDamageResolutionRequest(
+                actor_id=viewer_id,
+                target_actor_id=target_actor_id,
+                damage_expression=damage_expression,
+                damage_bonus_expression=damage_bonus_expression,
+                armor_value=armor_value,
+            ),
+        )
+        return _render_investigator_page_from_service(
+            service=service,
+            session_id=session_id,
+            viewer_id=viewer_id,
+            notice=response.message,
+            damage_resolution_result=response.model_dump(mode="json"),
+            damage_expression=response.damage_expression,
+            damage_bonus_expression=response.damage_bonus_expression,
+            damage_armor_value=str(response.armor_value),
+        )
+    except (ValidationError, LookupError, ConflictError, ValueError) as exc:
+        return _render_playtest_exception(
+            _render_investigator_page_from_service,
+            exc=exc,
+            service=service,
+            session_id=session_id,
+            viewer_id=viewer_id,
+            damage_expression=damage_expression,
+            damage_bonus_expression=damage_bonus_expression,
+            damage_armor_value=armor_value,
         )
 
 

@@ -7,7 +7,12 @@ from uuid import uuid4
 from pydantic import BaseModel, ConfigDict, Field, computed_field, field_validator, model_validator
 
 from coc_runner.compat import StrEnum
-from coc_runner.domain.dice import D100Roll, OpposedCheckResolution
+from coc_runner.domain.dice import (
+    AttackDefenseMode,
+    AttackResolution,
+    D100Roll,
+    OpposedCheckResolution,
+)
 
 
 def utc_now() -> datetime:
@@ -806,7 +811,17 @@ class SessionCharacterState(BaseModel):
     import_review_pending: bool = False
     last_import_sync_policy: CharacterImportSyncPolicy | None = None
     last_import_sync_report: CharacterImportSyncReport | None = None
+    pending_damage_context: "PendingDamageContext | None" = None
     last_updated_at: datetime = Field(default_factory=utc_now)
+
+
+class PendingDamageContext(BaseModel):
+    source_actor_id: str = Field(min_length=1, max_length=80)
+    target_actor_id: str = Field(min_length=1, max_length=80)
+    target_display_name: str = Field(min_length=1, max_length=80)
+    attack_mode: Literal["melee", "ranged"]
+    attack_label: str = Field(min_length=1, max_length=80)
+    created_at: datetime = Field(default_factory=utc_now)
 
 
 class ScenarioScaffold(BaseModel):
@@ -1677,6 +1692,99 @@ class InvestigatorOpposedCheckResponse(BaseModel):
     success: bool
 
 
+class InvestigatorMeleeAttackRequest(BaseModel):
+    actor_id: str
+    target_actor_id: str = Field(min_length=1, max_length=80)
+    attack_label: str = Field(min_length=1, max_length=80)
+    attack_target_value: int = Field(ge=1, le=100)
+    defense_mode: AttackDefenseMode
+    defense_label: str = Field(min_length=1, max_length=80)
+    defense_target_value: int = Field(ge=1, le=100)
+    language_preference: LanguagePreference | None = None
+
+
+class InvestigatorMeleeAttackResponse(BaseModel):
+    message: str
+    session_id: str
+    viewer_id: str
+    state_version: int
+    language_preference: LanguagePreference
+    target_actor_id: str
+    target_actor_name: str
+    attack_label: str
+    attack_target_value: int = Field(ge=1, le=100)
+    defense_mode: AttackDefenseMode
+    defense_label: str
+    defense_target_value: int = Field(ge=1, le=100)
+    roll: D100Roll
+    defender_roll: D100Roll
+    opposed_resolution: OpposedCheckResolution
+    attack_resolution: AttackResolution
+    success: bool
+
+
+class InvestigatorRangedAttackRequest(BaseModel):
+    actor_id: str
+    target_actor_id: str = Field(min_length=1, max_length=80)
+    attack_label: str = Field(min_length=1, max_length=80)
+    attack_target_value: int = Field(ge=1, le=100)
+    bonus_dice: int = Field(default=0, ge=0, le=2)
+    penalty_dice: int = Field(default=0, ge=0, le=2)
+    modifier_label: str = Field(default="normal", min_length=1, max_length=40)
+    language_preference: LanguagePreference | None = None
+
+
+class InvestigatorRangedAttackResponse(BaseModel):
+    message: str
+    session_id: str
+    viewer_id: str
+    state_version: int
+    language_preference: LanguagePreference
+    target_actor_id: str
+    target_actor_name: str
+    attack_label: str
+    attack_target_value: int = Field(ge=1, le=100)
+    modifier_label: str
+    roll: D100Roll
+    attack_resolution: AttackResolution
+    success: bool
+
+
+class InvestigatorDamageResolutionRequest(BaseModel):
+    actor_id: str
+    target_actor_id: str = Field(min_length=1, max_length=80)
+    damage_expression: str = Field(min_length=1, max_length=40)
+    damage_bonus_expression: str | None = Field(default=None, max_length=40)
+    armor_value: int = Field(default=0, ge=0, le=99)
+    language_preference: LanguagePreference | None = None
+
+    @field_validator("damage_expression", "damage_bonus_expression")
+    @classmethod
+    def _normalize_damage_fields(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        normalized = value.strip()
+        return normalized or None
+
+
+class InvestigatorDamageResolutionResponse(BaseModel):
+    message: str
+    session_id: str
+    viewer_id: str
+    state_version: int
+    language_preference: LanguagePreference
+    target_actor_id: str
+    target_actor_name: str
+    damage_expression: str
+    damage_bonus_expression: str | None = None
+    armor_value: int = Field(ge=0, le=99)
+    raw_damage: int = Field(ge=0)
+    armor_absorbed: int = Field(ge=0)
+    final_damage: int = Field(ge=0)
+    hp_before: int = Field(ge=0)
+    hp_after: int = Field(ge=0)
+
+
 class InvestigatorSanCheckRequest(BaseModel):
     actor_id: str
     source_label: str = Field(min_length=1, max_length=120)
@@ -2037,5 +2145,6 @@ ReviewedAction.model_rebuild()
 AuthoritativeAction.model_rebuild()
 BeatCondition.model_rebuild()
 BeatConsequence.model_rebuild()
+SessionCharacterState.model_rebuild()
 SessionState.model_rebuild()
 InvestigatorView.model_rebuild()
