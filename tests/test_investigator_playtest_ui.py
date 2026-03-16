@@ -13,6 +13,7 @@ from coc_runner.application.dice_execution import (
     DiceExecutionResult,
     DiceStyleExecutionBackend,
     DiceStyleSubprocessClient,
+    LocalDiceExecutionBackend,
 )
 from coc_runner.domain.dice import D100Roll, RollOutcome
 from coc_runner.domain.dice import HitLocation
@@ -768,6 +769,262 @@ def test_investigator_playtest_page_melee_attack_hit_can_open_damage_resolution_
     assert "KP 提示" in keeper_html
     assert "林舟受到重伤，需要 KP 进一步裁定" in keeper_html
 
+
+def test_investigator_damage_resolution_prefers_dying_state_over_auto_death(
+    client: TestClient,
+    monkeypatch,
+) -> None:
+    target = make_participant("investigator-1", "林舟")
+    healer = make_participant("investigator-2", "周岚")
+    healer["character"]["skills"]["急救"] = 60
+    session_id = _start_investigator_ui_session(client, participants=[target, healer])
+
+    dice_client = DiceStyleSubprocessClient(
+        command=_bridge_command("scripted_dice_provider.py"),
+        timeout_seconds=1.0,
+    )
+    client.app.state.session_service.dice_execution_backend = DiceStyleExecutionBackend(
+        client=dice_client
+    )
+    monkeypatch.setattr(
+        session_service_module,
+        "roll_damage_expression",
+        lambda expression, *, db_expression=None, seed=None: 11,
+    )
+    monkeypatch.setattr(
+        session_service_module,
+        "roll_hit_location",
+        lambda seed=None: (20, HitLocation.HEAD),
+    )
+
+    attack_response = client.post(
+        f"/playtest/sessions/{session_id}/investigator/investigator-2/melee-attack",
+        data={
+            "melee_target_actor_id": "investigator-1",
+            "attack_label": "斗殴",
+            "attack_target_value": "55",
+            "defense_mode": "dodge",
+            "defense_label": "闪避",
+            "defense_target_value": "40",
+        },
+    )
+    assert attack_response.status_code == 200
+
+    damage_response = client.post(
+        f"/playtest/sessions/{session_id}/investigator/investigator-2/damage-resolution",
+        data={
+            "damage_target_actor_id": "investigator-1",
+            "damage_expression": "1d6+1",
+            "damage_bonus_expression": "",
+            "armor_value": "0",
+        },
+    )
+
+    assert damage_response.status_code == 200
+    damage_html = damage_response.text
+    assert "结算后 HP：0" in damage_html
+    assert "重伤：是（阈值 6）" in damage_html
+    assert "伤势状态：濒死（仍可救助）" in damage_html
+    assert "已死亡" not in damage_html
+
+    snapshot = _get_snapshot(client, session_id)
+    target_state = snapshot["character_states"]["investigator-1"]
+    assert target_state["current_hit_points"] == 0
+    assert target_state["heavy_wound_active"] is True
+    assert target_state["is_unconscious"] is True
+    assert target_state["is_dying"] is True
+    assert target_state["is_stable"] is False
+    assert target_state["death_confirmed"] is False
+
+    target_html = client.get(
+        f"/playtest/sessions/{session_id}/investigator/investigator-1"
+    ).text
+    assert "状态与条件" in target_html
+    assert "重伤" in target_html
+    assert "昏迷" in target_html
+    assert "濒死" in target_html
+    assert "已死亡" not in target_html
+
+    keeper_html = client.get(f"/playtest/sessions/{session_id}/keeper").text
+    assert "林舟处于濒死状态，等待 KP 确认后续处理" in keeper_html
+    assert "危急伤势" in keeper_html
+    assert "濒死（仍可救助）" in keeper_html
+
+
+def test_investigator_first_aid_success_stabilizes_dying_target_without_auto_death(
+    client: TestClient,
+    monkeypatch,
+) -> None:
+    target = make_participant("investigator-1", "林舟")
+    healer = make_participant("investigator-2", "周岚")
+    healer["character"]["skills"]["急救"] = 60
+    session_id = _start_investigator_ui_session(client, participants=[target, healer])
+
+    dice_client = DiceStyleSubprocessClient(
+        command=_bridge_command("scripted_dice_provider.py"),
+        timeout_seconds=1.0,
+    )
+    client.app.state.session_service.dice_execution_backend = DiceStyleExecutionBackend(
+        client=dice_client
+    )
+    monkeypatch.setattr(
+        session_service_module,
+        "roll_damage_expression",
+        lambda expression, *, db_expression=None, seed=None: 11,
+    )
+
+    attack_response = client.post(
+        f"/playtest/sessions/{session_id}/investigator/investigator-2/melee-attack",
+        data={
+            "melee_target_actor_id": "investigator-1",
+            "attack_label": "斗殴",
+            "attack_target_value": "55",
+            "defense_mode": "dodge",
+            "defense_label": "闪避",
+            "defense_target_value": "40",
+        },
+    )
+    assert attack_response.status_code == 200
+    damage_response = client.post(
+        f"/playtest/sessions/{session_id}/investigator/investigator-2/damage-resolution",
+        data={
+            "damage_target_actor_id": "investigator-1",
+            "damage_expression": "1d6+1",
+            "damage_bonus_expression": "",
+            "armor_value": "0",
+        },
+    )
+    assert damage_response.status_code == 200
+
+    client.app.state.session_service.dice_execution_backend = LocalDiceExecutionBackend(
+        roller=lambda target, *, seed=None, bonus_dice=0, penalty_dice=0: D100Roll(
+            seed=seed,
+            unit_die=5,
+            tens_dice=[2],
+            selected_tens=2,
+            total=25,
+            target=target,
+            bonus_dice=bonus_dice,
+            penalty_dice=penalty_dice,
+            outcome=RollOutcome.SUCCESS,
+        )
+    )
+
+    response = client.post(
+        f"/playtest/sessions/{session_id}/investigator/investigator-2/first-aid",
+        data={
+            "first_aid_target_actor_id": "investigator-1",
+            "first_aid_skill_name": "急救",
+        },
+    )
+
+    assert response.status_code == 200
+    html = response.text
+    assert "最近一次急救结果" in html
+    assert "已完成紧急急救检定" in html
+    assert "目标：林舟" in html
+    assert "使用技能：急救" in html
+    assert "判定：成功" in html
+    assert "急救前状态：濒死（仍可救助）" in html
+    assert "急救后状态：昏迷但稳定" in html
+
+    snapshot = _get_snapshot(client, session_id)
+    target_state = snapshot["character_states"]["investigator-1"]
+    assert target_state["is_dying"] is False
+    assert target_state["is_unconscious"] is True
+    assert target_state["is_stable"] is True
+    assert target_state["death_confirmed"] is False
+
+    target_html = client.get(
+        f"/playtest/sessions/{session_id}/investigator/investigator-1"
+    ).text
+    assert "昏迷" in target_html
+    assert "已稳定" in target_html
+    assert "濒死" not in target_html
+    assert "已死亡" not in target_html
+
+
+def test_investigator_first_aid_failure_keeps_dying_state_without_mechanical_auto_death(
+    client: TestClient,
+    monkeypatch,
+) -> None:
+    target = make_participant("investigator-1", "林舟")
+    healer = make_participant("investigator-2", "周岚")
+    healer["character"]["skills"]["急救"] = 60
+    session_id = _start_investigator_ui_session(client, participants=[target, healer])
+
+    dice_client = DiceStyleSubprocessClient(
+        command=_bridge_command("scripted_dice_provider.py"),
+        timeout_seconds=1.0,
+    )
+    client.app.state.session_service.dice_execution_backend = DiceStyleExecutionBackend(
+        client=dice_client
+    )
+    monkeypatch.setattr(
+        session_service_module,
+        "roll_damage_expression",
+        lambda expression, *, db_expression=None, seed=None: 11,
+    )
+
+    attack_response = client.post(
+        f"/playtest/sessions/{session_id}/investigator/investigator-2/melee-attack",
+        data={
+            "melee_target_actor_id": "investigator-1",
+            "attack_label": "斗殴",
+            "attack_target_value": "55",
+            "defense_mode": "dodge",
+            "defense_label": "闪避",
+            "defense_target_value": "40",
+        },
+    )
+    assert attack_response.status_code == 200
+    damage_response = client.post(
+        f"/playtest/sessions/{session_id}/investigator/investigator-2/damage-resolution",
+        data={
+            "damage_target_actor_id": "investigator-1",
+            "damage_expression": "1d6+1",
+            "damage_bonus_expression": "",
+            "armor_value": "0",
+        },
+    )
+    assert damage_response.status_code == 200
+
+    client.app.state.session_service.dice_execution_backend = LocalDiceExecutionBackend(
+        roller=lambda target, *, seed=None, bonus_dice=0, penalty_dice=0: D100Roll(
+            seed=seed,
+            unit_die=5,
+            tens_dice=[9],
+            selected_tens=9,
+            total=95,
+            target=target,
+            bonus_dice=bonus_dice,
+            penalty_dice=penalty_dice,
+            outcome=RollOutcome.FAILURE,
+        )
+    )
+
+    response = client.post(
+        f"/playtest/sessions/{session_id}/investigator/investigator-2/first-aid",
+        data={
+            "first_aid_target_actor_id": "investigator-1",
+            "first_aid_skill_name": "急救",
+        },
+    )
+
+    assert response.status_code == 200
+    html = response.text
+    assert "最近一次急救结果" in html
+    assert "判定：失败" in html
+    assert "急救前状态：濒死（仍可救助）" in html
+    assert "急救后状态：濒死（仍可救助）" in html
+    assert "已死亡" not in html
+
+    snapshot = _get_snapshot(client, session_id)
+    target_state = snapshot["character_states"]["investigator-1"]
+    assert target_state["is_dying"] is True
+    assert target_state["is_unconscious"] is True
+    assert target_state["is_stable"] is False
+    assert target_state["death_confirmed"] is False
 
 def test_investigator_playtest_page_melee_attack_distinguishes_counterattack_execution_semantics(
     client: TestClient,

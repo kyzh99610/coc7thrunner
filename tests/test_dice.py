@@ -11,6 +11,7 @@ from coc_runner.domain.dice import (
     evaluate_heavy_wound,
     evaluate_melee_attack_resolution,
     evaluate_ranged_attack_resolution,
+    evaluate_wound_aftermath,
     resolve_hit_location,
     roll_d100,
     roll_damage_expression,
@@ -125,3 +126,38 @@ def test_hit_location_and_heavy_wound_helpers_keep_authoritative_combat_conseque
 
     assert evaluate_heavy_wound(final_damage=5, max_hit_points=11) is False
     assert evaluate_heavy_wound(final_damage=6, max_hit_points=11) is True
+
+
+def test_wound_aftermath_prefers_rescuable_states_over_immediate_auto_death() -> None:
+    heavy_but_conscious = evaluate_wound_aftermath(
+        final_damage=6,
+        hp_after=5,
+        max_hit_points=11,
+    )
+    assert heavy_but_conscious.heavy_wound is True
+    assert heavy_but_conscious.unconscious is False
+    assert heavy_but_conscious.dying is False
+    assert heavy_but_conscious.stable is False
+    assert heavy_but_conscious.kp_follow_up_required is True
+
+    dying_but_rescuable = evaluate_wound_aftermath(
+        final_damage=6,
+        hp_after=0,
+        max_hit_points=11,
+    )
+    assert dying_but_rescuable.heavy_wound is True
+    assert dying_but_rescuable.unconscious is True
+    assert dying_but_rescuable.dying is True
+    assert dying_but_rescuable.stable is False
+    assert dying_but_rescuable.fatal_risk is True
+
+    unconscious_but_stable = evaluate_wound_aftermath(
+        final_damage=3,
+        hp_after=0,
+        max_hit_points=11,
+    )
+    assert unconscious_but_stable.heavy_wound is False
+    assert unconscious_but_stable.unconscious is True
+    assert unconscious_but_stable.dying is False
+    assert unconscious_but_stable.stable is True
+    assert unconscious_but_stable.fatal_risk is False

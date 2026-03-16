@@ -47,6 +47,15 @@ class HitLocation(StrEnum):
     HEAD = "head"
 
 
+class WoundAftermath(BaseModel):
+    heavy_wound: bool = False
+    unconscious: bool = False
+    dying: bool = False
+    stable: bool = False
+    fatal_risk: bool = False
+    kp_follow_up_required: bool = False
+
+
 class D100Roll(BaseModel):
     seed: int | None = None
     unit_die: int = Field(ge=0, le=9)
@@ -161,6 +170,31 @@ def evaluate_heavy_wound(*, final_damage: int, max_hit_points: int) -> bool:
     if max_hit_points <= 0:
         raise ValueError("max_hit_points must be positive")
     return final_damage * 2 >= max_hit_points
+
+
+def evaluate_wound_aftermath(
+    *,
+    final_damage: int,
+    hp_after: int,
+    max_hit_points: int,
+) -> WoundAftermath:
+    if hp_after < 0:
+        raise ValueError("hp_after must be non-negative")
+    heavy_wound = evaluate_heavy_wound(
+        final_damage=final_damage,
+        max_hit_points=max_hit_points,
+    )
+    unconscious = hp_after == 0
+    dying = unconscious and heavy_wound
+    stable = unconscious and not dying
+    return WoundAftermath(
+        heavy_wound=heavy_wound,
+        unconscious=unconscious,
+        dying=dying,
+        stable=stable,
+        fatal_risk=dying,
+        kp_follow_up_required=heavy_wound or dying,
+    )
 
 
 def compute_damage_bonus_expression(*, strength: int, size: int) -> str:

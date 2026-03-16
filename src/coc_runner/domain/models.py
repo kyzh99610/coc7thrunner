@@ -99,6 +99,11 @@ class HitLocationStatus(StrEnum):
     KP_OVERRIDE = "kp_override"
 
 
+class KeeperWoundResolution(StrEnum):
+    STABILIZE_UNCONSCIOUS = "stabilize_unconscious"
+    CONFIRM_DEATH = "confirm_death"
+
+
 class EventType(StrEnum):
     SESSION_STARTED = "session_started"
     PLAYER_ACTION = "player_action"
@@ -717,6 +722,8 @@ class QueuedKPPrompt(BaseModel):
     san_previous_sanity: int | None = Field(default=None, ge=0, le=99)
     san_current_sanity: int | None = Field(default=None, ge=0, le=99)
     san_loss_applied: int | None = Field(default=None, ge=0)
+    combat_actor_id: str | None = Field(default=None, max_length=80)
+    combat_actor_name: str | None = Field(default=None, max_length=80)
     notes: list[str] = Field(default_factory=list)
     status: KeeperPromptStatus = KeeperPromptStatus.PENDING
     trigger_reason: str | None = None
@@ -808,6 +815,11 @@ class SessionCharacterState(BaseModel):
     inventory: list[str] = Field(default_factory=list)
     status_effects: list[str] = Field(default_factory=list)
     temporary_conditions: list[str] = Field(default_factory=list)
+    heavy_wound_active: bool = False
+    is_unconscious: bool = False
+    is_dying: bool = False
+    is_stable: bool = False
+    death_confirmed: bool = False
     clue_ids: list[str] = Field(default_factory=list)
     private_notes: list[str] = Field(default_factory=list)
     secret_state_refs: list[str] = Field(default_factory=list)
@@ -1814,7 +1826,39 @@ class InvestigatorDamageResolutionResponse(BaseModel):
     hit_location: HitLocation | None = None
     heavy_wound: bool = False
     heavy_wound_threshold: int = Field(ge=1)
+    is_unconscious: bool = False
+    is_dying: bool = False
+    is_stable: bool = False
+    death_confirmed: bool = False
+    fatal_risk: bool = False
     kp_follow_up_required: bool = False
+
+
+class InvestigatorFirstAidRequest(BaseModel):
+    actor_id: str
+    target_actor_id: str = Field(min_length=1, max_length=80)
+    skill_name: str = Field(min_length=1, max_length=80)
+    language_preference: LanguagePreference | None = None
+
+
+class InvestigatorFirstAidResponse(BaseModel):
+    message: str
+    session_id: str
+    viewer_id: str
+    state_version: int
+    language_preference: LanguagePreference
+    target_actor_id: str
+    target_actor_name: str
+    skill_name: str
+    skill_value: int = Field(ge=0, le=100)
+    roll: D100Roll
+    success: bool
+    before_state_label: str
+    after_state_label: str
+    is_unconscious: bool = False
+    is_dying: bool = False
+    is_stable: bool = False
+    death_confirmed: bool = False
 
 
 class StartCombatContextRequest(BaseModel):
@@ -1842,6 +1886,24 @@ class AdvanceCombatTurnResponse(BaseModel):
     state_version: int
     language_preference: LanguagePreference
     combat_context: CombatContext
+
+
+class KeeperWoundResolutionRequest(BaseModel):
+    operator_id: str = Field(min_length=1, max_length=80)
+    resolution: KeeperWoundResolution
+    language_preference: LanguagePreference | None = None
+
+
+class KeeperWoundResolutionResponse(BaseModel):
+    message: str
+    session_id: str
+    state_version: int
+    language_preference: LanguagePreference
+    actor_id: str
+    death_confirmed: bool = False
+    is_unconscious: bool = False
+    is_dying: bool = False
+    is_stable: bool = False
 
 
 class InvestigatorSanCheckRequest(BaseModel):

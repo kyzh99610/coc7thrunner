@@ -4,6 +4,7 @@ import shutil
 
 import coc_runner.application.session_service as session_service_module
 from fastapi.testclient import TestClient
+from coc_runner.application.dice_execution import LocalDiceExecutionBackend
 from coc_runner.domain.dice import D100Roll, RollOutcome
 
 from coc_runner.domain.scenario_examples import whispering_guesthouse_payload
@@ -514,6 +515,104 @@ def test_keeper_dashboard_rejects_start_combat_context_when_session_is_not_activ
     assert "本局已结束，当前页面不再建立新的战斗顺序。" in completed_html
     assert _get_snapshot(client, session_id) == before_completed_snapshot
 
+
+def test_keeper_dashboard_can_confirm_death_for_a_dying_investigator_without_external_state_truth(
+    client: TestClient,
+    monkeypatch,
+) -> None:
+    target = make_participant("investigator-1", "林舟")
+    attacker = make_participant("investigator-2", "周岚")
+    session_id = _start_keeper_dashboard_session(client)
+
+    start_response = client.post(
+        "/sessions/start",
+        json={
+            "keeper_name": "KP",
+            "keeper_id": KEEPER_ID,
+            "scenario": whispering_guesthouse_payload(),
+            "participants": [target, attacker],
+        },
+    )
+    assert start_response.status_code == 201
+    session_id = start_response.json()["session_id"]
+
+    fixed_rolls = iter(
+        [
+            D100Roll(
+                unit_die=3,
+                tens_dice=[2],
+                selected_tens=2,
+                total=23,
+                target=55,
+                outcome=RollOutcome.HARD_SUCCESS,
+            ),
+            D100Roll(
+                unit_die=2,
+                tens_dice=[6],
+                selected_tens=6,
+                total=62,
+                target=40,
+                outcome=RollOutcome.FAILURE,
+            ),
+        ]
+    )
+    client.app.state.session_service.dice_execution_backend = LocalDiceExecutionBackend(
+        roller=lambda target, *, seed=None, bonus_dice=0, penalty_dice=0: next(fixed_rolls)
+    )
+    monkeypatch.setattr(
+        session_service_module,
+        "roll_damage_expression",
+        lambda expression, *, db_expression=None, seed=None: 11,
+    )
+
+    attack_response = client.post(
+        f"/playtest/sessions/{session_id}/investigator/investigator-2/melee-attack",
+        data={
+            "melee_target_actor_id": "investigator-1",
+            "attack_label": "斗殴",
+            "attack_target_value": "55",
+            "defense_mode": "dodge",
+            "defense_label": "闪避",
+            "defense_target_value": "40",
+        },
+    )
+    assert attack_response.status_code == 200
+    damage_response = client.post(
+        f"/playtest/sessions/{session_id}/investigator/investigator-2/damage-resolution",
+        data={
+            "damage_target_actor_id": "investigator-1",
+            "damage_expression": "1d6+1",
+            "damage_bonus_expression": "",
+            "armor_value": "0",
+        },
+    )
+    assert damage_response.status_code == 200
+
+    before_keeper_html = client.get(f"/playtest/sessions/{session_id}/keeper").text
+    assert "危急伤势" in before_keeper_html
+    assert "林舟" in before_keeper_html
+    assert "濒死（仍可救助）" in before_keeper_html
+    assert 'value="confirm_death"' in before_keeper_html
+
+    resolve_response = client.post(
+        f"/playtest/sessions/{session_id}/keeper/wounds/investigator-1/resolve",
+        data={
+            "operator_id": KEEPER_ID,
+            "resolution": "confirm_death",
+        },
+    )
+
+    assert resolve_response.status_code == 200
+    resolved_html = resolve_response.text
+    assert "已确认林舟死亡" in resolved_html
+    assert "已死亡" in resolved_html
+
+    snapshot = _get_snapshot(client, session_id)
+    target_state = snapshot["character_states"]["investigator-1"]
+    assert target_state["death_confirmed"] is True
+    assert target_state["is_dying"] is False
+    assert target_state["is_unconscious"] is False
+    assert target_state["is_stable"] is False
 
 def test_keeper_dashboard_displays_runtime_rules_and_knowledge_assistance_panel(
     client: TestClient,

@@ -38,12 +38,14 @@ from coc_runner.domain.models import (
     AdvanceCombatTurnRequest,
     InvestigatorAttributeCheckRequest,
     InvestigatorDamageResolutionRequest,
+    InvestigatorFirstAidRequest,
     InvestigatorMeleeAttackRequest,
     InvestigatorOpposedCheckRequest,
     InvestigatorRangedAttackRequest,
     InvestigatorSanCheckRequest,
     InvestigatorSkillCheckRequest,
     KeeperLiveControlRequest,
+    KeeperWoundResolutionRequest,
     PlayerActionRequest,
     ReviewDraftRequest,
     RestoreCheckpointRequest,
@@ -2188,6 +2190,81 @@ def _render_keeper_combat_panel(
     """
 
 
+def _render_keeper_wound_follow_up_panel(
+    *,
+    session_snapshot: dict[str, Any],
+    keeper_view: dict[str, Any],
+    session_id: str,
+    operator_id: str,
+) -> str:
+    participants = {
+        str(participant.get("actor_id") or ""): str(
+            participant.get("display_name") or participant.get("actor_id") or "调查员"
+        )
+        for participant in session_snapshot.get("participants") or []
+        if isinstance(participant, dict)
+    }
+    character_states = keeper_view.get("visible_character_states_by_actor") or {}
+    items: list[str] = []
+    for actor_id, state in character_states.items():
+        if not isinstance(state, dict):
+            continue
+        if not any(
+            bool(state.get(key))
+            for key in (
+                "heavy_wound_active",
+                "is_unconscious",
+                "is_dying",
+                "is_stable",
+                "death_confirmed",
+            )
+        ):
+            continue
+        actor_name = participants.get(str(actor_id), str(actor_id))
+        state_label = _render_wound_state_label_from_payload(state)
+        hp_value = state.get("current_hit_points", "—")
+        actions = ""
+        if state.get("is_dying") and not state.get("death_confirmed"):
+            actions = f"""
+            <div class="action-row">
+              <form method="post" action="/playtest/sessions/{escape(session_id)}/keeper/wounds/{escape(str(actor_id))}/resolve#wound-follow-up" data-submit-label="处理中...">
+                <input type="hidden" name="operator_id" value="{escape(operator_id)}" />
+                <input type="hidden" name="resolution" value="stabilize_unconscious" />
+                <button type="submit">稳定为昏迷</button>
+              </form>
+              <form method="post" action="/playtest/sessions/{escape(session_id)}/keeper/wounds/{escape(str(actor_id))}/resolve#wound-follow-up" data-submit-label="处理中...">
+                <input type="hidden" name="operator_id" value="{escape(operator_id)}" />
+                <input type="hidden" name="resolution" value="confirm_death" />
+                <button type="submit">确认死亡</button>
+              </form>
+            </div>
+            """
+        items.append(
+            f"""
+            <article class="activity-item">
+              <div class="activity-header">
+                <h3>{escape(actor_name)}</h3>
+              </div>
+              <p class="meta-line">HP：{escape(str(hp_value))}</p>
+              <p class="meta-line">伤势状态：{escape(state_label)}</p>
+              {actions}
+            </article>
+            """
+        )
+    content = (
+        '<div class="recent-list">' + "".join(items) + "</div>"
+        if items
+        else '<p class="empty-state">当前没有需要额外处理的危急伤势。</p>'
+    )
+    return f"""
+      <section class="panel" id="wound-follow-up">
+        <h2>危急伤势</h2>
+        <p class="help">默认优先保命；濒死与死亡确认继续保留给 KP 明确裁定。</p>
+        {content}
+      </section>
+    """
+
+
 def _render_keeper_dashboard_page(
     *,
     session_id: str,
@@ -2307,6 +2384,12 @@ def _render_keeper_dashboard_page(
       )}
       {_render_keeper_combat_panel(
           session_snapshot=snapshot,
+          session_id=session_id,
+          operator_id=keeper_id,
+      )}
+      {_render_keeper_wound_follow_up_panel(
+          session_snapshot=snapshot,
+          keeper_view=current_view,
           session_id=session_id,
           operator_id=keeper_id,
       )}
@@ -2742,6 +2825,17 @@ def _investigator_skill_options(
     return sorted(merged_skills.items(), key=lambda item: (-item[1], item[0]))
 
 
+def _investigator_first_aid_skill_options(
+    viewer_summary: dict[str, Any] | None,
+    own_character_state: dict[str, Any],
+) -> list[tuple[str, int]]:
+    return [
+        (skill_name, skill_value)
+        for skill_name, skill_value in _investigator_skill_options(viewer_summary, own_character_state)
+        if skill_name in {"急救", "医学"}
+    ]
+
+
 def _investigator_attribute_label_pairs() -> list[tuple[str, str]]:
     return [
         ("strength", "力量"),
@@ -2858,6 +2952,22 @@ def _render_hit_location_label(hit_location_value: Any) -> str:
         "left_arm": "左臂",
         "head": "头部",
     }.get(str(hit_location_value or ""), str(hit_location_value or "未知"))
+
+
+def _render_wound_state_label_from_payload(payload: dict[str, Any] | None) -> str:
+    if not isinstance(payload, dict):
+        return "一般受伤"
+    if payload.get("death_confirmed"):
+        return "已死亡"
+    if payload.get("is_dying"):
+        return "濒死（仍可救助）"
+    if payload.get("is_unconscious") and payload.get("is_stable"):
+        return "昏迷但稳定"
+    if payload.get("is_unconscious"):
+        return "昏迷"
+    if payload.get("heavy_wound") or payload.get("heavy_wound_active"):
+        return "重伤"
+    return "一般受伤"
 
 
 def _render_combat_actor_name(actor_id: str | None, participants: list[dict[str, Any]]) -> str:
@@ -3077,8 +3187,28 @@ def _render_investigator_damage_resolution_result(
         + f"<p>结算前 HP：{escape(str(damage_resolution_result.get('hp_before', '—')))}</p>"
         + f"<p>结算后 HP：{escape(str(damage_resolution_result.get('hp_after', '—')))}</p>"
         + f"<p>重伤：{escape('是' if damage_resolution_result.get('heavy_wound') else '否')}（阈值 {escape(str(damage_resolution_result.get('heavy_wound_threshold', '—')))}）</p>"
+        + f"<p>伤势状态：{escape(_render_wound_state_label_from_payload(damage_resolution_result))}</p>"
         + f"<p>需要 KP 进一步裁定：{escape('是' if damage_resolution_result.get('kp_follow_up_required') else '否')}</p>"
         + "</section>"
+    )
+
+
+def _render_investigator_first_aid_result(first_aid_result: dict[str, Any] | None) -> str:
+    if first_aid_result is None:
+        return ""
+    roll = first_aid_result.get("roll") or {}
+    return (
+        '<section class="feedback feedback-success">'
+        "<h2>最近一次急救结果</h2>"
+        f"<p>{escape(str(first_aid_result.get('message', '已完成紧急急救检定')))}</p>"
+        f"<p>目标：{escape(str(first_aid_result.get('target_actor_name', '—')))}</p>"
+        f"<p>使用技能：{escape(str(first_aid_result.get('skill_name', '—')))}</p>"
+        f"<p>技能数值：{escape(str(first_aid_result.get('skill_value', '—')))}</p>"
+        f"<p>掷骰结果：{escape(str(roll.get('total', '—')))}</p>"
+        f"<p>判定：{escape(_render_skill_check_outcome_label(roll.get('outcome')))}</p>"
+        f"<p>急救前状态：{escape(str(first_aid_result.get('before_state_label', '—')))}</p>"
+        f"<p>急救后状态：{escape(str(first_aid_result.get('after_state_label', '—')))}</p>"
+        "</section>"
     )
 
 
@@ -3462,6 +3592,65 @@ def _render_investigator_damage_resolution_panel(
     """
 
 
+def _render_investigator_first_aid_panel(
+    *,
+    session_status: str,
+    session_id: str,
+    viewer_id: str,
+    target_options: list[tuple[str, str]],
+    skill_options: list[tuple[str, int]],
+    selected_target_actor_id: str | None,
+    selected_skill_name: str | None,
+) -> str:
+    if session_status == SessionStatus.COMPLETED.value:
+        return """
+      <section class="panel">
+        <h2>紧急急救</h2>
+        <p class="empty-state">本局已结束，当前页面不再进行新的紧急急救。</p>
+      </section>
+        """
+    if not skill_options:
+        return """
+      <section class="panel">
+        <h2>紧急急救</h2>
+        <p class="empty-state">当前角色没有可用于紧急急救的急救或医学技能。</p>
+      </section>
+        """
+    normalized_target_actor_id = str(
+        selected_target_actor_id or (target_options[0][0] if target_options else "")
+    )
+    normalized_skill_name = str(selected_skill_name or skill_options[0][0])
+    target_options_html = "".join(
+        f'<option value="{escape(actor_id)}"{" selected" if actor_id == normalized_target_actor_id else ""}>{escape(display_name)}</option>'
+        for actor_id, display_name in target_options
+    )
+    skill_options_html = "".join(
+        f'<option value="{escape(skill_name)}"{" selected" if skill_name == normalized_skill_name else ""}>{escape(skill_name)} ({escape(str(skill_value))})</option>'
+        for skill_name, skill_value in skill_options
+    )
+    return f"""
+      <section class="panel">
+        <h2>紧急急救</h2>
+        <form method="post" action="/playtest/sessions/{escape(session_id)}/investigator/{escape(viewer_id)}/first-aid" data-submit-label="急救中...">
+          <label>
+            first_aid_target_actor_id
+            <select name="first_aid_target_actor_id">
+              {target_options_html}
+            </select>
+          </label>
+          <label>
+            first_aid_skill_name
+            <select name="first_aid_skill_name">
+              {skill_options_html}
+            </select>
+          </label>
+          <p class="help">当前只提供 very small 的紧急急救链；长期治疗、住院恢复与复杂医疗后果仍由 KP 裁定。</p>
+          <button type="submit">开始急救</button>
+        </form>
+      </section>
+    """
+
+
 def _render_investigator_recent_events(visible_events: list[dict[str, Any]]) -> str:
     recent_events = list(reversed(visible_events[-5:]))
     if not recent_events:
@@ -3661,6 +3850,7 @@ def _render_investigator_page(
     melee_attack_result: dict[str, Any] | None = None,
     ranged_attack_result: dict[str, Any] | None = None,
     damage_resolution_result: dict[str, Any] | None = None,
+    first_aid_result: dict[str, Any] | None = None,
     opposed_check_result: dict[str, Any] | None = None,
     san_check_result: dict[str, Any] | None = None,
     action_text: str | None = None,
@@ -3679,6 +3869,8 @@ def _render_investigator_page(
     damage_expression: str | None = None,
     damage_bonus_expression: str | None = None,
     damage_armor_value: str | None = None,
+    first_aid_target_actor_id: str | None = None,
+    first_aid_skill_name: str | None = None,
     opposed_actor_label: str | None = None,
     opposed_actor_target_value: str | None = None,
     opposed_opponent_label: str | None = None,
@@ -3719,6 +3911,10 @@ def _render_investigator_page(
     )
     target_options = _investigator_target_options(
         [participant for participant in participants if isinstance(participant, dict)]
+    )
+    first_aid_skill_options = _investigator_first_aid_skill_options(
+        viewer_summary if isinstance(viewer_summary, dict) else None,
+        own_character_state,
     )
     pending_damage_context = own_character_state.get("pending_damage_context")
     completed_notice = (
@@ -3772,6 +3968,7 @@ def _render_investigator_page(
       {_render_investigator_melee_attack_result(melee_attack_result)}
       {_render_investigator_ranged_attack_result(ranged_attack_result)}
       {_render_investigator_damage_resolution_result(damage_resolution_result)}
+      {_render_investigator_first_aid_result(first_aid_result)}
       {_render_investigator_opposed_check_result(opposed_check_result)}
       {_render_investigator_san_check_result(san_check_result)}
       <section class="panel">
@@ -3861,6 +4058,15 @@ def _render_investigator_page(
           damage_expression=damage_expression,
           damage_bonus_expression=damage_bonus_expression,
           armor_value=damage_armor_value,
+      )}
+      {_render_investigator_first_aid_panel(
+          session_status=normalized_session_status,
+          session_id=session_id,
+          viewer_id=viewer_id,
+          target_options=target_options,
+          skill_options=first_aid_skill_options,
+          selected_target_actor_id=first_aid_target_actor_id,
+          selected_skill_name=first_aid_skill_name,
       )}
       {_render_investigator_opposed_check_panel(
           session_id=session_id,
@@ -3955,6 +4161,7 @@ def _render_investigator_page_from_service(
     melee_attack_result: dict[str, Any] | None = None,
     ranged_attack_result: dict[str, Any] | None = None,
     damage_resolution_result: dict[str, Any] | None = None,
+    first_aid_result: dict[str, Any] | None = None,
     opposed_check_result: dict[str, Any] | None = None,
     san_check_result: dict[str, Any] | None = None,
     action_text: str | None = None,
@@ -3973,6 +4180,8 @@ def _render_investigator_page_from_service(
     damage_expression: str | None = None,
     damage_bonus_expression: str | None = None,
     damage_armor_value: str | None = None,
+    first_aid_target_actor_id: str | None = None,
+    first_aid_skill_name: str | None = None,
     opposed_actor_label: str | None = None,
     opposed_actor_target_value: str | None = None,
     opposed_opponent_label: str | None = None,
@@ -4000,6 +4209,7 @@ def _render_investigator_page_from_service(
             melee_attack_result=melee_attack_result,
             ranged_attack_result=ranged_attack_result,
             damage_resolution_result=damage_resolution_result,
+            first_aid_result=first_aid_result,
             opposed_check_result=opposed_check_result,
             san_check_result=san_check_result,
             action_text=action_text,
@@ -4018,6 +4228,8 @@ def _render_investigator_page_from_service(
             damage_expression=damage_expression,
             damage_bonus_expression=damage_bonus_expression,
             damage_armor_value=damage_armor_value,
+            first_aid_target_actor_id=first_aid_target_actor_id,
+            first_aid_skill_name=first_aid_skill_name,
             opposed_actor_label=opposed_actor_label,
             opposed_actor_target_value=opposed_actor_target_value,
             opposed_opponent_label=opposed_opponent_label,
@@ -4048,6 +4260,7 @@ def _render_investigator_page_from_service(
         melee_attack_result=melee_attack_result,
         ranged_attack_result=ranged_attack_result,
         damage_resolution_result=damage_resolution_result,
+        first_aid_result=first_aid_result,
         opposed_check_result=opposed_check_result,
         san_check_result=san_check_result,
         action_text=action_text,
@@ -4066,6 +4279,8 @@ def _render_investigator_page_from_service(
         damage_expression=damage_expression,
         damage_bonus_expression=damage_bonus_expression,
         damage_armor_value=damage_armor_value,
+        first_aid_target_actor_id=first_aid_target_actor_id,
+        first_aid_skill_name=first_aid_skill_name,
         opposed_actor_label=opposed_actor_label,
         opposed_actor_target_value=opposed_actor_target_value,
         opposed_opponent_label=opposed_opponent_label,
@@ -4249,6 +4464,37 @@ async def advance_combat_turn_via_keeper_dashboard(
             session_id,
             AdvanceCombatTurnRequest(
                 operator_id=form.get("operator_id", ""),
+            ),
+        )
+        return _render_keeper_dashboard_from_service(
+            service=service,
+            session_id=session_id,
+            notice=response.message,
+        )
+    except (ValidationError, LookupError, PermissionError, ConflictError, ValueError) as exc:
+        return _render_playtest_exception(
+            _render_keeper_dashboard_from_service,
+            exc=exc,
+            service=service,
+            session_id=session_id,
+        )
+
+
+@router.post("/sessions/{session_id}/keeper/wounds/{actor_id}/resolve", response_class=HTMLResponse)
+async def resolve_keeper_wound_status_via_dashboard(
+    session_id: str,
+    actor_id: str,
+    request: Request,
+    service: SessionService = Depends(get_session_service),
+) -> HTMLResponse:
+    form = await _read_form_payload(request)
+    try:
+        response = service.resolve_keeper_wound_status(
+            session_id,
+            actor_id,
+            KeeperWoundResolutionRequest(
+                operator_id=form.get("operator_id", ""),
+                resolution=_normalize_form_text(form.get("resolution")) or "",
             ),
         )
         return _render_keeper_dashboard_from_service(
@@ -4549,6 +4795,46 @@ async def submit_investigator_damage_resolution_via_ui(
             damage_expression=damage_expression,
             damage_bonus_expression=damage_bonus_expression,
             damage_armor_value=armor_value,
+        )
+
+
+@router.post("/sessions/{session_id}/investigator/{viewer_id}/first-aid", response_class=HTMLResponse)
+async def submit_investigator_first_aid_via_ui(
+    session_id: str,
+    viewer_id: str,
+    request: Request,
+    service: SessionService = Depends(get_session_service),
+) -> HTMLResponse:
+    form = await _read_form_payload(request)
+    target_actor_id = _normalize_form_text(form.get("first_aid_target_actor_id")) or ""
+    skill_name = _normalize_form_text(form.get("first_aid_skill_name")) or ""
+    try:
+        response = service.perform_investigator_first_aid(
+            session_id,
+            InvestigatorFirstAidRequest(
+                actor_id=viewer_id,
+                target_actor_id=target_actor_id,
+                skill_name=skill_name,
+            ),
+        )
+        return _render_investigator_page_from_service(
+            service=service,
+            session_id=session_id,
+            viewer_id=viewer_id,
+            notice=response.message,
+            first_aid_result=response.model_dump(mode="json"),
+            first_aid_target_actor_id=response.target_actor_id,
+            first_aid_skill_name=response.skill_name,
+        )
+    except (ValidationError, LookupError, ConflictError, ValueError) as exc:
+        return _render_playtest_exception(
+            _render_investigator_page_from_service,
+            exc=exc,
+            service=service,
+            session_id=session_id,
+            viewer_id=viewer_id,
+            first_aid_target_actor_id=target_actor_id,
+            first_aid_skill_name=skill_name,
         )
 
 
