@@ -4,11 +4,14 @@ from coc_runner.domain.dice import (
     AttackDefenseMode,
     AttackResolution,
     D100Roll,
+    HitLocation,
     RollOutcome,
     compute_damage_bonus_expression,
     evaluate_d100_roll,
+    evaluate_heavy_wound,
     evaluate_melee_attack_resolution,
     evaluate_ranged_attack_resolution,
+    resolve_hit_location,
     roll_d100,
     roll_damage_expression,
 )
@@ -113,3 +116,12 @@ def test_damage_expression_helpers_support_stable_db_and_static_modifier_combina
     assert compute_damage_bonus_expression(strength=95, size=80) == "1d6"
     assert roll_damage_expression("1d1+db", db_expression="1d1", seed=7) == 2
     assert roll_damage_expression("1d1+2", seed=7) == 3
+
+
+def test_hit_location_and_heavy_wound_helpers_keep_authoritative_combat_consequences_local() -> None:
+    assert resolve_hit_location(1) == HitLocation.RIGHT_LEG
+    assert resolve_hit_location(12) == HitLocation.CHEST
+    assert resolve_hit_location(20) == HitLocation.HEAD
+
+    assert evaluate_heavy_wound(final_damage=5, max_hit_points=11) is False
+    assert evaluate_heavy_wound(final_damage=6, max_hit_points=11) is True

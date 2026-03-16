@@ -12,10 +12,13 @@ from coc_runner.domain.errors import ConflictError
 from coc_runner.domain.dice import (
     AttackDefenseMode,
     AttackResolution,
+    HitLocation,
     OpposedCheckResolution,
     compute_damage_bonus_expression,
+    evaluate_heavy_wound,
     evaluate_melee_attack_resolution,
     evaluate_ranged_attack_resolution,
+    roll_hit_location,
     roll_d100,
     roll_damage_expression,
 )
@@ -37,6 +40,8 @@ from coc_runner.domain.models import (
     BehaviorPrecedent,
     CharacterAttributes,
     CharacterStatEffect,
+    CombatContext,
+    CombatTurnEntry,
     ImportCharacterHookSeedRequest,
     ImportSceneHookSeedRequest,
     ImportTemplateCharacterHookRequest,
@@ -51,8 +56,11 @@ from coc_runner.domain.models import (
     InventoryEffect,
     InvestigatorDamageResolutionRequest,
     InvestigatorDamageResolutionResponse,
+    AdvanceCombatTurnRequest,
+    AdvanceCombatTurnResponse,
     InvestigatorAttributeCheckRequest,
     InvestigatorAttributeCheckResponse,
+    HitLocationStatus,
     InvestigatorMeleeAttackRequest,
     InvestigatorMeleeAttackResponse,
     InvestigatorOpposedCheckRequest,
@@ -118,6 +126,8 @@ from coc_runner.domain.models import (
     PendingDamageContext,
     SeedSuggestionHookRequest,
     SuggestionHookMaterial,
+    StartCombatContextRequest,
+    StartCombatContextResponse,
     StatusEffect,
     UpsertSuggestionHookRequest,
     UpdateKeeperPromptRequest,
@@ -2595,6 +2605,260 @@ class SessionService:
                 )
             ) from exc
 
+    def start_combat_context(
+        self,
+        session_id: str,
+        request: StartCombatContextRequest,
+    ) -> StartCombatContextResponse:
+        error_language = self._resolve_language(request.language_preference)
+        try:
+            session = self._load_session(session_id, language=error_language)
+        except LookupError as exc:
+            message = exc.args[0] if exc.args and isinstance(exc.args[0], str) else self._message(
+                "session_not_found",
+                error_language,
+                session_id=session_id,
+            )
+            raise LookupError(
+                build_session_action_error_detail(
+                    code="combat_context_session_not_found",
+                    message=message,
+                    scope="combat_context_session",
+                    session_id=session_id,
+                    operator_id=request.operator_id,
+                )
+            ) from exc
+
+        effective_language = self._resolve_language(
+            request.language_preference,
+            session.language_preference,
+        )
+        error_context = {
+            "session_id": session.session_id,
+            "operator_id": request.operator_id,
+        }
+        try:
+            self._authorize_operator(
+                session,
+                operator_id=request.operator_id,
+                language=effective_language,
+                error_detail=build_session_action_error_detail(
+                    code="combat_context_operator_not_authorized",
+                    message=self._message(
+                        "keeper_prompt_operator_not_authorized",
+                        effective_language,
+                    ),
+                    scope="combat_context_operator",
+                    session_id=session.session_id,
+                    operator_id=request.operator_id,
+                ),
+            )
+            if session.status == SessionStatus.COMPLETED:
+                raise ValueError(self._message("combat_context_session_completed", effective_language))
+
+            turn_order = self._build_combat_turn_order(session)
+            if not turn_order:
+                raise ValueError(self._message("combat_context_no_participants", effective_language))
+            actor_ids = {entry.actor_id for entry in turn_order}
+            current_turn_index = 0
+            if request.starting_actor_id is not None:
+                if request.starting_actor_id not in actor_ids:
+                    raise ValueError(
+                        self._message(
+                            "combat_context_starting_actor_not_found",
+                            effective_language,
+                            actor_id=request.starting_actor_id,
+                        )
+                    )
+                current_turn_index = next(
+                    index
+                    for index, entry in enumerate(turn_order)
+                    if entry.actor_id == request.starting_actor_id
+                )
+            current_time = datetime.now(timezone.utc)
+            expected_version = session.state_version
+            session.combat_context = self._build_combat_context_state(
+                turn_order=turn_order,
+                current_turn_index=current_turn_index,
+                round_number=1,
+                started_at=current_time,
+            )
+            session.audit_log.append(
+                AuditLogEntry(
+                    action=AuditActionType.KEEPER_LIVE_CONTROL,
+                    actor_id=request.operator_id,
+                    subject_id="combat_context",
+                    session_version=expected_version + 1,
+                    details={
+                        "combat_action": "start",
+                        "current_actor_id": session.combat_context.current_actor_id,
+                    },
+                    created_at=current_time,
+                )
+            )
+            session.state_version += 1
+            session.updated_at = current_time
+            self._save_session(
+                session,
+                expected_version=expected_version,
+                reason="combat_context_started",
+                language=effective_language,
+            )
+            return StartCombatContextResponse(
+                message=self._message("combat_context_started", effective_language),
+                session_id=session.session_id,
+                state_version=session.state_version,
+                language_preference=effective_language,
+                combat_context=session.combat_context,
+            )
+        except ConflictError as exc:
+            message = exc.args[0] if exc.args and isinstance(exc.args[0], str) else self._message(
+                "state_conflict",
+                effective_language,
+            )
+            raise ConflictError(
+                build_session_action_error_detail(
+                    code="combat_context_state_conflict",
+                    message=message,
+                    scope="combat_context_state",
+                    **error_context,
+                )
+            ) from exc
+        except ValueError as exc:
+            message = exc.args[0] if exc.args and isinstance(exc.args[0], str) else self._message(
+                "combat_context_invalid",
+                effective_language,
+            )
+            raise ValueError(
+                build_session_action_error_detail(
+                    code="combat_context_invalid",
+                    message=message,
+                    scope="combat_context_request",
+                    **error_context,
+                )
+            ) from exc
+
+    def advance_combat_turn(
+        self,
+        session_id: str,
+        request: AdvanceCombatTurnRequest,
+    ) -> AdvanceCombatTurnResponse:
+        error_language = self._resolve_language(request.language_preference)
+        try:
+            session = self._load_session(session_id, language=error_language)
+        except LookupError as exc:
+            message = exc.args[0] if exc.args and isinstance(exc.args[0], str) else self._message(
+                "session_not_found",
+                error_language,
+                session_id=session_id,
+            )
+            raise LookupError(
+                build_session_action_error_detail(
+                    code="combat_turn_session_not_found",
+                    message=message,
+                    scope="combat_turn_session",
+                    session_id=session_id,
+                    operator_id=request.operator_id,
+                )
+            ) from exc
+
+        effective_language = self._resolve_language(
+            request.language_preference,
+            session.language_preference,
+        )
+        error_context = {
+            "session_id": session.session_id,
+            "operator_id": request.operator_id,
+        }
+        try:
+            self._authorize_operator(
+                session,
+                operator_id=request.operator_id,
+                language=effective_language,
+                error_detail=build_session_action_error_detail(
+                    code="combat_turn_operator_not_authorized",
+                    message=self._message(
+                        "keeper_prompt_operator_not_authorized",
+                        effective_language,
+                    ),
+                    scope="combat_turn_operator",
+                    session_id=session.session_id,
+                    operator_id=request.operator_id,
+                ),
+            )
+            if session.combat_context is None or not session.combat_context.turn_order:
+                raise ValueError(self._message("combat_context_missing", effective_language))
+
+            current_time = datetime.now(timezone.utc)
+            expected_version = session.state_version
+            current_context = session.combat_context
+            next_index = current_context.current_turn_index + 1
+            round_number = current_context.round_number
+            if next_index >= len(current_context.turn_order):
+                next_index = 0
+                round_number += 1
+            session.combat_context = self._build_combat_context_state(
+                turn_order=current_context.turn_order,
+                current_turn_index=next_index,
+                round_number=round_number,
+                started_at=current_context.started_at,
+            )
+            session.audit_log.append(
+                AuditLogEntry(
+                    action=AuditActionType.KEEPER_LIVE_CONTROL,
+                    actor_id=request.operator_id,
+                    subject_id="combat_context",
+                    session_version=expected_version + 1,
+                    details={
+                        "combat_action": "advance",
+                        "current_actor_id": session.combat_context.current_actor_id,
+                        "round_number": round_number,
+                    },
+                    created_at=current_time,
+                )
+            )
+            session.state_version += 1
+            session.updated_at = current_time
+            self._save_session(
+                session,
+                expected_version=expected_version,
+                reason="combat_turn_advanced",
+                language=effective_language,
+            )
+            return AdvanceCombatTurnResponse(
+                message=self._message("combat_turn_advanced", effective_language),
+                session_id=session.session_id,
+                state_version=session.state_version,
+                language_preference=effective_language,
+                combat_context=session.combat_context,
+            )
+        except ConflictError as exc:
+            message = exc.args[0] if exc.args and isinstance(exc.args[0], str) else self._message(
+                "state_conflict",
+                effective_language,
+            )
+            raise ConflictError(
+                build_session_action_error_detail(
+                    code="combat_turn_state_conflict",
+                    message=message,
+                    scope="combat_turn_state",
+                    **error_context,
+                )
+            ) from exc
+        except ValueError as exc:
+            message = exc.args[0] if exc.args and isinstance(exc.args[0], str) else self._message(
+                "combat_context_invalid",
+                effective_language,
+            )
+            raise ValueError(
+                build_session_action_error_detail(
+                    code="combat_turn_invalid",
+                    message=message,
+                    scope="combat_turn_request",
+                    **error_context,
+                )
+            ) from exc
+
     def perform_investigator_melee_attack(
         self,
         session_id: str,
@@ -2938,10 +3202,36 @@ class SessionService:
             final_damage = max(0, raw_damage - armor_absorbed)
             hp_before = target_state.current_hit_points
             hp_after = max(0, hp_before - final_damage)
+            if request.skip_hit_location:
+                hit_location_status = HitLocationStatus.KP_OVERRIDE
+                hit_location_roll = None
+                hit_location = None
+            else:
+                hit_location_roll, hit_location = roll_hit_location()
+                hit_location_status = HitLocationStatus.ROLLED
+            heavy_wound_threshold = max(1, (target.character.max_hit_points + 1) // 2)
+            heavy_wound = evaluate_heavy_wound(
+                final_damage=final_damage,
+                max_hit_points=target.character.max_hit_points,
+            )
+            kp_follow_up_required = heavy_wound or hp_after == 0
             target_state.current_hit_points = hp_after
             target_state.last_updated_at = current_time
             attacker_state.pending_damage_context = None
             attacker_state.last_updated_at = current_time
+            if kp_follow_up_required:
+                self._queue_heavy_wound_follow_up_prompt(
+                    session=session,
+                    pending_context=pending_context,
+                    target_actor_name=target.display_name,
+                    hit_location_status=hit_location_status,
+                    hit_location=hit_location,
+                    final_damage=final_damage,
+                    hp_before=hp_before,
+                    hp_after=hp_after,
+                    threshold=heavy_wound_threshold,
+                    current_time=current_time,
+                )
             session.state_version += 1
             session.updated_at = current_time
             self._save_session(
@@ -2966,6 +3256,12 @@ class SessionService:
                 final_damage=final_damage,
                 hp_before=hp_before,
                 hp_after=hp_after,
+                hit_location_status=hit_location_status,
+                hit_location_roll=hit_location_roll,
+                hit_location=hit_location,
+                heavy_wound=heavy_wound,
+                heavy_wound_threshold=heavy_wound_threshold,
+                kp_follow_up_required=kp_follow_up_required,
             )
         except ConflictError as exc:
             message = exc.args[0] if exc.args and isinstance(exc.args[0], str) else self._message(
@@ -5322,6 +5618,93 @@ class SessionService:
             if participant.actor_id == actor_id:
                 return participant
         return None
+
+    @staticmethod
+    def _build_combat_turn_order(session: SessionState) -> list[CombatTurnEntry]:
+        entries = [
+            CombatTurnEntry(
+                actor_id=participant.actor_id,
+                display_name=participant.display_name,
+                dexterity=participant.character.attributes.dexterity,
+            )
+            for participant in session.participants
+        ]
+        return sorted(entries, key=lambda entry: (-entry.dexterity, entry.actor_id))
+
+    @staticmethod
+    def _build_combat_context_state(
+        *,
+        turn_order: list[CombatTurnEntry],
+        current_turn_index: int,
+        round_number: int,
+        started_at: datetime,
+    ) -> CombatContext:
+        if not turn_order:
+            raise ValueError("combat turn order must not be empty")
+        normalized_index = current_turn_index % len(turn_order)
+        next_index = (normalized_index + 1) % len(turn_order)
+        dexterity_values = [entry.dexterity for entry in turn_order]
+        manual_tie_break_required = len(dexterity_values) != len(set(dexterity_values))
+        return CombatContext(
+            participant_actor_ids=[entry.actor_id for entry in turn_order],
+            turn_order=turn_order,
+            current_turn_index=normalized_index,
+            round_number=round_number,
+            current_actor_id=turn_order[normalized_index].actor_id,
+            next_actor_id=turn_order[next_index].actor_id if len(turn_order) > 1 else None,
+            manual_tie_break_required=manual_tie_break_required,
+            started_at=started_at,
+        )
+
+    @staticmethod
+    def _render_hit_location_label(hit_location: HitLocation | None) -> str:
+        return {
+            HitLocation.RIGHT_LEG: "右腿",
+            HitLocation.LEFT_LEG: "左腿",
+            HitLocation.ABDOMEN: "腹部",
+            HitLocation.CHEST: "胸部",
+            HitLocation.RIGHT_ARM: "右臂",
+            HitLocation.LEFT_ARM: "左臂",
+            HitLocation.HEAD: "头部",
+        }.get(hit_location, "未指定部位")
+
+    def _queue_heavy_wound_follow_up_prompt(
+        self,
+        *,
+        session: SessionState,
+        pending_context: PendingDamageContext,
+        target_actor_name: str,
+        hit_location_status: HitLocationStatus,
+        hit_location: HitLocation | None,
+        final_damage: int,
+        hp_before: int,
+        hp_after: int,
+        threshold: int,
+        current_time: datetime,
+    ) -> None:
+        location_label = (
+            "KP 跳过命中部位"
+            if hit_location_status == HitLocationStatus.KP_OVERRIDE
+            else self._render_hit_location_label(hit_location)
+        )
+        session.progress_state.queued_kp_prompts.append(
+            QueuedKPPrompt(
+                prompt_text=f"{target_actor_name}受到重伤，需要 KP 进一步裁定",
+                category="combat_follow_up",
+                priority=(
+                    KeeperPromptPriority.HIGH
+                    if hp_after == 0
+                    else KeeperPromptPriority.MEDIUM
+                ),
+                assigned_to=session.keeper_id,
+                trigger_reason=(
+                    f"{pending_context.attack_label}命中{location_label}，造成 {final_damage} 点伤害，"
+                    f"HP {hp_before} -> {hp_after}，重伤阈值 {threshold}。"
+                ),
+                created_at=current_time,
+                updated_at=current_time,
+            )
+        )
 
     def _get_draft_action(
         self,
@@ -8649,6 +9032,13 @@ class SessionService:
             "ranged_attack_recorded": "已完成远程攻击判定",
             "ranged_attack_session_completed": "本局已结束，当前页面不再进行新的远程攻击判定。",
             "ranged_attack_invalid": "远程攻击参数无效",
+            "combat_context_started": "已建立战斗顺序",
+            "combat_turn_advanced": "已推进到下一位行动者",
+            "combat_context_session_completed": "本局已结束，当前页面不再建立新的战斗顺序。",
+            "combat_context_invalid": "战斗流程参数无效",
+            "combat_context_missing": "当前还没有建立战斗顺序。",
+            "combat_context_no_participants": "当前没有可加入战斗顺序的参与者。",
+            "combat_context_starting_actor_not_found": "起始行动者 {actor_id} 不在当前战斗参与者中。",
             "damage_resolution_recorded": "已完成伤害结算，目标 HP 已更新",
             "damage_resolution_session_completed": "本局已结束，当前页面不再进行新的伤害结算。",
             "damage_resolution_invalid": "伤害结算参数无效",
@@ -8799,6 +9189,13 @@ class SessionService:
             "ranged_attack_recorded": "Ranged attack check completed",
             "ranged_attack_session_completed": "This session is completed and no longer accepts new ranged attack checks.",
             "ranged_attack_invalid": "Ranged attack request is invalid",
+            "combat_context_started": "Combat order was initialized",
+            "combat_turn_advanced": "Advanced to the next acting combatant",
+            "combat_context_session_completed": "This session is completed and does not allow starting a new combat order.",
+            "combat_context_invalid": "Combat flow request is invalid",
+            "combat_context_missing": "No combat order has been initialized yet.",
+            "combat_context_no_participants": "There are no participants available for the combat order.",
+            "combat_context_starting_actor_not_found": "Starting actor {actor_id} is not part of the current combat order.",
             "damage_resolution_recorded": "Damage resolution completed and target HP was updated",
             "damage_resolution_session_completed": "This session is completed and no longer accepts new damage resolutions.",
             "damage_resolution_invalid": "Damage resolution request is invalid",

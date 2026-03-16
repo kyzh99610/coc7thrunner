@@ -496,6 +496,9 @@ def filter_session_for_viewer(
         own_character_state=own_character_state,
         visible_private_state_by_actor=visible_private_state_by_actor,
         visible_character_states_by_actor=visible_character_states_by_actor,
+        combat_context=session.combat_context.model_copy(deep=True)
+        if session.combat_context is not None
+        else None,
         behavior_memory_by_actor=behavior_memory_by_actor,
         progress_state=keeper_progress_state if viewer_role == ViewerRole.KEEPER else None,
         keeper_workflow=keeper_workflow,

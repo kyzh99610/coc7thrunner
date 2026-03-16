@@ -37,6 +37,16 @@ class AttackResolution(StrEnum):
     KP_REVIEW = "kp_review"
 
 
+class HitLocation(StrEnum):
+    RIGHT_LEG = "right_leg"
+    LEFT_LEG = "left_leg"
+    ABDOMEN = "abdomen"
+    CHEST = "chest"
+    RIGHT_ARM = "right_arm"
+    LEFT_ARM = "left_arm"
+    HEAD = "head"
+
+
 class D100Roll(BaseModel):
     seed: int | None = None
     unit_die: int = Field(ge=0, le=9)
@@ -119,6 +129,38 @@ def evaluate_ranged_attack_resolution(actor_roll: D100Roll) -> AttackResolution:
     if actor_roll.outcome in {RollOutcome.FAILURE, RollOutcome.FUMBLE}:
         return AttackResolution.MISS
     return AttackResolution.HIT
+
+
+def resolve_hit_location(roll_value: int) -> HitLocation:
+    if not 1 <= roll_value <= 20:
+        raise ValueError("hit location roll must be between 1 and 20")
+    if roll_value <= 4:
+        return HitLocation.RIGHT_LEG
+    if roll_value <= 8:
+        return HitLocation.LEFT_LEG
+    if roll_value <= 11:
+        return HitLocation.ABDOMEN
+    if roll_value == 12:
+        return HitLocation.CHEST
+    if roll_value <= 15:
+        return HitLocation.RIGHT_ARM
+    if roll_value <= 18:
+        return HitLocation.LEFT_ARM
+    return HitLocation.HEAD
+
+
+def roll_hit_location(*, seed: int | None = None) -> tuple[int, HitLocation]:
+    rng = random.Random(seed)
+    roll_value = rng.randint(1, 20)
+    return roll_value, resolve_hit_location(roll_value)
+
+
+def evaluate_heavy_wound(*, final_damage: int, max_hit_points: int) -> bool:
+    if final_damage < 0:
+        raise ValueError("final_damage must be non-negative")
+    if max_hit_points <= 0:
+        raise ValueError("max_hit_points must be positive")
+    return final_damage * 2 >= max_hit_points
 
 
 def compute_damage_bonus_expression(*, strength: int, size: int) -> str:

@@ -11,6 +11,7 @@ from coc_runner.domain.dice import (
     AttackDefenseMode,
     AttackResolution,
     D100Roll,
+    HitLocation,
     OpposedCheckResolution,
 )
 
@@ -91,6 +92,11 @@ class SessionStatus(StrEnum):
     ACTIVE = "active"
     PAUSED = "paused"
     COMPLETED = "completed"
+
+
+class HitLocationStatus(StrEnum):
+    ROLLED = "rolled"
+    KP_OVERRIDE = "kp_override"
 
 
 class EventType(StrEnum):
@@ -824,6 +830,23 @@ class PendingDamageContext(BaseModel):
     created_at: datetime = Field(default_factory=utc_now)
 
 
+class CombatTurnEntry(BaseModel):
+    actor_id: str = Field(min_length=1, max_length=80)
+    display_name: str = Field(min_length=1, max_length=80)
+    dexterity: int = Field(ge=1, le=99)
+
+
+class CombatContext(BaseModel):
+    participant_actor_ids: list[str] = Field(default_factory=list)
+    turn_order: list[CombatTurnEntry] = Field(default_factory=list)
+    current_turn_index: int = Field(default=0, ge=0)
+    round_number: int = Field(default=1, ge=1)
+    current_actor_id: str | None = None
+    next_actor_id: str | None = None
+    manual_tie_break_required: bool = False
+    started_at: datetime = Field(default_factory=utc_now)
+
+
 class ScenarioScaffold(BaseModel):
     scenario_id: str = Field(default_factory=lambda: f"scenario-{uuid4().hex}")
     title: str = Field(min_length=1, max_length=120)
@@ -1513,6 +1536,7 @@ class SessionState(BaseModel):
     reviewed_actions: list[ReviewedAction] = Field(default_factory=list)
     authoritative_actions: list[AuthoritativeAction] = Field(default_factory=list)
     character_states: dict[str, SessionCharacterState] = Field(default_factory=dict)
+    combat_context: CombatContext | None = None
     progress_state: ScenarioProgressState = Field(default_factory=ScenarioProgressState)
     behavior_memory: dict[str, list[BehaviorPrecedent]] = Field(default_factory=dict)
     audit_log: list[AuditLogEntry] = Field(default_factory=list)
@@ -1566,6 +1590,7 @@ class InvestigatorView(BaseModel):
     own_character_state: SessionCharacterState | None = None
     visible_private_state_by_actor: dict[str, CharacterSecrets] = Field(default_factory=dict)
     visible_character_states_by_actor: dict[str, SessionCharacterState] = Field(default_factory=dict)
+    combat_context: CombatContext | None = None
     behavior_memory_by_actor: dict[str, list[BehaviorPrecedent]] = Field(default_factory=dict)
     progress_state: ScenarioProgressState | None = None
     keeper_workflow: KeeperWorkflowState | None = None
@@ -1756,6 +1781,7 @@ class InvestigatorDamageResolutionRequest(BaseModel):
     damage_expression: str = Field(min_length=1, max_length=40)
     damage_bonus_expression: str | None = Field(default=None, max_length=40)
     armor_value: int = Field(default=0, ge=0, le=99)
+    skip_hit_location: bool = False
     language_preference: LanguagePreference | None = None
 
     @field_validator("damage_expression", "damage_bonus_expression")
@@ -1783,6 +1809,39 @@ class InvestigatorDamageResolutionResponse(BaseModel):
     final_damage: int = Field(ge=0)
     hp_before: int = Field(ge=0)
     hp_after: int = Field(ge=0)
+    hit_location_status: HitLocationStatus
+    hit_location_roll: int | None = Field(default=None, ge=1, le=20)
+    hit_location: HitLocation | None = None
+    heavy_wound: bool = False
+    heavy_wound_threshold: int = Field(ge=1)
+    kp_follow_up_required: bool = False
+
+
+class StartCombatContextRequest(BaseModel):
+    operator_id: str = Field(min_length=1, max_length=80)
+    starting_actor_id: str | None = Field(default=None, min_length=1, max_length=80)
+    language_preference: LanguagePreference | None = None
+
+
+class StartCombatContextResponse(BaseModel):
+    message: str
+    session_id: str
+    state_version: int
+    language_preference: LanguagePreference
+    combat_context: CombatContext
+
+
+class AdvanceCombatTurnRequest(BaseModel):
+    operator_id: str = Field(min_length=1, max_length=80)
+    language_preference: LanguagePreference | None = None
+
+
+class AdvanceCombatTurnResponse(BaseModel):
+    message: str
+    session_id: str
+    state_version: int
+    language_preference: LanguagePreference
+    combat_context: CombatContext
 
 
 class InvestigatorSanCheckRequest(BaseModel):

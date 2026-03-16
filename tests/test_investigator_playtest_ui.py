@@ -15,6 +15,7 @@ from coc_runner.application.dice_execution import (
     DiceStyleSubprocessClient,
 )
 from coc_runner.domain.dice import D100Roll, RollOutcome
+from coc_runner.domain.dice import HitLocation
 
 from tests.helpers import make_participant
 from tests.test_session_import import (
@@ -121,6 +122,8 @@ def test_investigator_playtest_page_opens_with_summary_and_action_form(
     assert "开始远程攻击" in html
     assert "伤害结算" in html
     assert "需要先完成一次命中的攻击判定，才能继续结算伤害。" in html
+    assert "战斗摘要" in html
+    assert "当前未进入战斗顺序。" in html
     assert "快速理智检定" in html
     assert 'name="source_label"' in html
     assert 'name="success_loss"' in html
@@ -696,7 +699,16 @@ def test_investigator_playtest_page_melee_attack_hit_can_open_damage_resolution_
     client.app.state.session_service.dice_execution_backend = DiceStyleExecutionBackend(
         client=dice_client
     )
-    monkeypatch.setattr(session_service_module, "roll_damage_expression", lambda expression, *, db_expression=None, seed=None: 6)
+    monkeypatch.setattr(
+        session_service_module,
+        "roll_damage_expression",
+        lambda expression, *, db_expression=None, seed=None: 7,
+    )
+    monkeypatch.setattr(
+        session_service_module,
+        "roll_hit_location",
+        lambda seed=None: (20, HitLocation.HEAD),
+    )
 
     attack_response = client.post(
         f"/playtest/sessions/{session_id}/investigator/investigator-1/melee-attack",
@@ -742,12 +754,19 @@ def test_investigator_playtest_page_melee_attack_hit_can_open_damage_resolution_
     assert "已完成伤害结算，目标 HP 已更新" in damage_html
     assert "目标：林舟" in damage_html
     assert "伤害表达式：1d6+1" in damage_html
-    assert "原始伤害：6" in damage_html
+    assert "命中部位：头部（d20=20）" in damage_html
+    assert "原始伤害：7" in damage_html
     assert "护甲吸收：1" in damage_html
-    assert "最终伤害：5" in damage_html
+    assert "最终伤害：6" in damage_html
     assert "结算前 HP：11" in damage_html
-    assert "结算后 HP：6" in damage_html
-    assert "HP：6" in damage_html
+    assert "结算后 HP：5" in damage_html
+    assert "重伤：是（阈值 6）" in damage_html
+    assert "需要 KP 进一步裁定：是" in damage_html
+    assert "HP：5" in damage_html
+
+    keeper_html = client.get(f"/playtest/sessions/{session_id}/keeper").text
+    assert "KP 提示" in keeper_html
+    assert "林舟受到重伤，需要 KP 进一步裁定" in keeper_html
 
 
 def test_investigator_playtest_page_melee_attack_distinguishes_counterattack_execution_semantics(
@@ -835,6 +854,85 @@ def test_investigator_playtest_page_ranged_attack_supports_aim_bonus_and_hurried
     assert "掷骰结果：89" in hurried_html
     assert "攻击结果：未命中" in hurried_html
     assert ".ra p1 手枪60" not in hurried_html
+
+
+def test_investigator_playtest_page_shows_combat_summary_after_keeper_starts_combat_context(
+    client: TestClient,
+) -> None:
+    fast = make_participant("investigator-1", "林舟")
+    fast["character"]["attributes"]["dexterity"] = 80
+    medium = make_participant("ai-1", "测试调查员", kind="ai")
+    medium["character"]["attributes"]["dexterity"] = 65
+    slow = make_participant("investigator-2", "周岚")
+    slow["character"]["attributes"]["dexterity"] = 45
+    session_id = _start_investigator_ui_session(
+        client,
+        participants=[fast, medium, slow],
+    )
+
+    start_response = client.post(
+        f"/playtest/sessions/{session_id}/keeper/combat/start",
+        data={"operator_id": KEEPER_ID},
+    )
+    assert start_response.status_code == 200
+
+    response = client.get(f"/playtest/sessions/{session_id}/investigator/investigator-1")
+
+    assert response.status_code == 200
+    html = response.text
+    assert "战斗摘要" in html
+    assert "当前行动者：林舟" in html
+    assert "下一位：测试调查员" in html
+    assert "第 1 轮" in html
+
+
+def test_investigator_playtest_page_damage_resolution_supports_kp_hit_location_skip_semantics(
+    client: TestClient,
+    monkeypatch,
+) -> None:
+    session_id = _start_investigator_ui_session(client)
+
+    dice_client = DiceStyleSubprocessClient(
+        command=_bridge_command("scripted_dice_provider.py"),
+        timeout_seconds=1.0,
+    )
+    client.app.state.session_service.dice_execution_backend = DiceStyleExecutionBackend(
+        client=dice_client
+    )
+    monkeypatch.setattr(
+        session_service_module,
+        "roll_damage_expression",
+        lambda expression, *, db_expression=None, seed=None: 3,
+    )
+
+    attack_response = client.post(
+        f"/playtest/sessions/{session_id}/investigator/investigator-1/melee-attack",
+        data={
+            "melee_target_actor_id": "investigator-1",
+            "attack_label": "斗殴",
+            "attack_target_value": "55",
+            "defense_mode": "dodge",
+            "defense_label": "闪避",
+            "defense_target_value": "40",
+        },
+    )
+    assert attack_response.status_code == 200
+
+    damage_response = client.post(
+        f"/playtest/sessions/{session_id}/investigator/investigator-1/damage-resolution",
+        data={
+            "damage_target_actor_id": "investigator-1",
+            "damage_expression": "1d3",
+            "damage_bonus_expression": "",
+            "armor_value": "0",
+            "skip_hit_location": "true",
+        },
+    )
+
+    assert damage_response.status_code == 200
+    html = damage_response.text
+    assert "命中部位：KP 跳过（特殊目标或特殊场景）" in html
+    assert "重伤：否（阈值 6）" in html
 
 
 def test_investigator_playtest_page_san_check_submission_rerenders_with_persisted_san_result(

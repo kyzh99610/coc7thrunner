@@ -307,6 +307,60 @@ def test_keeper_dashboard_shows_live_control_entries_and_investigator_page_does_
     assert "/keeper/reveal/" not in investigator_html
 
 
+def test_keeper_dashboard_can_start_minimal_combat_context_and_advance_turn_order(
+    client: TestClient,
+) -> None:
+    fast = make_participant("investigator-1", "林舟")
+    fast["character"]["attributes"]["dexterity"] = 80
+    medium = make_participant("ai-1", "测试调查员", kind="ai")
+    medium["character"]["attributes"]["dexterity"] = 65
+    slow = make_participant("investigator-2", "周岚")
+    slow["character"]["attributes"]["dexterity"] = 45
+
+    response = client.post(
+        "/sessions/start",
+        json={
+            "keeper_name": "KP",
+            "keeper_id": KEEPER_ID,
+            "scenario": whispering_guesthouse_payload(),
+            "participants": [fast, medium, slow],
+        },
+    )
+    assert response.status_code == 201
+    session_id = response.json()["session_id"]
+
+    initial_response = client.get(f"/playtest/sessions/{session_id}/keeper")
+    assert initial_response.status_code == 200
+    initial_html = initial_response.text
+    assert "战斗流程" in initial_html
+    assert "当前未建立战斗顺序。" in initial_html
+    assert "当前只提供 very small 的行动顺序骨架" in initial_html
+
+    start_response = client.post(
+        f"/playtest/sessions/{session_id}/keeper/combat/start",
+        data={"operator_id": KEEPER_ID},
+    )
+    assert start_response.status_code == 200
+    start_html = start_response.text
+    assert "已建立战斗顺序" in start_html
+    assert "当前行动者：林舟" in start_html
+    assert "下一位：测试调查员" in start_html
+    assert "第 1 轮" in start_html
+    assert "林舟（DEX 80）" in start_html
+    assert "测试调查员（DEX 65）" in start_html
+    assert "周岚（DEX 45）" in start_html
+
+    advance_response = client.post(
+        f"/playtest/sessions/{session_id}/keeper/combat/advance",
+        data={"operator_id": KEEPER_ID},
+    )
+    assert advance_response.status_code == 200
+    advance_html = advance_response.text
+    assert "已推进到下一位行动者" in advance_html
+    assert "当前行动者：测试调查员" in advance_html
+    assert "下一位：周岚" in advance_html
+
+
 def test_keeper_dashboard_displays_runtime_rules_and_knowledge_assistance_panel(
     client: TestClient,
 ) -> None:

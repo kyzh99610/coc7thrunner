@@ -35,6 +35,7 @@ from coc_runner.domain.models import (
     ImportCharacterHookSeedRequest,
     ImportSceneHookSeedRequest,
     ImportTemplateCharacterHookRequest,
+    AdvanceCombatTurnRequest,
     InvestigatorAttributeCheckRequest,
     InvestigatorDamageResolutionRequest,
     InvestigatorMeleeAttackRequest,
@@ -48,6 +49,7 @@ from coc_runner.domain.models import (
     RestoreCheckpointRequest,
     SeedSuggestionHookRequest,
     SessionStatus,
+    StartCombatContextRequest,
     UpsertSuggestionHookRequest,
     UpdateSessionLifecycleRequest,
     UpdateCheckpointRequest,
@@ -2123,6 +2125,69 @@ def _render_hook_materials_panel(
     """
 
 
+def _render_keeper_combat_panel(
+    *,
+    session_snapshot: dict[str, Any],
+    session_id: str,
+    operator_id: str,
+) -> str:
+    participants = [
+        participant
+        for participant in session_snapshot.get("participants") or []
+        if isinstance(participant, dict)
+    ]
+    combat_context = session_snapshot.get("combat_context")
+    actor_options = "".join(
+        f'<option value="{escape(str(participant.get("actor_id") or ""), quote=True)}">{escape(str(participant.get("display_name") or participant.get("actor_id") or "行动者"))}</option>'
+        for participant in participants
+    )
+    if not isinstance(combat_context, dict) or not combat_context.get("turn_order"):
+        context_block = '<p class="empty-state">当前未建立战斗顺序。</p>'
+    else:
+        current_actor_name = _render_combat_actor_name(
+            str(combat_context.get("current_actor_id") or ""),
+            participants,
+        )
+        next_actor_name = _render_combat_actor_name(
+            str(combat_context.get("next_actor_id") or ""),
+            participants,
+        )
+        tie_notice = (
+            '<p class="help">存在同敏捷并列时，当前先按稳定顺序展示；若场景需要更细先后，请由 KP 手动宣布。</p>'
+            if combat_context.get("manual_tie_break_required")
+            else ""
+        )
+        context_block = f"""
+        <p class="meta-line">第 {escape(str(combat_context.get('round_number', '1')))} 轮</p>
+        <p class="meta-line">当前行动者：{escape(current_actor_name)}</p>
+        <p class="meta-line">下一位：{escape(next_actor_name)}</p>
+        {_render_combat_order_list(combat_context, participants)}
+        {tie_notice}
+        """
+    return f"""
+      <section class="panel" id="combat-flow">
+        <h2>战斗流程</h2>
+        <p class="help">当前只提供 very small 的行动顺序骨架；爆炸物、距离、遮蔽、特殊怪物与复杂部位效果仍由 KP 裁定。</p>
+        {context_block}
+        <form method="post" action="/playtest/sessions/{escape(session_id)}/keeper/combat/start#combat-flow" data-submit-label="建立中...">
+          <input type="hidden" name="operator_id" value="{escape(operator_id)}" />
+          <label>
+            starting_actor_id
+            <select name="starting_actor_id">
+              <option value="">自动默认首位</option>
+              {actor_options}
+            </select>
+          </label>
+          <button type="submit">开始战斗顺序</button>
+        </form>
+        <form method="post" action="/playtest/sessions/{escape(session_id)}/keeper/combat/advance#combat-flow" data-submit-label="推进中...">
+          <input type="hidden" name="operator_id" value="{escape(operator_id)}" />
+          <button type="submit">推进到下一位</button>
+        </form>
+      </section>
+    """
+
+
 def _render_keeper_dashboard_page(
     *,
     session_id: str,
@@ -2236,6 +2301,11 @@ def _render_keeper_dashboard_page(
       </section>
       {_render_san_aftermath_panel(queued_prompts, san_aftermath_suggestions=san_aftermath_suggestions)}
       {_render_hook_materials_panel(
+          session_snapshot=snapshot,
+          session_id=session_id,
+          operator_id=keeper_id,
+      )}
+      {_render_keeper_combat_panel(
           session_snapshot=snapshot,
           session_id=session_id,
           operator_id=keeper_id,
@@ -2778,6 +2848,53 @@ def _render_defense_mode_label(defense_mode: str | None) -> str:
     }.get(str(defense_mode or ""), str(defense_mode or "未知"))
 
 
+def _render_hit_location_label(hit_location_value: Any) -> str:
+    return {
+        "right_leg": "右腿",
+        "left_leg": "左腿",
+        "abdomen": "腹部",
+        "chest": "胸部",
+        "right_arm": "右臂",
+        "left_arm": "左臂",
+        "head": "头部",
+    }.get(str(hit_location_value or ""), str(hit_location_value or "未知"))
+
+
+def _render_combat_actor_name(actor_id: str | None, participants: list[dict[str, Any]]) -> str:
+    normalized_actor_id = str(actor_id or "").strip()
+    if not normalized_actor_id:
+        return "—"
+    participant = next(
+        (
+            item
+            for item in participants
+            if isinstance(item, dict) and str(item.get("actor_id") or "") == normalized_actor_id
+        ),
+        None,
+    )
+    if participant is None:
+        return normalized_actor_id
+    return str(participant.get("display_name") or participant.get("actor_id") or normalized_actor_id)
+
+
+def _render_combat_order_list(
+    combat_context: dict[str, Any],
+    participants: list[dict[str, Any]],
+) -> str:
+    turn_order = combat_context.get("turn_order") or []
+    current_actor_id = str(combat_context.get("current_actor_id") or "")
+    if not turn_order:
+        return '<p class="empty-state">当前未建立战斗顺序。</p>'
+    items: list[str] = []
+    for entry in turn_order:
+        actor_id = str(entry.get("actor_id") or "")
+        display_name = _render_combat_actor_name(actor_id, participants)
+        dexterity = entry.get("dexterity", "—")
+        marker = "（当前）" if actor_id == current_actor_id else ""
+        items.append(f"<li>{escape(display_name)}（DEX {escape(str(dexterity))}）{escape(marker)}</li>")
+    return "<ul>" + "".join(items) + "</ul>"
+
+
 def _render_investigator_check_result(
     *,
     message: str,
@@ -2933,6 +3050,15 @@ def _render_investigator_damage_resolution_result(
 ) -> str:
     if damage_resolution_result is None:
         return ""
+    hit_location_status = str(damage_resolution_result.get("hit_location_status") or "")
+    if hit_location_status == "kp_override":
+        hit_location_line = "<p>命中部位：KP 跳过（特殊目标或特殊场景）</p>"
+    else:
+        hit_location_roll = damage_resolution_result.get("hit_location_roll")
+        hit_location = _render_hit_location_label(damage_resolution_result.get("hit_location"))
+        hit_location_line = (
+            f"<p>命中部位：{escape(hit_location)}（d20={escape(str(hit_location_roll or '—'))}）</p>"
+        )
     return (
         '<section class="feedback feedback-success">'
         "<h2>最近一次伤害结算</h2>"
@@ -2944,11 +3070,14 @@ def _render_investigator_damage_resolution_result(
             if damage_resolution_result.get("damage_bonus_expression")
             else ""
         )
+        + hit_location_line
         + f"<p>原始伤害：{escape(str(damage_resolution_result.get('raw_damage', '—')))}</p>"
         + f"<p>护甲吸收：{escape(str(damage_resolution_result.get('armor_absorbed', '—')))}</p>"
         + f"<p>最终伤害：{escape(str(damage_resolution_result.get('final_damage', '—')))}</p>"
         + f"<p>结算前 HP：{escape(str(damage_resolution_result.get('hp_before', '—')))}</p>"
         + f"<p>结算后 HP：{escape(str(damage_resolution_result.get('hp_after', '—')))}</p>"
+        + f"<p>重伤：{escape('是' if damage_resolution_result.get('heavy_wound') else '否')}（阈值 {escape(str(damage_resolution_result.get('heavy_wound_threshold', '—')))}）</p>"
+        + f"<p>需要 KP 进一步裁定：{escape('是' if damage_resolution_result.get('kp_follow_up_required') else '否')}</p>"
         + "</section>"
     )
 
@@ -3322,6 +3451,10 @@ def _render_investigator_damage_resolution_panel(
             armor_value
             <input type="number" name="armor_value" value="{escape(armor_value or '0')}" min="0" max="99">
           </label>
+          <label class="checkbox-line">
+            <input type="checkbox" name="skip_hit_location" value="true">
+            命中部位不适用（KP override）
+          </label>
           <p class="help">默认按 very small 伤害表达式、护甲吸收与 HP 扣减结算；部位命中、爆炸物和复杂武器仍由 KP 裁定。</p>
           <button type="submit">结算伤害</button>
         </form>
@@ -3474,6 +3607,44 @@ def _render_investigator_private_notes(
         for label, note in entries
     ]
     return '<div class="recent-list">' + "".join(items) + "</div>"
+
+
+def _render_investigator_combat_summary_panel(
+    *,
+    combat_context: dict[str, Any] | None,
+    participants: list[dict[str, Any]],
+) -> str:
+    if not isinstance(combat_context, dict) or not combat_context.get("turn_order"):
+        return """
+      <section class="panel">
+        <h2>战斗摘要</h2>
+        <p class="empty-state">当前未进入战斗顺序。</p>
+      </section>
+        """
+    current_actor_name = _render_combat_actor_name(
+        str(combat_context.get("current_actor_id") or ""),
+        participants,
+    )
+    next_actor_name = _render_combat_actor_name(
+        str(combat_context.get("next_actor_id") or ""),
+        participants,
+    )
+    tie_notice = (
+        '<p class="help">存在同敏捷并列时，当前只按稳定顺序展示；复杂先后仍由 KP 口头裁定。</p>'
+        if combat_context.get("manual_tie_break_required")
+        else ""
+    )
+    return f"""
+      <section class="panel">
+        <h2>战斗摘要</h2>
+        <p class="meta-line">第 {escape(str(combat_context.get('round_number', '1')))} 轮</p>
+        <p class="meta-line">当前行动者：{escape(current_actor_name)}</p>
+        <p class="meta-line">下一位：{escape(next_actor_name)}</p>
+        {_render_combat_order_list(combat_context, participants)}
+        <p class="help">当前只提供 very small 的行动顺序骨架；复杂战斗条件仍由 KP 裁定。</p>
+        {tie_notice}
+      </section>
+    """
 
 
 def _render_investigator_page(
@@ -3633,6 +3804,10 @@ def _render_investigator_page(
           </article>
         </div>
       </section>
+      {_render_investigator_combat_summary_panel(
+          combat_context=view.get("combat_context") if isinstance(view.get("combat_context"), dict) else None,
+          participants=[participant for participant in participants if isinstance(participant, dict)],
+      )}
       {action_panel}
       {_render_investigator_skill_check_panel(
           session_id=session_id,
@@ -4033,6 +4208,63 @@ async def update_session_lifecycle_via_keeper_dashboard(
         )
 
 
+@router.post("/sessions/{session_id}/keeper/combat/start", response_class=HTMLResponse)
+async def start_combat_context_via_keeper_dashboard(
+    session_id: str,
+    request: Request,
+    service: SessionService = Depends(get_session_service),
+) -> HTMLResponse:
+    form = await _read_form_payload(request)
+    try:
+        response = service.start_combat_context(
+            session_id,
+            StartCombatContextRequest(
+                operator_id=form.get("operator_id", ""),
+                starting_actor_id=_normalize_form_text(form.get("starting_actor_id")),
+            ),
+        )
+        return _render_keeper_dashboard_from_service(
+            service=service,
+            session_id=session_id,
+            notice=response.message,
+        )
+    except (ValidationError, LookupError, PermissionError, ConflictError, ValueError) as exc:
+        return _render_playtest_exception(
+            _render_keeper_dashboard_from_service,
+            exc=exc,
+            service=service,
+            session_id=session_id,
+        )
+
+
+@router.post("/sessions/{session_id}/keeper/combat/advance", response_class=HTMLResponse)
+async def advance_combat_turn_via_keeper_dashboard(
+    session_id: str,
+    request: Request,
+    service: SessionService = Depends(get_session_service),
+) -> HTMLResponse:
+    form = await _read_form_payload(request)
+    try:
+        response = service.advance_combat_turn(
+            session_id,
+            AdvanceCombatTurnRequest(
+                operator_id=form.get("operator_id", ""),
+            ),
+        )
+        return _render_keeper_dashboard_from_service(
+            service=service,
+            session_id=session_id,
+            notice=response.message,
+        )
+    except (ValidationError, LookupError, PermissionError, ConflictError, ValueError) as exc:
+        return _render_playtest_exception(
+            _render_keeper_dashboard_from_service,
+            exc=exc,
+            service=service,
+            session_id=session_id,
+        )
+
+
 @router.get("/sessions/{session_id}/investigator/{viewer_id}", response_class=HTMLResponse)
 def investigator_playtest_page(
     session_id: str,
@@ -4284,6 +4516,7 @@ async def submit_investigator_damage_resolution_via_ui(
     damage_expression = _normalize_form_text(form.get("damage_expression")) or ""
     damage_bonus_expression = _normalize_form_text(form.get("damage_bonus_expression"))
     armor_value = _normalize_form_text(form.get("armor_value")) or "0"
+    skip_hit_location = _normalize_form_text(form.get("skip_hit_location")) == "true"
     try:
         response = service.resolve_investigator_damage(
             session_id,
@@ -4293,6 +4526,7 @@ async def submit_investigator_damage_resolution_via_ui(
                 damage_expression=damage_expression,
                 damage_bonus_expression=damage_bonus_expression,
                 armor_value=armor_value,
+                skip_hit_location=skip_hit_location,
             ),
         )
         return _render_investigator_page_from_service(
