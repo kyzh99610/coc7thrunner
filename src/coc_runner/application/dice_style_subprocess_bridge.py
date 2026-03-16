@@ -35,10 +35,13 @@ _MODIFIED_DICE_RESULT_PATTERN = re.compile(
     r"\(\[D100=(?P<base_total>\d{1,3}),\s*(?P<label>奖励|惩罚)\s+(?P<extra_tens>\d(?:\s+\d)*)\]\)\s*"
     r"(?P<rank>大成功|极难成功|困难成功|成功|失败|大失败)!?"
 )
-_OPPOSED_DICE_RESULT_PATTERN = re.compile(
-    r"对抗检定:\s*"
-    r"(?P<actor_label>.+?)\s*->\s*属性值:(?P<actor_target>\d{1,3})\s*判定值:(?P<actor_roll>\d{1,3})(?:\[\[.*?\]\])?\s*(?P<actor_rank>大成功|极难成功|困难成功|成功|失败|大失败)!?\s+"
-    r"(?P<opponent_label>.+?)\s*->\s*属性值:(?P<opponent_target>\d{1,3})\s*判定值:(?P<opponent_roll>\d{1,3})(?:\[\[.*?\]\])?\s*(?P<opponent_rank>大成功|极难成功|困难成功|成功|失败|大失败)!?\s+(?P<summary>.+)"
+_OPPOSED_SIDE_PATTERN = re.compile(
+    r"(?P<label>.+?)\s*->\s*属性值[:：]\s*(?P<target>\d{1,3})\s*判定值[:：]\s*"
+    r"(?:(?P<mode>[bp])(?P<count>\d*)=)?(?P<rolled>\d{1,3})(?:/(?P<inline_target>\d{1,3}))?"
+    r"(?P<detail>\[\[.*?\]\])?\s*(?P<rank>大成功|极难成功|困难成功|成功|失败|大失败)!?"
+)
+_OPPOSED_MODIFIED_DETAIL_PATTERN = re.compile(
+    r"\[\[\s*D100\s*=\s*(?P<base_total>\d{1,3})\s*[,，]\s*(?P<label>奖励|惩罚)\s+(?P<extra_tens>\d(?:\s+\d)*)\s*\]\]"
 )
 
 def _configure_stdio() -> None:
@@ -50,7 +53,14 @@ def _configure_stdio() -> None:
         sys.stderr.reconfigure(encoding="utf-8")
 
 
-def _build_roll(*, total: int, target: int, outcome: RollOutcome) -> D100Roll:
+def _build_roll(
+    *,
+    total: int,
+    target: int,
+    outcome: RollOutcome,
+    bonus_dice: int = 0,
+    penalty_dice: int = 0,
+) -> D100Roll:
     selected_tens = 0 if total == 100 else total // 10
     unit_die = 0 if total == 100 else total % 10
     return D100Roll(
@@ -59,6 +69,8 @@ def _build_roll(*, total: int, target: int, outcome: RollOutcome) -> D100Roll:
         selected_tens=selected_tens,
         total=total,
         target=target,
+        bonus_dice=bonus_dice,
+        penalty_dice=penalty_dice,
         outcome=outcome,
     )
 
@@ -199,31 +211,26 @@ def _parse_opposed_provider_output(
     raw_output: str,
     payload: DiceStyleSubprocessPayload,
 ) -> DiceExecutionResult:
-    match = _OPPOSED_DICE_RESULT_PATTERN.search(raw_output)
-    if match is None:
+    body = re.sub(r"^\s*对抗检定[:：]\s*", "", raw_output.strip())
+    matches = list(_OPPOSED_SIDE_PATTERN.finditer(body))
+    if len(matches) < 2:
         raise ValueError("Dice-style provider output did not contain a parseable opposed result")
-    actor_target = int(match.group("actor_target"))
-    opponent_target = int(match.group("opponent_target"))
-    if actor_target != payload.request.target_value:
-        raise ValueError(
-            f"Dice-style provider actor target mismatch: expected {payload.request.target_value}, got {actor_target}"
-        )
+    actor_roll = _parse_opposed_side_roll(
+        side_match=matches[0],
+        expected_target=payload.request.target_value,
+        expected_bonus_dice=payload.request.bonus_dice,
+        expected_penalty_dice=payload.request.penalty_dice,
+        perspective="actor",
+    )
     expected_opponent_target = payload.request.opposed_target_value
     if expected_opponent_target is None:
         raise ValueError("opposed request is missing opponent target value")
-    if opponent_target != expected_opponent_target:
-        raise ValueError(
-            f"Dice-style provider opponent target mismatch: expected {expected_opponent_target}, got {opponent_target}"
-        )
-    actor_roll = _build_roll(
-        total=int(match.group("actor_roll")),
-        target=actor_target,
-        outcome=evaluate_d100_roll(int(match.group("actor_roll")), actor_target),
-    )
-    opponent_roll = _build_roll(
-        total=int(match.group("opponent_roll")),
-        target=opponent_target,
-        outcome=evaluate_d100_roll(int(match.group("opponent_roll")), opponent_target),
+    opponent_roll = _parse_opposed_side_roll(
+        side_match=matches[1],
+        expected_target=expected_opponent_target,
+        expected_bonus_dice=payload.request.opposed_bonus_dice,
+        expected_penalty_dice=payload.request.opposed_penalty_dice,
+        perspective="opponent",
     )
     resolution = evaluate_opposed_rolls(actor_roll, opponent_roll)
     return DiceExecutionResult(
@@ -234,6 +241,75 @@ def _parse_opposed_provider_output(
         opposed_roll=opponent_roll,
         opposed_label=payload.request.opposed_label,
         opposed_resolution=resolution,
+    )
+
+
+def _parse_opposed_side_roll(
+    *,
+    side_match: re.Match[str],
+    expected_target: int,
+    expected_bonus_dice: int,
+    expected_penalty_dice: int,
+    perspective: str,
+) -> D100Roll:
+    target = int(side_match.group("target"))
+    if target != expected_target:
+        raise ValueError(
+            f"Dice-style provider {perspective} target mismatch: expected {expected_target}, got {target}"
+        )
+    inline_target = side_match.group("inline_target")
+    if inline_target is not None and int(inline_target) != target:
+        raise ValueError(
+            f"Dice-style provider {perspective} inline target mismatch: expected {target}, got {inline_target}"
+        )
+    rolled_value = int(side_match.group("rolled"))
+    detail = side_match.group("detail")
+    mode = side_match.group("mode")
+    count_text = side_match.group("count")
+    mode_bonus_dice = int(count_text or "1") if mode == "b" else 0
+    mode_penalty_dice = int(count_text or "1") if mode == "p" else 0
+    if expected_bonus_dice and mode_penalty_dice:
+        raise ValueError(
+            f"Dice-style provider {perspective} returned a penalty roll for a bonus-dice request"
+        )
+    if expected_penalty_dice and mode_bonus_dice:
+        raise ValueError(
+            f"Dice-style provider {perspective} returned a bonus roll for a penalty-dice request"
+        )
+    if detail is None:
+        return _build_roll(
+            total=rolled_value,
+            target=target,
+            bonus_dice=expected_bonus_dice or mode_bonus_dice,
+            penalty_dice=expected_penalty_dice or mode_penalty_dice,
+            outcome=evaluate_d100_roll(rolled_value, target),
+        )
+    detail_match = _OPPOSED_MODIFIED_DETAIL_PATTERN.fullmatch(detail.strip())
+    if detail_match is None:
+        raise ValueError("Dice-style provider opposed result detail was not parseable")
+    extra_tens = [
+        int(item)
+        for item in detail_match.group("extra_tens").split()
+        if item
+    ]
+    detail_label = detail_match.group("label")
+    detail_bonus_dice = len(extra_tens) if detail_label == "奖励" else 0
+    detail_penalty_dice = len(extra_tens) if detail_label == "惩罚" else 0
+    if expected_bonus_dice and detail_penalty_dice:
+        raise ValueError(
+            f"Dice-style provider {perspective} detail returned a penalty roll for a bonus-dice request"
+        )
+    if expected_penalty_dice and detail_bonus_dice:
+        raise ValueError(
+            f"Dice-style provider {perspective} detail returned a bonus roll for a penalty-dice request"
+        )
+    return _build_modified_roll(
+        total=rolled_value,
+        target=target,
+        base_total=int(detail_match.group("base_total")),
+        extra_tens=extra_tens,
+        bonus_dice=expected_bonus_dice or mode_bonus_dice or detail_bonus_dice,
+        penalty_dice=expected_penalty_dice or mode_penalty_dice or detail_penalty_dice,
     )
 
 

@@ -264,7 +264,13 @@ def render_dice_style_command(request: DiceExecutionRequest) -> str:
             raise UnsupportedDiceCheckError(
                 "opposed checks require explicit opponent label and target value"
             )
-        opposed_expression = _render_dice_style_check_expression(
+        primary_expression = _render_dice_style_opposed_expression(
+            label=normalized_label,
+            target_value=request.target_value,
+            bonus_dice=request.bonus_dice,
+            penalty_dice=request.penalty_dice,
+        )
+        opposed_expression = _render_dice_style_opposed_expression(
             label=request.opposed_label,
             target_value=request.opposed_target_value,
             bonus_dice=request.opposed_bonus_dice,
@@ -308,6 +314,28 @@ def _render_dice_style_check_expression(
     if penalty_dice:
         return f"p{penalty_dice} {normalized_label}{target_value}"
     return f"{normalized_label}{target_value}"
+
+
+def _render_dice_style_opposed_expression(
+    *,
+    label: str,
+    target_value: int,
+    bonus_dice: int,
+    penalty_dice: int,
+) -> str:
+    if bonus_dice and penalty_dice:
+        raise UnsupportedDiceCheckError(
+            "bonus and penalty dice cannot both be forwarded to the Dice-style bridge"
+        )
+    normalized_label = " ".join(label.split()).strip()
+    if not normalized_label:
+        raise ValueError("dice execution label must not be blank")
+    expression = f"{normalized_label}{target_value}"
+    if bonus_dice:
+        return f"{expression},b{bonus_dice}"
+    if penalty_dice:
+        return f"{expression},p{penalty_dice}"
+    return expression
 
 
 def build_default_dice_style_subprocess_command(

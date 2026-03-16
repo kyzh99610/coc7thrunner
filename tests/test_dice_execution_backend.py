@@ -222,6 +222,34 @@ def test_render_dice_style_command_supports_opposed_execution_and_keeps_pushed_a
     assert render_dice_style_command(opposed_request) == ".rav 话术50 守卫意志40"
 
 
+def test_render_dice_style_command_supports_official_like_opposed_modifier_suffixes() -> None:
+    actor_bonus_request = DiceExecutionRequest(
+        session_id="session-1",
+        actor_id="investigator-1",
+        check_kind=DiceCheckKind.OPPOSED,
+        label="潜行",
+        target_value=20,
+        opposed_label="守卫侦查",
+        opposed_target_value=80,
+        bonus_dice=1,
+        language_preference=LanguagePreference.ZH_CN,
+    )
+    opponent_penalty_request = DiceExecutionRequest(
+        session_id="session-1",
+        actor_id="investigator-1",
+        check_kind=DiceCheckKind.OPPOSED,
+        label="力量",
+        target_value=60,
+        opposed_label="守卫力量",
+        opposed_target_value=60,
+        opposed_penalty_dice=1,
+        language_preference=LanguagePreference.ZH_CN,
+    )
+
+    assert render_dice_style_command(actor_bonus_request) == ".rav 潜行20,b1 守卫侦查80"
+    assert render_dice_style_command(opponent_penalty_request) == ".rav 力量60 守卫力量60,p1"
+
+
 def test_dice_style_backend_falls_back_when_sidecar_unavailable_or_check_not_supported() -> None:
     unavailable_client = _UnavailableDiceStyleClient()
     fallback_backend = _FixedFallbackBackend(
@@ -460,6 +488,91 @@ def test_dice_style_subprocess_client_parses_opposed_provider_output_and_normali
     assert double_failure_result.opposed_roll.outcome == RollOutcome.FAILURE
     assert double_failure_result.opposed_resolution == OpposedCheckResolution.DOUBLE_FAILURE
     assert double_failure_result.success is False
+
+
+def test_dice_style_subprocess_client_parses_official_like_bonus_and_penalty_rav_outputs() -> None:
+    client = DiceStyleSubprocessClient(
+        command=_bridge_command("scripted_dice_provider.py"),
+        timeout_seconds=1.0,
+    )
+    actor_bonus_request = DiceExecutionRequest(
+        session_id="session-1",
+        actor_id="investigator-1",
+        check_kind=DiceCheckKind.OPPOSED,
+        label="潜行",
+        target_value=20,
+        opposed_label="守卫侦查",
+        opposed_target_value=80,
+        bonus_dice=1,
+        language_preference=LanguagePreference.ZH_CN,
+    )
+    opponent_penalty_request = DiceExecutionRequest(
+        session_id="session-1",
+        actor_id="investigator-1",
+        check_kind=DiceCheckKind.OPPOSED,
+        label="力量",
+        target_value=60,
+        opposed_label="守卫力量",
+        opposed_target_value=60,
+        opposed_penalty_dice=1,
+        language_preference=LanguagePreference.ZH_CN,
+    )
+
+    actor_bonus_result = client.execute_check(
+        request=actor_bonus_request,
+        command_text=render_dice_style_command(actor_bonus_request),
+    )
+    opponent_penalty_result = client.execute_check(
+        request=opponent_penalty_request,
+        command_text=render_dice_style_command(opponent_penalty_request),
+    )
+
+    assert actor_bonus_result.roll.total == 7
+    assert actor_bonus_result.roll.bonus_dice == 1
+    assert actor_bonus_result.roll.outcome == RollOutcome.HARD_SUCCESS
+    assert actor_bonus_result.opposed_roll is not None
+    assert actor_bonus_result.opposed_roll.total == 28
+    assert actor_bonus_result.opposed_roll.outcome == RollOutcome.HARD_SUCCESS
+    assert actor_bonus_result.opposed_resolution == OpposedCheckResolution.DRAW
+
+    assert opponent_penalty_result.roll.total == 42
+    assert opponent_penalty_result.roll.outcome == RollOutcome.SUCCESS
+    assert opponent_penalty_result.opposed_roll is not None
+    assert opponent_penalty_result.opposed_roll.total == 84
+    assert opponent_penalty_result.opposed_roll.penalty_dice == 1
+    assert opponent_penalty_result.opposed_roll.outcome == RollOutcome.FAILURE
+    assert opponent_penalty_result.opposed_resolution == OpposedCheckResolution.ACTOR_WIN
+    assert opponent_penalty_result.success is True
+
+
+def test_dice_style_subprocess_client_keeps_opposed_resolution_authoritative_locally_even_if_provider_summary_disagrees() -> None:
+    client = DiceStyleSubprocessClient(
+        command=_bridge_command("scripted_dice_provider.py"),
+        timeout_seconds=1.0,
+    )
+    request = DiceExecutionRequest(
+        session_id="session-1",
+        actor_id="investigator-1",
+        check_kind=DiceCheckKind.OPPOSED,
+        label="话术",
+        target_value=50,
+        opposed_label="守卫意志",
+        opposed_target_value=50,
+        language_preference=LanguagePreference.ZH_CN,
+    )
+
+    result = client.execute_check(
+        request=request,
+        command_text=render_dice_style_command(request),
+    )
+
+    assert result.roll.total == 24
+    assert result.roll.outcome == RollOutcome.HARD_SUCCESS
+    assert result.opposed_roll is not None
+    assert result.opposed_roll.total == 21
+    assert result.opposed_roll.outcome == RollOutcome.HARD_SUCCESS
+    assert result.opposed_resolution == OpposedCheckResolution.DRAW
+    assert result.success is False
 
 
 def test_dice_style_subprocess_client_reports_invalid_output_timeout_and_provider_failure() -> None:
