@@ -336,6 +336,12 @@ def test_keeper_dashboard_can_start_minimal_combat_context_and_advance_turn_orde
     assert "当前未建立战斗顺序。" in initial_html
     assert "当前只提供 very small 的行动顺序骨架" in initial_html
 
+    activate_response = client.post(
+        f"/playtest/sessions/{session_id}/keeper/lifecycle",
+        data={"operator_id": KEEPER_ID, "target_status": "active"},
+    )
+    assert activate_response.status_code == 200
+
     start_response = client.post(
         f"/playtest/sessions/{session_id}/keeper/combat/start",
         data={"operator_id": KEEPER_ID},
@@ -359,6 +365,154 @@ def test_keeper_dashboard_can_start_minimal_combat_context_and_advance_turn_orde
     assert "已推进到下一位行动者" in advance_html
     assert "当前行动者：测试调查员" in advance_html
     assert "下一位：周岚" in advance_html
+
+
+def test_keeper_dashboard_completed_lifecycle_clears_combat_context_and_hides_stale_combat_state(
+    client: TestClient,
+) -> None:
+    session_id = _start_keeper_dashboard_session(client)
+
+    activate_response = client.post(
+        f"/playtest/sessions/{session_id}/keeper/lifecycle",
+        data={"operator_id": KEEPER_ID, "target_status": "active"},
+    )
+    assert activate_response.status_code == 200
+
+    start_response = client.post(
+        f"/playtest/sessions/{session_id}/keeper/combat/start",
+        data={"operator_id": KEEPER_ID},
+    )
+    assert start_response.status_code == 200
+    assert "当前行动者：" in start_response.text
+
+    complete_response = client.post(
+        f"/playtest/sessions/{session_id}/keeper/lifecycle",
+        data={"operator_id": KEEPER_ID, "target_status": "completed"},
+    )
+
+    assert complete_response.status_code == 200
+    complete_html = complete_response.text
+    assert "当前未建立战斗顺序。" in complete_html
+    assert "当前行动者：" not in complete_html
+    assert "下一位：" not in complete_html
+
+    snapshot = _get_snapshot(client, session_id)
+    assert snapshot["status"] == "completed"
+    assert snapshot["combat_context"] is None
+
+    investigator_response = client.get(f"/playtest/sessions/{session_id}/investigator/investigator-1")
+    assert investigator_response.status_code == 200
+    investigator_html = investigator_response.text
+    assert "战斗摘要" in investigator_html
+    assert "当前未进入战斗顺序。" in investigator_html
+    assert "当前行动者：" not in investigator_html
+
+
+def test_keeper_dashboard_advance_combat_turn_wraps_round_after_last_actor(
+    client: TestClient,
+) -> None:
+    fast = make_participant("investigator-1", "林舟")
+    fast["character"]["attributes"]["dexterity"] = 80
+    medium = make_participant("ai-1", "测试调查员", kind="ai")
+    medium["character"]["attributes"]["dexterity"] = 65
+    slow = make_participant("investigator-2", "周岚")
+    slow["character"]["attributes"]["dexterity"] = 45
+
+    response = client.post(
+        "/sessions/start",
+        json={
+            "keeper_name": "KP",
+            "keeper_id": KEEPER_ID,
+            "scenario": whispering_guesthouse_payload(),
+            "participants": [fast, medium, slow],
+        },
+    )
+    assert response.status_code == 201
+    session_id = response.json()["session_id"]
+
+    activate_response = client.post(
+        f"/playtest/sessions/{session_id}/keeper/lifecycle",
+        data={"operator_id": KEEPER_ID, "target_status": "active"},
+    )
+    assert activate_response.status_code == 200
+
+    start_response = client.post(
+        f"/playtest/sessions/{session_id}/keeper/combat/start",
+        data={"operator_id": KEEPER_ID},
+    )
+    assert start_response.status_code == 200
+
+    for _ in range(3):
+        advance_response = client.post(
+            f"/playtest/sessions/{session_id}/keeper/combat/advance",
+            data={"operator_id": KEEPER_ID},
+        )
+        assert advance_response.status_code == 200
+
+    snapshot = _get_snapshot(client, session_id)
+    combat_context = snapshot["combat_context"]
+    assert combat_context["round_number"] == 2
+    assert combat_context["current_actor_id"] == "investigator-1"
+    assert combat_context["next_actor_id"] == "ai-1"
+
+
+def test_keeper_dashboard_rejects_start_combat_context_when_session_is_not_active(
+    client: TestClient,
+) -> None:
+    session_id = _start_keeper_dashboard_session(client)
+
+    before_planned_snapshot = _get_snapshot(client, session_id)
+    planned_response = client.post(
+        f"/playtest/sessions/{session_id}/keeper/combat/start",
+        data={"operator_id": KEEPER_ID},
+    )
+    assert planned_response.status_code == 400
+    planned_html = planned_response.text
+    assert "操作失败" in planned_html
+    assert "combat_context_invalid" in planned_html
+    assert "只有进行中的会话才能建立战斗顺序。" in planned_html
+    assert _get_snapshot(client, session_id) == before_planned_snapshot
+
+    activate_response = client.post(
+        f"/playtest/sessions/{session_id}/keeper/lifecycle",
+        data={"operator_id": KEEPER_ID, "target_status": "active"},
+    )
+    assert activate_response.status_code == 200
+    pause_response = client.post(
+        f"/playtest/sessions/{session_id}/keeper/lifecycle",
+        data={"operator_id": KEEPER_ID, "target_status": "paused"},
+    )
+    assert pause_response.status_code == 200
+
+    before_paused_snapshot = _get_snapshot(client, session_id)
+    paused_response = client.post(
+        f"/playtest/sessions/{session_id}/keeper/combat/start",
+        data={"operator_id": KEEPER_ID},
+    )
+    assert paused_response.status_code == 400
+    paused_html = paused_response.text
+    assert "操作失败" in paused_html
+    assert "combat_context_invalid" in paused_html
+    assert "只有进行中的会话才能建立战斗顺序。" in paused_html
+    assert _get_snapshot(client, session_id) == before_paused_snapshot
+
+    complete_response = client.post(
+        f"/playtest/sessions/{session_id}/keeper/lifecycle",
+        data={"operator_id": KEEPER_ID, "target_status": "completed"},
+    )
+    assert complete_response.status_code == 200
+
+    before_completed_snapshot = _get_snapshot(client, session_id)
+    completed_response = client.post(
+        f"/playtest/sessions/{session_id}/keeper/combat/start",
+        data={"operator_id": KEEPER_ID},
+    )
+    assert completed_response.status_code == 400
+    completed_html = completed_response.text
+    assert "操作失败" in completed_html
+    assert "combat_context_invalid" in completed_html
+    assert "本局已结束，当前页面不再建立新的战斗顺序。" in completed_html
+    assert _get_snapshot(client, session_id) == before_completed_snapshot
 
 
 def test_keeper_dashboard_displays_runtime_rules_and_knowledge_assistance_panel(

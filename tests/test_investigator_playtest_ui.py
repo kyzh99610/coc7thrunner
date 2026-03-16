@@ -870,6 +870,12 @@ def test_investigator_playtest_page_shows_combat_summary_after_keeper_starts_com
         participants=[fast, medium, slow],
     )
 
+    activate_response = client.post(
+        f"/playtest/sessions/{session_id}/keeper/lifecycle",
+        data={"operator_id": KEEPER_ID, "target_status": "active"},
+    )
+    assert activate_response.status_code == 200
+
     start_response = client.post(
         f"/playtest/sessions/{session_id}/keeper/combat/start",
         data={"operator_id": KEEPER_ID},

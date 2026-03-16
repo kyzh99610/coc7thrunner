@@ -2655,6 +2655,8 @@ class SessionService:
             )
             if session.status == SessionStatus.COMPLETED:
                 raise ValueError(self._message("combat_context_session_completed", effective_language))
+            if session.status != SessionStatus.ACTIVE:
+                raise ValueError(self._message("combat_context_session_not_active", effective_language))
 
             turn_order = self._build_combat_turn_order(session)
             if not turn_order:
@@ -5040,6 +5042,8 @@ class SessionService:
             current_time = datetime.now(timezone.utc)
             expected_version = session.state_version
             session.status = request.target_status
+            if request.target_status == SessionStatus.COMPLETED:
+                session.combat_context = None
             event_text = self._message(
                 "session_status_updated",
                 effective_language,
@@ -9035,6 +9039,7 @@ class SessionService:
             "combat_context_started": "已建立战斗顺序",
             "combat_turn_advanced": "已推进到下一位行动者",
             "combat_context_session_completed": "本局已结束，当前页面不再建立新的战斗顺序。",
+            "combat_context_session_not_active": "只有进行中的会话才能建立战斗顺序。",
             "combat_context_invalid": "战斗流程参数无效",
             "combat_context_missing": "当前还没有建立战斗顺序。",
             "combat_context_no_participants": "当前没有可加入战斗顺序的参与者。",
@@ -9192,6 +9197,7 @@ class SessionService:
             "combat_context_started": "Combat order was initialized",
             "combat_turn_advanced": "Advanced to the next acting combatant",
             "combat_context_session_completed": "This session is completed and does not allow starting a new combat order.",
+            "combat_context_session_not_active": "Only active sessions may initialize a combat order.",
             "combat_context_invalid": "Combat flow request is invalid",
             "combat_context_missing": "No combat order has been initialized yet.",
             "combat_context_no_participants": "There are no participants available for the combat order.",
