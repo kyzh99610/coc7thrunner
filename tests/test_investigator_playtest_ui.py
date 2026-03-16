@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import shutil
 import sys
 from pathlib import Path
@@ -28,6 +29,25 @@ from tests.test_session_import import (
 
 
 FIXTURE_DIR = Path(__file__).resolve().parent / "fixtures" / "dice_subprocess"
+BRIDGE_SCRIPT = (
+    Path(__file__).resolve().parents[1]
+    / "src"
+    / "coc_runner"
+    / "application"
+    / "dice_style_subprocess_bridge.py"
+)
+
+
+def _bridge_command(provider_script_name: str) -> list[str]:
+    return [
+        sys.executable,
+        str(BRIDGE_SCRIPT),
+        "--provider-command-json",
+        json.dumps(
+            [sys.executable, str(FIXTURE_DIR / provider_script_name)],
+            ensure_ascii=False,
+        ),
+    ]
 
 
 def _start_investigator_ui_session(
@@ -359,7 +379,7 @@ def test_investigator_playtest_page_skill_check_can_use_optional_dice_backend_br
     session_id = _start_investigator_ui_session(client)
 
     dice_client = DiceStyleSubprocessClient(
-        command=[sys.executable, str(FIXTURE_DIR / "scripted_bridge.py")],
+        command=_bridge_command("scripted_dice_provider.py"),
         timeout_seconds=1.0,
     )
     client.app.state.session_service.dice_execution_backend = DiceStyleExecutionBackend(
@@ -389,7 +409,7 @@ def test_investigator_playtest_page_attribute_check_can_use_optional_dice_backen
     session_id = _start_investigator_ui_session(client)
 
     dice_client = DiceStyleSubprocessClient(
-        command=[sys.executable, str(FIXTURE_DIR / "scripted_bridge.py")],
+        command=_bridge_command("scripted_dice_provider.py"),
         timeout_seconds=1.0,
     )
     client.app.state.session_service.dice_execution_backend = DiceStyleExecutionBackend(
@@ -503,7 +523,7 @@ def test_investigator_san_check_keeps_authoritative_state_when_dice_bridge_falls
     fallback_backend = _FixedFallbackBackend()
     client.app.state.session_service.dice_execution_backend = DiceStyleExecutionBackend(
         client=DiceStyleSubprocessClient(
-            command=[sys.executable, str(FIXTURE_DIR / "scripted_bridge.py")],
+            command=_bridge_command("scripted_dice_provider.py"),
             timeout_seconds=1.0,
         ),
         fallback_backend=fallback_backend,

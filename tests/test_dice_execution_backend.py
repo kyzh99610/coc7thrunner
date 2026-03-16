@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import sys
 from pathlib import Path
 
@@ -24,6 +25,25 @@ from coc_runner.main import create_app
 
 
 FIXTURE_DIR = Path(__file__).resolve().parent / "fixtures" / "dice_subprocess"
+BRIDGE_SCRIPT = (
+    Path(__file__).resolve().parents[1]
+    / "src"
+    / "coc_runner"
+    / "application"
+    / "dice_style_subprocess_bridge.py"
+)
+
+
+def _bridge_command(provider_script_name: str) -> list[str]:
+    return [
+        sys.executable,
+        str(BRIDGE_SCRIPT),
+        "--provider-command-json",
+        json.dumps(
+            [sys.executable, str(FIXTURE_DIR / provider_script_name)],
+            ensure_ascii=False,
+        ),
+    ]
 
 
 def _build_roll(*, total: int, target: int, outcome: RollOutcome) -> D100Roll:
@@ -196,7 +216,7 @@ def test_dice_style_subprocess_client_executes_real_external_bridge_process() ->
         language_preference=LanguagePreference.ZH_CN,
     )
     client = DiceStyleSubprocessClient(
-        command=[sys.executable, str(FIXTURE_DIR / "scripted_bridge.py")],
+        command=_bridge_command("scripted_dice_provider.py"),
         timeout_seconds=1.0,
     )
 
@@ -205,12 +225,12 @@ def test_dice_style_subprocess_client_executes_real_external_bridge_process() ->
         command_text=".rc 图书馆使用70",
     )
 
-    assert result.backend_name == "dice_style_subprocess_bridge"
+    assert result.backend_name == "dice_style_real_subprocess"
     assert result.roll.total == 24
     assert result.success is True
 
 
-def test_dice_style_subprocess_client_reports_invalid_output_and_timeout() -> None:
+def test_dice_style_subprocess_client_reports_invalid_output_timeout_and_provider_failure() -> None:
     request = DiceExecutionRequest(
         session_id="session-1",
         actor_id="investigator-1",
@@ -221,7 +241,7 @@ def test_dice_style_subprocess_client_reports_invalid_output_and_timeout() -> No
     )
 
     invalid_client = DiceStyleSubprocessClient(
-        command=[sys.executable, str(FIXTURE_DIR / "invalid_bridge.py")],
+        command=_bridge_command("invalid_dice_provider.py"),
         timeout_seconds=1.0,
     )
     try:
@@ -235,7 +255,7 @@ def test_dice_style_subprocess_client_reports_invalid_output_and_timeout() -> No
     assert invalid_failed is True
 
     timeout_client = DiceStyleSubprocessClient(
-        command=[sys.executable, str(FIXTURE_DIR / "slow_bridge.py")],
+        command=_bridge_command("slow_dice_provider.py"),
         timeout_seconds=0.1,
     )
     try:
@@ -248,15 +268,31 @@ def test_dice_style_subprocess_client_reports_invalid_output_and_timeout() -> No
         timeout_failed = True
     assert timeout_failed is True
 
+    failing_client = DiceStyleSubprocessClient(
+        command=_bridge_command("failing_dice_provider.py"),
+        timeout_seconds=1.0,
+    )
+    try:
+        failing_client.execute_check(
+            request=request,
+            command_text=".rc 图书馆使用70",
+        )
+        provider_failed = False
+    except DiceExecutionUnavailableError:
+        provider_failed = True
+    assert provider_failed is True
+
 
 def test_create_app_can_enable_dice_style_subprocess_backend_mode() -> None:
     db_path = Path("test-artifacts") / "dice_backend_mode_test.db"
     db_path.parent.mkdir(parents=True, exist_ok=True)
+    provider_command = [sys.executable, str(FIXTURE_DIR / "scripted_dice_provider.py")]
     app = create_app(
         Settings(
             db_url=f"sqlite:///{db_path}",
             dice_backend_mode="dice_style_subprocess",
             dice_subprocess_timeout_seconds=1.0,
+            dice_style_provider_command=tuple(provider_command),
         )
     )
 
@@ -265,4 +301,4 @@ def test_create_app_can_enable_dice_style_subprocess_backend_mode() -> None:
 
     assert isinstance(backend, DiceStyleExecutionBackend)
     assert isinstance(backend._client, DiceStyleSubprocessClient)  # noqa: SLF001
-    assert backend._client.command == build_default_dice_style_subprocess_command()  # noqa: SLF001
+    assert backend._client.command == build_default_dice_style_subprocess_command(provider_command)  # noqa: SLF001

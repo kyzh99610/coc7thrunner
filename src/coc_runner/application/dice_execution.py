@@ -201,6 +201,16 @@ def render_dice_style_command(request: DiceExecutionRequest) -> str:
     return f".rc {normalized_label}{request.target_value}"
 
 
-def build_default_dice_style_subprocess_command() -> list[str]:
+def build_default_dice_style_subprocess_command(
+    provider_command: list[str] | None = None,
+) -> list[str]:
     bridge_module_path = Path(__file__).with_name("dice_style_subprocess_bridge.py")
-    return [sys.executable, str(bridge_module_path)]
+    command = [sys.executable, str(bridge_module_path)]
+    if provider_command:
+        command.extend(
+            [
+                "--provider-command-json",
+                json.dumps(provider_command, ensure_ascii=False),
+            ]
+        )
+    return command

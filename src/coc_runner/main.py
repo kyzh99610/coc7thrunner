@@ -31,7 +31,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     if runtime_settings.dice_backend_mode == "dice_style_subprocess":
         dice_execution_backend = DiceStyleExecutionBackend(
             client=DiceStyleSubprocessClient(
-                command=build_default_dice_style_subprocess_command(),
+                command=build_default_dice_style_subprocess_command(
+                    list(runtime_settings.dice_style_provider_command) or None
+                ),
                 timeout_seconds=runtime_settings.dice_subprocess_timeout_seconds,
             )
         )
