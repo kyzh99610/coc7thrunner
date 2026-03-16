@@ -19,7 +19,7 @@ from coc_runner.application.dice_execution import (
     render_dice_style_command,
 )
 from coc_runner.config import Settings
-from coc_runner.domain.dice import D100Roll, RollOutcome
+from coc_runner.domain.dice import D100Roll, OpposedCheckResolution, RollOutcome
 from coc_runner.domain.models import LanguagePreference
 from coc_runner.main import create_app
 
@@ -197,6 +197,31 @@ def test_render_dice_style_command_supports_common_bonus_and_penalty_variants() 
     assert render_dice_style_command(attribute_penalty_request) == ".ra p2 教育75"
 
 
+def test_render_dice_style_command_supports_opposed_execution_and_keeps_pushed_as_internal_semantics() -> None:
+    pushed_request = DiceExecutionRequest(
+        session_id="session-1",
+        actor_id="investigator-1",
+        check_kind=DiceCheckKind.SKILL,
+        label="图书馆使用",
+        target_value=70,
+        language_preference=LanguagePreference.ZH_CN,
+        pushed=True,
+    )
+    opposed_request = DiceExecutionRequest(
+        session_id="session-1",
+        actor_id="investigator-1",
+        check_kind=DiceCheckKind.OPPOSED,
+        label="话术",
+        target_value=50,
+        opposed_label="守卫意志",
+        opposed_target_value=40,
+        language_preference=LanguagePreference.ZH_CN,
+    )
+
+    assert render_dice_style_command(pushed_request) == ".rc 图书馆使用70"
+    assert render_dice_style_command(opposed_request) == ".rav 话术50 守卫意志40"
+
+
 def test_dice_style_backend_falls_back_when_sidecar_unavailable_or_check_not_supported() -> None:
     unavailable_client = _UnavailableDiceStyleClient()
     fallback_backend = _FixedFallbackBackend(
@@ -343,6 +368,98 @@ def test_dice_style_subprocess_client_normalizes_provider_rank_back_to_local_off
     assert result.roll.total == 24
     assert result.roll.outcome == RollOutcome.HARD_SUCCESS
     assert result.success is True
+
+
+def test_dice_style_subprocess_client_marks_pushed_result_without_leaking_it_to_provider_command_text() -> None:
+    client = DiceStyleSubprocessClient(
+        command=_bridge_command("scripted_dice_provider.py"),
+        timeout_seconds=1.0,
+    )
+    request = DiceExecutionRequest(
+        session_id="session-1",
+        actor_id="investigator-1",
+        check_kind=DiceCheckKind.SKILL,
+        label="图书馆使用",
+        target_value=70,
+        language_preference=LanguagePreference.ZH_CN,
+        pushed=True,
+    )
+
+    result = client.execute_check(
+        request=request,
+        command_text=render_dice_style_command(request),
+    )
+
+    assert result.roll.total == 24
+    assert result.pushed is True
+
+
+def test_dice_style_subprocess_client_parses_opposed_provider_output_and_normalizes_resolution() -> None:
+    client = DiceStyleSubprocessClient(
+        command=_bridge_command("scripted_dice_provider.py"),
+        timeout_seconds=1.0,
+    )
+    actor_win_request = DiceExecutionRequest(
+        session_id="session-1",
+        actor_id="investigator-1",
+        check_kind=DiceCheckKind.OPPOSED,
+        label="话术",
+        target_value=50,
+        opposed_label="守卫意志",
+        opposed_target_value=40,
+        language_preference=LanguagePreference.ZH_CN,
+    )
+    draw_request = DiceExecutionRequest(
+        session_id="session-1",
+        actor_id="investigator-1",
+        check_kind=DiceCheckKind.OPPOSED,
+        label="力量",
+        target_value=60,
+        opposed_label="守卫力量",
+        opposed_target_value=60,
+        language_preference=LanguagePreference.ZH_CN,
+    )
+    double_failure_request = DiceExecutionRequest(
+        session_id="session-1",
+        actor_id="investigator-1",
+        check_kind=DiceCheckKind.OPPOSED,
+        label="侦查",
+        target_value=55,
+        opposed_label="守卫潜行",
+        opposed_target_value=55,
+        language_preference=LanguagePreference.ZH_CN,
+    )
+
+    actor_win_result = client.execute_check(
+        request=actor_win_request,
+        command_text=render_dice_style_command(actor_win_request),
+    )
+    draw_result = client.execute_check(
+        request=draw_request,
+        command_text=render_dice_style_command(draw_request),
+    )
+    double_failure_result = client.execute_check(
+        request=double_failure_request,
+        command_text=render_dice_style_command(double_failure_request),
+    )
+
+    assert actor_win_result.roll.total == 24
+    assert actor_win_result.opposed_roll is not None
+    assert actor_win_result.opposed_roll.total == 61
+    assert actor_win_result.opposed_resolution == OpposedCheckResolution.ACTOR_WIN
+    assert actor_win_result.success is True
+
+    assert draw_result.opposed_roll is not None
+    assert draw_result.roll.outcome == RollOutcome.SUCCESS
+    assert draw_result.opposed_roll.outcome == RollOutcome.SUCCESS
+    assert draw_result.opposed_resolution == OpposedCheckResolution.DRAW
+    assert draw_result.success is False
+
+    assert double_failure_result.opposed_roll is not None
+    assert double_failure_result.roll.outcome == RollOutcome.FAILURE
+    assert double_failure_result.opposed_roll.outcome == RollOutcome.FAILURE
+    assert double_failure_result.opposed_resolution == OpposedCheckResolution.DOUBLE_FAILURE
+    assert double_failure_result.success is False
 
 
 def test_dice_style_subprocess_client_reports_invalid_output_timeout_and_provider_failure() -> None:

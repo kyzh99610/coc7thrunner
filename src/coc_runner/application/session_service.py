@@ -9,7 +9,7 @@ from uuid import uuid4
 from pydantic import ValidationError
 
 from coc_runner.domain.errors import ConflictError
-from coc_runner.domain.dice import roll_d100
+from coc_runner.domain.dice import OpposedCheckResolution, roll_d100
 from coc_runner.domain.models import (
     ActiveSceneObjective,
     ActionEffects,
@@ -42,6 +42,8 @@ from coc_runner.domain.models import (
     InventoryEffect,
     InvestigatorAttributeCheckRequest,
     InvestigatorAttributeCheckResponse,
+    InvestigatorOpposedCheckRequest,
+    InvestigatorOpposedCheckResponse,
     InvestigatorSanCheckRequest,
     InvestigatorSanCheckResponse,
     InvestigatorSkillCheckRequest,
@@ -287,6 +289,11 @@ class SessionService:
         language: LanguagePreference,
         bonus_dice: int = 0,
         penalty_dice: int = 0,
+        pushed: bool = False,
+        opposed_label: str | None = None,
+        opposed_target_value: int | None = None,
+        opposed_bonus_dice: int = 0,
+        opposed_penalty_dice: int = 0,
     ) -> DiceExecutionResult:
         backend = self._resolve_dice_execution_backend()
         try:
@@ -300,6 +307,11 @@ class SessionService:
                     language_preference=language,
                     bonus_dice=bonus_dice,
                     penalty_dice=penalty_dice,
+                    pushed=pushed,
+                    opposed_label=opposed_label,
+                    opposed_target_value=opposed_target_value,
+                    opposed_bonus_dice=opposed_bonus_dice,
+                    opposed_penalty_dice=opposed_penalty_dice,
                 )
             )
         except (DiceExecutionUnavailableError, UnsupportedDiceCheckError) as exc:
@@ -2354,6 +2366,7 @@ class SessionService:
                 language=effective_language,
                 bonus_dice=request.bonus_dice,
                 penalty_dice=request.penalty_dice,
+                pushed=request.pushed,
             )
             return InvestigatorSkillCheckResponse(
                 message=self._message("skill_check_recorded", effective_language),
@@ -2363,6 +2376,7 @@ class SessionService:
                 language_preference=effective_language,
                 skill_name=normalized_skill_name,
                 skill_value=skill_value,
+                pushed=request.pushed,
                 roll=dice_result.roll,
                 success=dice_result.success,
             )
@@ -2455,6 +2469,7 @@ class SessionService:
                 language=effective_language,
                 bonus_dice=request.bonus_dice,
                 penalty_dice=request.penalty_dice,
+                pushed=request.pushed,
             )
             return InvestigatorAttributeCheckResponse(
                 message=self._message("attribute_check_recorded", effective_language),
@@ -2464,6 +2479,7 @@ class SessionService:
                 language_preference=effective_language,
                 attribute_name=normalized_attribute_name,
                 attribute_value=attribute_value,
+                pushed=request.pushed,
                 roll=dice_result.roll,
                 success=dice_result.success,
             )
@@ -2477,6 +2493,88 @@ class SessionService:
                     code="attribute_check_invalid",
                     message=message,
                     scope="attribute_check_request",
+                    **error_context,
+                )
+            ) from exc
+
+    def perform_investigator_opposed_check(
+        self,
+        session_id: str,
+        request: InvestigatorOpposedCheckRequest,
+    ) -> InvestigatorOpposedCheckResponse:
+        error_language = self._resolve_language(request.language_preference)
+        try:
+            session = self._load_session(session_id, language=error_language)
+        except LookupError as exc:
+            message = exc.args[0] if exc.args and isinstance(exc.args[0], str) else self._message(
+                "session_not_found",
+                error_language,
+                session_id=session_id,
+            )
+            raise LookupError(
+                build_session_action_error_detail(
+                    code="opposed_check_session_not_found",
+                    message=message,
+                    scope="opposed_check_session",
+                    session_id=session_id,
+                    actor_id=request.actor_id,
+                )
+            ) from exc
+
+        error_context = {
+            "session_id": session.session_id,
+            "actor_id": request.actor_id,
+            "actor_label": request.actor_label,
+            "opponent_label": request.opponent_label,
+        }
+        effective_language = self._resolve_language(
+            request.language_preference,
+            session.language_preference,
+        )
+        try:
+            self._get_participant(session, request.actor_id, language=error_language)
+            if session.status == SessionStatus.COMPLETED:
+                raise ValueError(self._message("opposed_check_session_completed", effective_language))
+
+            actor_label = request.actor_label.strip()
+            opponent_label = request.opponent_label.strip()
+            dice_result = self._execute_dice_check(
+                session_id=session.session_id,
+                actor_id=request.actor_id,
+                check_kind=DiceCheckKind.OPPOSED,
+                label=actor_label,
+                target_value=request.actor_target_value,
+                language=effective_language,
+                opposed_label=opponent_label,
+                opposed_target_value=request.opponent_target_value,
+            )
+            if dice_result.opposed_roll is None or dice_result.opposed_resolution is None:
+                raise ValueError("opposed check execution did not return a secondary roll")
+            return InvestigatorOpposedCheckResponse(
+                message=self._message("opposed_check_recorded", effective_language),
+                session_id=session.session_id,
+                viewer_id=request.actor_id,
+                state_version=session.state_version,
+                language_preference=effective_language,
+                actor_label=actor_label,
+                actor_target_value=request.actor_target_value,
+                opponent_label=opponent_label,
+                opponent_target_value=request.opponent_target_value,
+                roll=dice_result.roll,
+                opponent_roll=dice_result.opposed_roll,
+                resolution=dice_result.opposed_resolution,
+                success=dice_result.opposed_resolution == OpposedCheckResolution.ACTOR_WIN,
+            )
+        except ValueError as exc:
+            message = exc.args[0] if exc.args and isinstance(exc.args[0], str) else self._message(
+                "invalid_scene_transition",
+                effective_language,
+            )
+            raise ValueError(
+                build_session_action_error_detail(
+                    code="opposed_check_invalid",
+                    message=message,
+                    scope="opposed_check_request",
                     **error_context,
                 )
             ) from exc
@@ -8128,6 +8226,8 @@ class SessionService:
             "attribute_check_recorded": "已完成属性检定",
             "attribute_check_session_completed": "本局已结束，当前页面不再进行新的属性检定。",
             "attribute_check_attribute_not_found": "属性“{attribute_name}”不在当前角色的基础属性列表中。",
+            "opposed_check_recorded": "已完成对抗检定",
+            "opposed_check_session_completed": "本局已结束，当前页面不再进行新的对抗检定。",
             "dice_backend_unavailable": "当前可选判定后端不可用，且没有安全的本地回退可用。",
             "san_check_recorded": "已完成理智检定，当前 SAN 已更新",
             "san_aftermath_prompt_text": "理智后续待裁定：{actor_name}：{source_label}",
@@ -8265,6 +8365,8 @@ class SessionService:
             "attribute_check_recorded": "Attribute check completed",
             "attribute_check_session_completed": "This session is completed and no longer accepts new attribute checks.",
             "attribute_check_attribute_not_found": "Attribute {attribute_name} is not available on this character.",
+            "opposed_check_recorded": "Opposed check completed",
+            "opposed_check_session_completed": "This session is completed and no longer accepts new opposed checks.",
             "dice_backend_unavailable": "The optional dice backend is unavailable and no safe local fallback is configured.",
             "san_check_recorded": "SAN check completed and current SAN was updated",
             "san_aftermath_prompt_text": "SAN aftermath pending: {actor_name}: {source_label}",

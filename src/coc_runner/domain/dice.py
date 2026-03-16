@@ -16,6 +16,13 @@ class RollOutcome(StrEnum):
     FUMBLE = "fumble"
 
 
+class OpposedCheckResolution(StrEnum):
+    ACTOR_WIN = "actor_win"
+    OPPONENT_WIN = "opponent_win"
+    DRAW = "draw"
+    DOUBLE_FAILURE = "double_failure"
+
+
 class D100Roll(BaseModel):
     seed: int | None = None
     unit_die: int = Field(ge=0, le=9)
@@ -45,6 +52,36 @@ def evaluate_d100_roll(total: int, target: int) -> RollOutcome:
     if total <= target:
         return RollOutcome.SUCCESS
     return RollOutcome.FAILURE
+
+
+def evaluate_opposed_rolls(
+    actor_roll: D100Roll,
+    opponent_roll: D100Roll,
+) -> OpposedCheckResolution:
+    actor_failed = actor_roll.outcome in {RollOutcome.FAILURE, RollOutcome.FUMBLE}
+    opponent_failed = opponent_roll.outcome in {RollOutcome.FAILURE, RollOutcome.FUMBLE}
+    if actor_failed and opponent_failed:
+        return OpposedCheckResolution.DOUBLE_FAILURE
+    if actor_failed:
+        return OpposedCheckResolution.OPPONENT_WIN
+    if opponent_failed:
+        return OpposedCheckResolution.ACTOR_WIN
+
+    outcome_priority = {
+        RollOutcome.CRITICAL_SUCCESS: 5,
+        RollOutcome.EXTREME_SUCCESS: 4,
+        RollOutcome.HARD_SUCCESS: 3,
+        RollOutcome.SUCCESS: 2,
+        RollOutcome.FAILURE: 1,
+        RollOutcome.FUMBLE: 0,
+    }
+    actor_priority = outcome_priority[actor_roll.outcome]
+    opponent_priority = outcome_priority[opponent_roll.outcome]
+    if actor_priority > opponent_priority:
+        return OpposedCheckResolution.ACTOR_WIN
+    if opponent_priority > actor_priority:
+        return OpposedCheckResolution.OPPONENT_WIN
+    return OpposedCheckResolution.DRAW
 
 
 def roll_d100(

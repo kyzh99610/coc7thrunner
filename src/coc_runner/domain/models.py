@@ -7,7 +7,7 @@ from uuid import uuid4
 from pydantic import BaseModel, ConfigDict, Field, computed_field, field_validator, model_validator
 
 from coc_runner.compat import StrEnum
-from coc_runner.domain.dice import D100Roll
+from coc_runner.domain.dice import D100Roll, OpposedCheckResolution
 
 
 def utc_now() -> datetime:
@@ -1613,6 +1613,7 @@ class InvestigatorSkillCheckRequest(BaseModel):
     skill_name: str = Field(min_length=1, max_length=80)
     bonus_dice: int = Field(default=0, ge=0, le=2)
     penalty_dice: int = Field(default=0, ge=0, le=2)
+    pushed: bool = False
     language_preference: LanguagePreference | None = None
 
 
@@ -1624,6 +1625,7 @@ class InvestigatorSkillCheckResponse(BaseModel):
     language_preference: LanguagePreference
     skill_name: str
     skill_value: int = Field(ge=0, le=100)
+    pushed: bool = False
     roll: D100Roll
     success: bool
 
@@ -1633,6 +1635,7 @@ class InvestigatorAttributeCheckRequest(BaseModel):
     attribute_name: str = Field(min_length=1, max_length=80)
     bonus_dice: int = Field(default=0, ge=0, le=2)
     penalty_dice: int = Field(default=0, ge=0, le=2)
+    pushed: bool = False
     language_preference: LanguagePreference | None = None
 
 
@@ -1644,7 +1647,33 @@ class InvestigatorAttributeCheckResponse(BaseModel):
     language_preference: LanguagePreference
     attribute_name: str
     attribute_value: int = Field(ge=1, le=99)
+    pushed: bool = False
     roll: D100Roll
+    success: bool
+
+
+class InvestigatorOpposedCheckRequest(BaseModel):
+    actor_id: str
+    actor_label: str = Field(min_length=1, max_length=80)
+    actor_target_value: int = Field(ge=1, le=100)
+    opponent_label: str = Field(min_length=1, max_length=80)
+    opponent_target_value: int = Field(ge=1, le=100)
+    language_preference: LanguagePreference | None = None
+
+
+class InvestigatorOpposedCheckResponse(BaseModel):
+    message: str
+    session_id: str
+    viewer_id: str
+    state_version: int
+    language_preference: LanguagePreference
+    actor_label: str
+    actor_target_value: int = Field(ge=1, le=100)
+    opponent_label: str
+    opponent_target_value: int = Field(ge=1, le=100)
+    roll: D100Roll
+    opponent_roll: D100Roll
+    resolution: OpposedCheckResolution
     success: bool
 
 

@@ -36,6 +36,7 @@ from coc_runner.domain.models import (
     ImportSceneHookSeedRequest,
     ImportTemplateCharacterHookRequest,
     InvestigatorAttributeCheckRequest,
+    InvestigatorOpposedCheckRequest,
     InvestigatorSanCheckRequest,
     InvestigatorSkillCheckRequest,
     KeeperLiveControlRequest,
@@ -2712,6 +2713,29 @@ def _render_skill_check_outcome_label(outcome_value: Any) -> str:
     }.get(str(outcome_value or ""), str(outcome_value or "未知"))
 
 
+def _render_opposed_resolution_label(resolution_value: Any) -> str:
+    return {
+        "actor_win": "发起方胜出",
+        "opponent_win": "对手胜出",
+        "draw": "平手",
+        "double_failure": "双方都失败",
+    }.get(str(resolution_value or ""), str(resolution_value or "未知"))
+
+
+def _parse_investigator_dice_modifier(dice_modifier: str) -> tuple[int, int]:
+    if dice_modifier == "bonus_1":
+        return (1, 0)
+    if dice_modifier == "bonus_2":
+        return (2, 0)
+    if dice_modifier == "penalty_1":
+        return (0, 1)
+    if dice_modifier == "penalty_2":
+        return (0, 2)
+    if dice_modifier == "normal":
+        return (0, 0)
+    raise ValueError("invalid investigator dice modifier")
+
+
 def _render_investigator_check_result(
     *,
     message: str,
@@ -2744,6 +2768,7 @@ def _render_investigator_skill_check_result(skill_check_result: dict[str, Any] |
     if skill_check_result is None:
         return ""
     roll = skill_check_result.get("roll") or {}
+    extra_lines = ["推骰：是"] if skill_check_result.get("pushed") else []
     return _render_investigator_check_result(
         message=str(skill_check_result.get("message", "已完成技能检定")),
         check_type_label="技能检定",
@@ -2751,6 +2776,7 @@ def _render_investigator_skill_check_result(skill_check_result: dict[str, Any] |
         numeric_value=skill_check_result.get("skill_value", "—"),
         roll_total=roll.get("total", "—"),
         outcome_value=roll.get("outcome"),
+        extra_lines=extra_lines,
     )
 
 
@@ -2760,6 +2786,7 @@ def _render_investigator_attribute_check_result(attribute_check_result: dict[str
     roll = attribute_check_result.get("roll") or {}
     attribute_name = str(attribute_check_result.get("attribute_name", ""))
     attribute_label = dict(_investigator_attribute_label_pairs()).get(attribute_name, attribute_name or "—")
+    extra_lines = ["推骰：是"] if attribute_check_result.get("pushed") else []
     return _render_investigator_check_result(
         message=str(attribute_check_result.get("message", "已完成属性检定")),
         check_type_label="属性检定",
@@ -2767,6 +2794,7 @@ def _render_investigator_attribute_check_result(attribute_check_result: dict[str
         numeric_value=attribute_check_result.get("attribute_value", "—"),
         roll_total=roll.get("total", "—"),
         outcome_value=roll.get("outcome"),
+        extra_lines=extra_lines,
     )
 
 
@@ -2789,6 +2817,29 @@ def _render_investigator_san_check_result(san_check_result: dict[str, Any] | Non
             f"失败损失：{san_check_result.get('failure_loss', '—')}",
             f"本次 SAN 损失：{resolved_loss}（依据 {applied_expression}）",
             f"检定后 SAN：{san_check_result.get('current_sanity', '—')}",
+        ],
+    )
+
+
+def _render_investigator_opposed_check_result(opposed_check_result: dict[str, Any] | None) -> str:
+    if opposed_check_result is None:
+        return ""
+    roll = opposed_check_result.get("roll") or {}
+    opponent_roll = opposed_check_result.get("opponent_roll") or {}
+    return _render_investigator_check_result(
+        message=str(opposed_check_result.get("message", "已完成对抗检定")),
+        check_type_label="对抗检定",
+        subject_value=str(opposed_check_result.get("actor_label", "—")),
+        numeric_value=opposed_check_result.get("actor_target_value", "—"),
+        numeric_label="发起方数值",
+        roll_total=roll.get("total", "—"),
+        outcome_value=roll.get("outcome"),
+        extra_lines=[
+            f"对手：{opposed_check_result.get('opponent_label', '—')}",
+            f"对手数值：{opposed_check_result.get('opponent_target_value', '—')}",
+            f"对手掷骰结果：{opponent_roll.get('total', '—')}",
+            f"对手判定：{_render_skill_check_outcome_label(opponent_roll.get('outcome'))}",
+            f"对抗结果：{_render_opposed_resolution_label(opposed_check_result.get('resolution'))}",
         ],
     )
 
@@ -2839,6 +2890,10 @@ def _render_investigator_skill_check_panel(
               <option value="penalty_1">惩罚骰 x1</option>
               <option value="penalty_2">惩罚骰 x2</option>
             </select>
+          </label>
+          <label class="checkbox-line">
+            <input type="checkbox" name="pushed" value="true">
+            pushed
           </label>
           <p class="help">从当前角色已有技能中选择一项，可附带少量常见奖惩骰变体。</p>
           <button type="submit">开始检定</button>
@@ -2894,6 +2949,10 @@ def _render_investigator_attribute_check_panel(
               <option value="penalty_2">惩罚骰 x2</option>
             </select>
           </label>
+          <label class="checkbox-line">
+            <input type="checkbox" name="pushed" value="true">
+            pushed
+          </label>
           <p class="help">从当前角色的 8 项基础属性中选择一项，可附带少量常见奖惩骰变体。</p>
           <button type="submit">开始属性检定</button>
           </form>
@@ -2935,6 +2994,50 @@ def _render_investigator_san_check_panel(
           </label>
           <p class="help">按本次遭遇填写来源标签与 success/failure 损失；当前只支持整数或 NdM，不使用固定怪物 SAN 表。</p>
           <button type="submit">开始理智检定</button>
+        </form>
+      </section>
+    """
+
+
+def _render_investigator_opposed_check_panel(
+    *,
+    session_id: str,
+    viewer_id: str,
+    session_status: str,
+    actor_label: str | None,
+    actor_target_value: str | None,
+    opponent_label: str | None,
+    opponent_target_value: str | None,
+) -> str:
+    if session_status == SessionStatus.COMPLETED.value:
+        return """
+      <section class="panel">
+        <h2>快速对抗检定</h2>
+        <p class="empty-state">本局已结束，当前页面不再进行新的对抗检定。</p>
+      </section>
+        """
+    return f"""
+      <section class="panel">
+        <h2>快速对抗检定</h2>
+        <form method="post" action="/playtest/sessions/{escape(session_id)}/investigator/{escape(viewer_id)}/opposed-check" data-submit-label="对抗中...">
+          <label>
+            actor_label
+            <input type="text" name="actor_label" value="{escape(actor_label or '')}" placeholder="例如：话术" required>
+          </label>
+          <label>
+            actor_target_value
+            <input type="number" name="actor_target_value" value="{escape(actor_target_value or '')}" min="1" max="100" required>
+          </label>
+          <label>
+            opponent_label
+            <input type="text" name="opponent_label" value="{escape(opponent_label or '')}" placeholder="例如：守卫意志" required>
+          </label>
+          <label>
+            opponent_target_value
+            <input type="number" name="opponent_target_value" value="{escape(opponent_target_value or '')}" min="1" max="100" required>
+          </label>
+          <p class="help">这里只做显式目标值对抗检定，不绑定完整战斗或多角色状态系统。</p>
+          <button type="submit">开始对抗检定</button>
         </form>
       </section>
     """
@@ -3098,10 +3201,15 @@ def _render_investigator_page(
     action_result: dict[str, Any] | None = None,
     skill_check_result: dict[str, Any] | None = None,
     attribute_check_result: dict[str, Any] | None = None,
+    opposed_check_result: dict[str, Any] | None = None,
     san_check_result: dict[str, Any] | None = None,
     action_text: str | None = None,
     selected_skill_name: str | None = None,
     selected_attribute_name: str | None = None,
+    opposed_actor_label: str | None = None,
+    opposed_actor_target_value: str | None = None,
+    opposed_opponent_label: str | None = None,
+    opposed_opponent_target_value: str | None = None,
     san_check_source_label: str | None = None,
     san_check_success_loss: str | None = None,
     san_check_failure_loss: str | None = None,
@@ -3184,6 +3292,7 @@ def _render_investigator_page(
       {_render_investigator_action_result(action_result)}
       {_render_investigator_skill_check_result(skill_check_result)}
       {_render_investigator_attribute_check_result(attribute_check_result)}
+      {_render_investigator_opposed_check_result(opposed_check_result)}
       {_render_investigator_san_check_result(san_check_result)}
       <section class="panel">
         <h2>我的摘要</h2>
@@ -3237,6 +3346,15 @@ def _render_investigator_page(
           success_loss=san_check_success_loss,
           failure_loss=san_check_failure_loss,
           session_status=normalized_session_status,
+      )}
+      {_render_investigator_opposed_check_panel(
+          session_id=session_id,
+          viewer_id=viewer_id,
+          session_status=normalized_session_status,
+          actor_label=opposed_actor_label,
+          actor_target_value=opposed_actor_target_value,
+          opponent_label=opposed_opponent_label,
+          opponent_target_value=opposed_opponent_target_value,
       )}
       <section class="panel">
         <h2>最近可见事件</h2>
@@ -3319,10 +3437,15 @@ def _render_investigator_page_from_service(
     action_result: dict[str, Any] | None = None,
     skill_check_result: dict[str, Any] | None = None,
     attribute_check_result: dict[str, Any] | None = None,
+    opposed_check_result: dict[str, Any] | None = None,
     san_check_result: dict[str, Any] | None = None,
     action_text: str | None = None,
     selected_skill_name: str | None = None,
     selected_attribute_name: str | None = None,
+    opposed_actor_label: str | None = None,
+    opposed_actor_target_value: str | None = None,
+    opposed_opponent_label: str | None = None,
+    opposed_opponent_target_value: str | None = None,
     san_check_source_label: str | None = None,
     san_check_success_loss: str | None = None,
     san_check_failure_loss: str | None = None,
@@ -3343,10 +3466,15 @@ def _render_investigator_page_from_service(
             action_result=action_result,
             skill_check_result=skill_check_result,
             attribute_check_result=attribute_check_result,
+            opposed_check_result=opposed_check_result,
             san_check_result=san_check_result,
             action_text=action_text,
             selected_skill_name=selected_skill_name,
             selected_attribute_name=selected_attribute_name,
+            opposed_actor_label=opposed_actor_label,
+            opposed_actor_target_value=opposed_actor_target_value,
+            opposed_opponent_label=opposed_opponent_label,
+            opposed_opponent_target_value=opposed_opponent_target_value,
             san_check_source_label=san_check_source_label,
             san_check_success_loss=san_check_success_loss,
             san_check_failure_loss=san_check_failure_loss,
@@ -3370,10 +3498,15 @@ def _render_investigator_page_from_service(
         action_result=action_result,
         skill_check_result=skill_check_result,
         attribute_check_result=attribute_check_result,
+        opposed_check_result=opposed_check_result,
         san_check_result=san_check_result,
         action_text=action_text,
         selected_skill_name=selected_skill_name,
         selected_attribute_name=selected_attribute_name,
+        opposed_actor_label=opposed_actor_label,
+        opposed_actor_target_value=opposed_actor_target_value,
+        opposed_opponent_label=opposed_opponent_label,
+        opposed_opponent_target_value=opposed_opponent_target_value,
         san_check_source_label=san_check_source_label,
         san_check_success_loss=san_check_success_loss,
         san_check_failure_loss=san_check_failure_loss,
@@ -3569,20 +3702,10 @@ async def submit_investigator_skill_check_via_ui(
 ) -> HTMLResponse:
     form = await _read_form_payload(request)
     skill_name = _normalize_form_text(form.get("skill_name")) or ""
+    pushed = _normalize_form_text(form.get("pushed")) == "true"
     try:
         dice_modifier = _normalize_form_text(form.get("dice_modifier")) or "normal"
-        bonus_dice = 0
-        penalty_dice = 0
-        if dice_modifier == "bonus_1":
-            bonus_dice = 1
-        elif dice_modifier == "bonus_2":
-            bonus_dice = 2
-        elif dice_modifier == "penalty_1":
-            penalty_dice = 1
-        elif dice_modifier == "penalty_2":
-            penalty_dice = 2
-        elif dice_modifier != "normal":
-            raise ValueError("invalid investigator dice modifier")
+        bonus_dice, penalty_dice = _parse_investigator_dice_modifier(dice_modifier)
         response = service.perform_investigator_skill_check(
             session_id,
             InvestigatorSkillCheckRequest(
@@ -3590,6 +3713,7 @@ async def submit_investigator_skill_check_via_ui(
                 skill_name=skill_name,
                 bonus_dice=bonus_dice,
                 penalty_dice=penalty_dice,
+                pushed=pushed,
             ),
         )
         return _render_investigator_page_from_service(
@@ -3620,20 +3744,10 @@ async def submit_investigator_attribute_check_via_ui(
 ) -> HTMLResponse:
     form = await _read_form_payload(request)
     attribute_name = _normalize_form_text(form.get("attribute_name")) or ""
+    pushed = _normalize_form_text(form.get("pushed")) == "true"
     try:
         dice_modifier = _normalize_form_text(form.get("dice_modifier")) or "normal"
-        bonus_dice = 0
-        penalty_dice = 0
-        if dice_modifier == "bonus_1":
-            bonus_dice = 1
-        elif dice_modifier == "bonus_2":
-            bonus_dice = 2
-        elif dice_modifier == "penalty_1":
-            penalty_dice = 1
-        elif dice_modifier == "penalty_2":
-            penalty_dice = 2
-        elif dice_modifier != "normal":
-            raise ValueError("invalid investigator dice modifier")
+        bonus_dice, penalty_dice = _parse_investigator_dice_modifier(dice_modifier)
         response = service.perform_investigator_attribute_check(
             session_id,
             InvestigatorAttributeCheckRequest(
@@ -3641,6 +3755,7 @@ async def submit_investigator_attribute_check_via_ui(
                 attribute_name=attribute_name,
                 bonus_dice=bonus_dice,
                 penalty_dice=penalty_dice,
+                pushed=pushed,
             ),
         )
         return _render_investigator_page_from_service(
@@ -3659,6 +3774,54 @@ async def submit_investigator_attribute_check_via_ui(
             session_id=session_id,
             viewer_id=viewer_id,
             selected_attribute_name=attribute_name,
+        )
+
+
+@router.post("/sessions/{session_id}/investigator/{viewer_id}/opposed-check", response_class=HTMLResponse)
+async def submit_investigator_opposed_check_via_ui(
+    session_id: str,
+    viewer_id: str,
+    request: Request,
+    service: SessionService = Depends(get_session_service),
+) -> HTMLResponse:
+    form = await _read_form_payload(request)
+    actor_label = _normalize_form_text(form.get("actor_label")) or ""
+    actor_target_value = _normalize_form_text(form.get("actor_target_value")) or ""
+    opponent_label = _normalize_form_text(form.get("opponent_label")) or ""
+    opponent_target_value = _normalize_form_text(form.get("opponent_target_value")) or ""
+    try:
+        response = service.perform_investigator_opposed_check(
+            session_id,
+            InvestigatorOpposedCheckRequest(
+                actor_id=viewer_id,
+                actor_label=actor_label,
+                actor_target_value=actor_target_value,
+                opponent_label=opponent_label,
+                opponent_target_value=opponent_target_value,
+            ),
+        )
+        return _render_investigator_page_from_service(
+            service=service,
+            session_id=session_id,
+            viewer_id=viewer_id,
+            notice=response.message,
+            opposed_check_result=response.model_dump(mode="json"),
+            opposed_actor_label=response.actor_label,
+            opposed_actor_target_value=str(response.actor_target_value),
+            opposed_opponent_label=response.opponent_label,
+            opposed_opponent_target_value=str(response.opponent_target_value),
+        )
+    except (ValidationError, LookupError, ConflictError, ValueError) as exc:
+        return _render_playtest_exception(
+            _render_investigator_page_from_service,
+            exc=exc,
+            service=service,
+            session_id=session_id,
+            viewer_id=viewer_id,
+            opposed_actor_label=actor_label,
+            opposed_actor_target_value=actor_target_value,
+            opposed_opponent_label=opponent_label,
+            opposed_opponent_target_value=opponent_target_value,
         )
 
 

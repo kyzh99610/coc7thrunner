@@ -88,6 +88,7 @@ def test_investigator_playtest_page_opens_with_summary_and_action_form(
     assert "快速技能检定" in html
     assert 'name="skill_name"' in html
     assert 'name="dice_modifier"' in html
+    assert 'name="pushed"' in html
     assert 'value="图书馆使用"' in html
     assert 'value="侦查"' in html
     assert 'value="bonus_1"' in html
@@ -98,6 +99,12 @@ def test_investigator_playtest_page_opens_with_summary_and_action_form(
     assert 'value="strength"' in html
     assert 'value="education"' in html
     assert "开始属性检定" in html
+    assert "快速对抗检定" in html
+    assert 'name="actor_label"' in html
+    assert 'name="actor_target_value"' in html
+    assert 'name="opponent_label"' in html
+    assert 'name="opponent_target_value"' in html
+    assert "开始对抗检定" in html
     assert "快速理智检定" in html
     assert 'name="source_label"' in html
     assert 'name="success_loss"' in html
@@ -154,6 +161,8 @@ def test_investigator_playtest_page_shows_completed_notice_and_hides_action_form
     assert "本局已结束，当前页面不再进行新的属性检定。" in html
     assert "快速理智检定" in html
     assert "本局已结束，当前页面不再进行新的理智检定。" in html
+    assert "快速对抗检定" in html
+    assert "本局已结束，当前页面不再进行新的对抗检定。" in html
     assert "职业：记者" in html
     assert "图书馆使用 70" in html
     assert "私有备注与记录" in html
@@ -164,9 +173,14 @@ def test_investigator_playtest_page_shows_completed_notice_and_hides_action_form
     assert 'name="source_label"' not in html
     assert 'name="success_loss"' not in html
     assert 'name="failure_loss"' not in html
+    assert 'name="actor_label"' not in html
+    assert 'name="actor_target_value"' not in html
+    assert 'name="opponent_label"' not in html
+    assert 'name="opponent_target_value"' not in html
     assert "提交行动" not in html
     assert "开始检定" not in html
     assert "开始属性检定" not in html
+    assert "开始对抗检定" not in html
     assert "开始理智检定" not in html
 
 
@@ -432,6 +446,31 @@ def test_investigator_playtest_page_skill_check_can_use_bonus_die_with_real_dice
     assert ".ra b2 图书馆使用70" not in html
 
 
+def test_investigator_playtest_page_skill_check_can_mark_pushed_semantics_without_leaking_provider_text(
+    client: TestClient,
+) -> None:
+    session_id = _start_investigator_ui_session(client)
+
+    dice_client = DiceStyleSubprocessClient(
+        command=_bridge_command("scripted_dice_provider.py"),
+        timeout_seconds=1.0,
+    )
+    client.app.state.session_service.dice_execution_backend = DiceStyleExecutionBackend(
+        client=dice_client
+    )
+
+    response = client.post(
+        f"/playtest/sessions/{session_id}/investigator/investigator-1/skill-check",
+        data={"skill_name": "图书馆使用", "pushed": "true"},
+    )
+
+    assert response.status_code == 200
+    html = response.text
+    assert "项目：图书馆使用" in html
+    assert "推骰：是" in html
+    assert ".rc 图书馆使用70" not in html
+
+
 def test_investigator_playtest_page_skill_check_can_use_penalty_die_with_real_dice_provider(
     client: TestClient,
 ) -> None:
@@ -488,6 +527,31 @@ def test_investigator_playtest_page_attribute_check_can_use_optional_dice_backen
     assert ".rc 教育75" not in html
 
 
+def test_investigator_playtest_page_attribute_check_can_mark_pushed_semantics_without_leaking_provider_text(
+    client: TestClient,
+) -> None:
+    session_id = _start_investigator_ui_session(client)
+
+    dice_client = DiceStyleSubprocessClient(
+        command=_bridge_command("scripted_dice_provider.py"),
+        timeout_seconds=1.0,
+    )
+    client.app.state.session_service.dice_execution_backend = DiceStyleExecutionBackend(
+        client=dice_client
+    )
+
+    response = client.post(
+        f"/playtest/sessions/{session_id}/investigator/investigator-1/attribute-check",
+        data={"attribute_name": "education", "pushed": "true"},
+    )
+
+    assert response.status_code == 200
+    html = response.text
+    assert "项目：教育" in html
+    assert "推骰：是" in html
+    assert ".rc 教育75" not in html
+
+
 def test_investigator_playtest_page_attribute_check_can_use_bonus_die_with_real_dice_provider(
     client: TestClient,
 ) -> None:
@@ -538,6 +602,46 @@ def test_investigator_playtest_page_attribute_check_can_use_penalty_die_with_rea
     assert "掷骰结果：95" in html
     assert "判定：失败" in html
     assert ".ra p2 教育75" not in html
+
+
+def test_investigator_playtest_page_opposed_check_can_use_real_dice_provider_without_leaking_command_text(
+    client: TestClient,
+) -> None:
+    session_id = _start_investigator_ui_session(client)
+
+    dice_client = DiceStyleSubprocessClient(
+        command=_bridge_command("scripted_dice_provider.py"),
+        timeout_seconds=1.0,
+    )
+    client.app.state.session_service.dice_execution_backend = DiceStyleExecutionBackend(
+        client=dice_client
+    )
+
+    response = client.post(
+        f"/playtest/sessions/{session_id}/investigator/investigator-1/opposed-check",
+        data={
+            "actor_label": "话术",
+            "actor_target_value": "50",
+            "opponent_label": "守卫意志",
+            "opponent_target_value": "40",
+        },
+    )
+
+    assert response.status_code == 200
+    html = response.text
+    assert "最近一次检定结果" in html
+    assert "已完成对抗检定" in html
+    assert "类型：对抗检定" in html
+    assert "项目：话术" in html
+    assert "发起方数值：50" in html
+    assert "掷骰结果：24" in html
+    assert "判定：困难成功" in html
+    assert "对手：守卫意志" in html
+    assert "对手数值：40" in html
+    assert "对手掷骰结果：61" in html
+    assert "对手判定：失败" in html
+    assert "对抗结果：发起方胜出" in html
+    assert ".rav 话术50 守卫意志40" not in html
 
 
 def test_investigator_playtest_page_san_check_submission_rerenders_with_persisted_san_result(

@@ -7,11 +7,16 @@ import sys
 from pathlib import Path
 from typing import Callable, Protocol
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 from pydantic import ValidationError
 
 from coc_runner.compat import StrEnum
-from coc_runner.domain.dice import D100Roll, roll_d100
+from coc_runner.domain.dice import (
+    D100Roll,
+    OpposedCheckResolution,
+    evaluate_opposed_rolls,
+    roll_d100,
+)
 from coc_runner.domain.models import LanguagePreference
 
 
@@ -19,6 +24,7 @@ class DiceCheckKind(StrEnum):
     SKILL = "skill"
     ATTRIBUTE = "attribute"
     SANITY = "sanity"
+    OPPOSED = "opposed"
 
 
 class DiceExecutionRequest(BaseModel):
@@ -31,12 +37,46 @@ class DiceExecutionRequest(BaseModel):
     seed: int | None = None
     bonus_dice: int = Field(default=0, ge=0)
     penalty_dice: int = Field(default=0, ge=0)
+    pushed: bool = False
+    opposed_label: str | None = Field(default=None, min_length=1, max_length=120)
+    opposed_target_value: int | None = Field(default=None, ge=1, le=100)
+    opposed_bonus_dice: int = Field(default=0, ge=0)
+    opposed_penalty_dice: int = Field(default=0, ge=0)
+
+    @model_validator(mode="after")
+    def validate_opposed_shape(self) -> "DiceExecutionRequest":
+        if self.bonus_dice and self.penalty_dice:
+            raise ValueError("bonus_dice and penalty_dice cannot both be non-zero")
+        if self.opposed_bonus_dice and self.opposed_penalty_dice:
+            raise ValueError(
+                "opposed_bonus_dice and opposed_penalty_dice cannot both be non-zero"
+            )
+        has_opposed_fields = (
+            self.opposed_label is not None
+            or self.opposed_target_value is not None
+            or self.opposed_bonus_dice > 0
+            or self.opposed_penalty_dice > 0
+        )
+        if self.check_kind == DiceCheckKind.OPPOSED:
+            if self.opposed_label is None or self.opposed_target_value is None:
+                raise ValueError(
+                    "opposed checks require both opposed_label and opposed_target_value"
+                )
+        elif has_opposed_fields:
+            raise ValueError(
+                "opposed-only execution fields are not supported for this check kind"
+            )
+        return self
 
 
 class DiceExecutionResult(BaseModel):
     backend_name: str = Field(min_length=1, max_length=80)
     roll: D100Roll
     success: bool
+    pushed: bool = False
+    opposed_roll: D100Roll | None = None
+    opposed_label: str | None = Field(default=None, min_length=1, max_length=120)
+    opposed_resolution: OpposedCheckResolution | None = None
 
 
 class DiceStyleSubprocessPayload(BaseModel):
@@ -90,10 +130,29 @@ class LocalDiceExecutionBackend:
             bonus_dice=request.bonus_dice,
             penalty_dice=request.penalty_dice,
         )
+        if request.check_kind == DiceCheckKind.OPPOSED:
+            opponent_seed = request.seed + 1 if request.seed is not None else None
+            opposed_roll = self._roller(
+                request.opposed_target_value or request.target_value,
+                seed=opponent_seed,
+                bonus_dice=request.opposed_bonus_dice,
+                penalty_dice=request.opposed_penalty_dice,
+            )
+            resolution = evaluate_opposed_rolls(roll, opposed_roll)
+            return DiceExecutionResult(
+                backend_name=self.backend_name,
+                roll=roll,
+                success=resolution == OpposedCheckResolution.ACTOR_WIN,
+                pushed=request.pushed,
+                opposed_roll=opposed_roll,
+                opposed_label=request.opposed_label,
+                opposed_resolution=resolution,
+            )
         return DiceExecutionResult(
             backend_name=self.backend_name,
             roll=roll,
             success=roll.total <= request.target_value,
+            pushed=request.pushed,
         )
 
 
@@ -191,18 +250,64 @@ def render_dice_style_command(request: DiceExecutionRequest) -> str:
         raise UnsupportedDiceCheckError(
             "sanity checks require authoritative local SAN state and are not forwarded to Dice-style commands"
         )
-    if request.bonus_dice and request.penalty_dice:
-        raise UnsupportedDiceCheckError(
-            "bonus and penalty dice cannot both be forwarded to the Dice-style bridge"
-        )
     normalized_label = " ".join(request.label.split()).strip()
     if not normalized_label:
         raise ValueError("dice execution label must not be blank")
-    if request.bonus_dice:
-        return f".ra b{request.bonus_dice} {normalized_label}{request.target_value}"
-    if request.penalty_dice:
-        return f".ra p{request.penalty_dice} {normalized_label}{request.target_value}"
-    return f".rc {normalized_label}{request.target_value}"
+    primary_expression = _render_dice_style_check_expression(
+        label=normalized_label,
+        target_value=request.target_value,
+        bonus_dice=request.bonus_dice,
+        penalty_dice=request.penalty_dice,
+    )
+    if request.check_kind == DiceCheckKind.OPPOSED:
+        if request.opposed_label is None or request.opposed_target_value is None:
+            raise UnsupportedDiceCheckError(
+                "opposed checks require explicit opponent label and target value"
+            )
+        opposed_expression = _render_dice_style_check_expression(
+            label=request.opposed_label,
+            target_value=request.opposed_target_value,
+            bonus_dice=request.opposed_bonus_dice,
+            penalty_dice=request.opposed_penalty_dice,
+        )
+        return f".rav {primary_expression} {opposed_expression}"
+    return _render_single_dice_style_command(
+        expression=primary_expression,
+        bonus_dice=request.bonus_dice,
+        penalty_dice=request.penalty_dice,
+    )
+
+
+def _render_single_dice_style_command(
+    *,
+    expression: str,
+    bonus_dice: int,
+    penalty_dice: int,
+) -> str:
+    if bonus_dice or penalty_dice:
+        return f".ra {expression}"
+    return f".rc {expression}"
+
+
+def _render_dice_style_check_expression(
+    *,
+    label: str,
+    target_value: int,
+    bonus_dice: int,
+    penalty_dice: int,
+) -> str:
+    if bonus_dice and penalty_dice:
+        raise UnsupportedDiceCheckError(
+            "bonus and penalty dice cannot both be forwarded to the Dice-style bridge"
+        )
+    normalized_label = " ".join(label.split()).strip()
+    if not normalized_label:
+        raise ValueError("dice execution label must not be blank")
+    if bonus_dice:
+        return f"b{bonus_dice} {normalized_label}{target_value}"
+    if penalty_dice:
+        return f"p{penalty_dice} {normalized_label}{target_value}"
+    return f"{normalized_label}{target_value}"
 
 
 def build_default_dice_style_subprocess_command(
