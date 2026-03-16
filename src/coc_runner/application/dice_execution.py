@@ -191,13 +191,17 @@ def render_dice_style_command(request: DiceExecutionRequest) -> str:
         raise UnsupportedDiceCheckError(
             "sanity checks require authoritative local SAN state and are not forwarded to Dice-style commands"
         )
-    if request.bonus_dice or request.penalty_dice:
+    if request.bonus_dice and request.penalty_dice:
         raise UnsupportedDiceCheckError(
-            "bonus/penalty dice are not wired into the Dice-style bridge in this MVP"
+            "bonus and penalty dice cannot both be forwarded to the Dice-style bridge"
         )
     normalized_label = " ".join(request.label.split()).strip()
     if not normalized_label:
         raise ValueError("dice execution label must not be blank")
+    if request.bonus_dice:
+        return f".ra b{request.bonus_dice} {normalized_label}{request.target_value}"
+    if request.penalty_dice:
+        return f".ra p{request.penalty_dice} {normalized_label}{request.target_value}"
     return f".rc {normalized_label}{request.target_value}"
 
 

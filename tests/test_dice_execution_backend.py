@@ -153,6 +153,50 @@ def test_dice_style_backend_renders_command_in_adapter_layer_and_delegates_skill
     assert command_text == ".rc 图书馆使用70"
 
 
+def test_render_dice_style_command_supports_common_bonus_and_penalty_variants() -> None:
+    skill_bonus_request = DiceExecutionRequest(
+        session_id="session-1",
+        actor_id="investigator-1",
+        check_kind=DiceCheckKind.SKILL,
+        label="图书馆使用",
+        target_value=70,
+        language_preference=LanguagePreference.ZH_CN,
+        bonus_dice=2,
+    )
+    skill_penalty_request = DiceExecutionRequest(
+        session_id="session-1",
+        actor_id="investigator-1",
+        check_kind=DiceCheckKind.SKILL,
+        label="图书馆使用",
+        target_value=70,
+        language_preference=LanguagePreference.ZH_CN,
+        penalty_dice=1,
+    )
+    attribute_bonus_request = DiceExecutionRequest(
+        session_id="session-1",
+        actor_id="investigator-1",
+        check_kind=DiceCheckKind.ATTRIBUTE,
+        label="教育",
+        target_value=75,
+        language_preference=LanguagePreference.ZH_CN,
+        bonus_dice=1,
+    )
+    attribute_penalty_request = DiceExecutionRequest(
+        session_id="session-1",
+        actor_id="investigator-1",
+        check_kind=DiceCheckKind.ATTRIBUTE,
+        label="教育",
+        target_value=75,
+        language_preference=LanguagePreference.ZH_CN,
+        penalty_dice=2,
+    )
+
+    assert render_dice_style_command(skill_bonus_request) == ".ra b2 图书馆使用70"
+    assert render_dice_style_command(skill_penalty_request) == ".ra p1 图书馆使用70"
+    assert render_dice_style_command(attribute_bonus_request) == ".ra b1 教育75"
+    assert render_dice_style_command(attribute_penalty_request) == ".ra p2 教育75"
+
+
 def test_dice_style_backend_falls_back_when_sidecar_unavailable_or_check_not_supported() -> None:
     unavailable_client = _UnavailableDiceStyleClient()
     fallback_backend = _FixedFallbackBackend(
@@ -227,6 +271,77 @@ def test_dice_style_subprocess_client_executes_real_external_bridge_process() ->
 
     assert result.backend_name == "dice_style_real_subprocess"
     assert result.roll.total == 24
+    assert result.success is True
+
+
+def test_dice_style_subprocess_client_parses_bonus_and_penalty_provider_outputs() -> None:
+    client = DiceStyleSubprocessClient(
+        command=_bridge_command("scripted_dice_provider.py"),
+        timeout_seconds=1.0,
+    )
+    skill_bonus_request = DiceExecutionRequest(
+        session_id="session-1",
+        actor_id="investigator-1",
+        check_kind=DiceCheckKind.SKILL,
+        label="图书馆使用",
+        target_value=70,
+        language_preference=LanguagePreference.ZH_CN,
+        bonus_dice=2,
+    )
+    attribute_penalty_request = DiceExecutionRequest(
+        session_id="session-1",
+        actor_id="investigator-1",
+        check_kind=DiceCheckKind.ATTRIBUTE,
+        label="教育",
+        target_value=75,
+        language_preference=LanguagePreference.ZH_CN,
+        penalty_dice=2,
+    )
+
+    skill_bonus_result = client.execute_check(
+        request=skill_bonus_request,
+        command_text=render_dice_style_command(skill_bonus_request),
+    )
+    attribute_penalty_result = client.execute_check(
+        request=attribute_penalty_request,
+        command_text=render_dice_style_command(attribute_penalty_request),
+    )
+
+    assert skill_bonus_result.roll.total == 15
+    assert skill_bonus_result.roll.bonus_dice == 2
+    assert skill_bonus_result.roll.penalty_dice == 0
+    assert skill_bonus_result.roll.outcome == RollOutcome.HARD_SUCCESS
+    assert skill_bonus_result.success is True
+
+    assert attribute_penalty_result.roll.total == 95
+    assert attribute_penalty_result.roll.bonus_dice == 0
+    assert attribute_penalty_result.roll.penalty_dice == 2
+    assert attribute_penalty_result.roll.outcome == RollOutcome.FAILURE
+    assert attribute_penalty_result.success is False
+
+
+def test_dice_style_subprocess_client_normalizes_provider_rank_back_to_local_official_outcome() -> None:
+    client = DiceStyleSubprocessClient(
+        command=_bridge_command("scripted_dice_provider.py"),
+        timeout_seconds=1.0,
+    )
+    request = DiceExecutionRequest(
+        session_id="session-1",
+        actor_id="investigator-1",
+        check_kind=DiceCheckKind.SKILL,
+        label="话术",
+        target_value=50,
+        language_preference=LanguagePreference.ZH_CN,
+        bonus_dice=1,
+    )
+
+    result = client.execute_check(
+        request=request,
+        command_text=render_dice_style_command(request),
+    )
+
+    assert result.roll.total == 24
+    assert result.roll.outcome == RollOutcome.HARD_SUCCESS
     assert result.success is True
 
 

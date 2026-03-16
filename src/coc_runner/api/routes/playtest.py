@@ -2830,9 +2830,19 @@ def _render_investigator_skill_check_panel(
               {options_html}
             </select>
           </label>
-          <p class="help">从当前角色已有技能中选择一项，快速进行一次普通检定。</p>
+          <label>
+            dice_modifier
+            <select name="dice_modifier">
+              <option value="normal">普通检定</option>
+              <option value="bonus_1">奖励骰 x1</option>
+              <option value="bonus_2">奖励骰 x2</option>
+              <option value="penalty_1">惩罚骰 x1</option>
+              <option value="penalty_2">惩罚骰 x2</option>
+            </select>
+          </label>
+          <p class="help">从当前角色已有技能中选择一项，可附带少量常见奖惩骰变体。</p>
           <button type="submit">开始检定</button>
-        </form>
+          </form>
       </section>
     """
 
@@ -2874,9 +2884,19 @@ def _render_investigator_attribute_check_panel(
               {options_html}
             </select>
           </label>
-          <p class="help">从当前角色的 8 项基础属性中选择一项，快速进行一次普通检定。</p>
+          <label>
+            dice_modifier
+            <select name="dice_modifier">
+              <option value="normal">普通检定</option>
+              <option value="bonus_1">奖励骰 x1</option>
+              <option value="bonus_2">奖励骰 x2</option>
+              <option value="penalty_1">惩罚骰 x1</option>
+              <option value="penalty_2">惩罚骰 x2</option>
+            </select>
+          </label>
+          <p class="help">从当前角色的 8 项基础属性中选择一项，可附带少量常见奖惩骰变体。</p>
           <button type="submit">开始属性检定</button>
-        </form>
+          </form>
       </section>
     """
 
@@ -3550,11 +3570,26 @@ async def submit_investigator_skill_check_via_ui(
     form = await _read_form_payload(request)
     skill_name = _normalize_form_text(form.get("skill_name")) or ""
     try:
+        dice_modifier = _normalize_form_text(form.get("dice_modifier")) or "normal"
+        bonus_dice = 0
+        penalty_dice = 0
+        if dice_modifier == "bonus_1":
+            bonus_dice = 1
+        elif dice_modifier == "bonus_2":
+            bonus_dice = 2
+        elif dice_modifier == "penalty_1":
+            penalty_dice = 1
+        elif dice_modifier == "penalty_2":
+            penalty_dice = 2
+        elif dice_modifier != "normal":
+            raise ValueError("invalid investigator dice modifier")
         response = service.perform_investigator_skill_check(
             session_id,
             InvestigatorSkillCheckRequest(
                 actor_id=viewer_id,
                 skill_name=skill_name,
+                bonus_dice=bonus_dice,
+                penalty_dice=penalty_dice,
             ),
         )
         return _render_investigator_page_from_service(
@@ -3586,11 +3621,26 @@ async def submit_investigator_attribute_check_via_ui(
     form = await _read_form_payload(request)
     attribute_name = _normalize_form_text(form.get("attribute_name")) or ""
     try:
+        dice_modifier = _normalize_form_text(form.get("dice_modifier")) or "normal"
+        bonus_dice = 0
+        penalty_dice = 0
+        if dice_modifier == "bonus_1":
+            bonus_dice = 1
+        elif dice_modifier == "bonus_2":
+            bonus_dice = 2
+        elif dice_modifier == "penalty_1":
+            penalty_dice = 1
+        elif dice_modifier == "penalty_2":
+            penalty_dice = 2
+        elif dice_modifier != "normal":
+            raise ValueError("invalid investigator dice modifier")
         response = service.perform_investigator_attribute_check(
             session_id,
             InvestigatorAttributeCheckRequest(
                 actor_id=viewer_id,
                 attribute_name=attribute_name,
+                bonus_dice=bonus_dice,
+                penalty_dice=penalty_dice,
             ),
         )
         return _render_investigator_page_from_service(

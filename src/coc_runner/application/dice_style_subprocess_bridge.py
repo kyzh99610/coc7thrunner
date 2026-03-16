@@ -18,21 +18,16 @@ from coc_runner.application.dice_execution import (  # noqa: E402
     DiceExecutionResult,
     DiceStyleSubprocessPayload,
 )
-from coc_runner.domain.dice import D100Roll, RollOutcome  # noqa: E402
+from coc_runner.domain.dice import D100Roll, RollOutcome, evaluate_d100_roll  # noqa: E402
 
-_DICE_RESULT_PATTERN = re.compile(
-    r"D100\s*=\s*(?P<rolled>\d{1,3})\s*/\s*(?P<target>\d{1,3})\s*(?P<rank>大成功|极难成功|困难成功|成功|失败|大失败)"
+_STANDARD_DICE_RESULT_PATTERN = re.compile(
+    r"D100\s*=\s*(?P<rolled>\d{1,3})\s*/\s*(?P<target>\d{1,3})\s*(?P<rank>大成功|极难成功|困难成功|成功|失败|大失败)!?"
 )
-
-_RANK_TO_OUTCOME = {
-    "大成功": RollOutcome.CRITICAL_SUCCESS,
-    "极难成功": RollOutcome.EXTREME_SUCCESS,
-    "困难成功": RollOutcome.HARD_SUCCESS,
-    "成功": RollOutcome.SUCCESS,
-    "失败": RollOutcome.FAILURE,
-    "大失败": RollOutcome.FUMBLE,
-}
-
+_MODIFIED_DICE_RESULT_PATTERN = re.compile(
+    r"(?P<mode>[bp])(?P<count>\d*)\s*=\s*(?P<rolled>\d{1,3})\s*/\s*(?P<target>\d{1,3}),\s*"
+    r"\(\[D100=(?P<base_total>\d{1,3}),\s*(?P<label>奖励|惩罚)\s+(?P<extra_tens>\d(?:\s+\d)*)\]\)\s*"
+    r"(?P<rank>大成功|极难成功|困难成功|成功|失败|大失败)!?"
+)
 
 def _configure_stdio() -> None:
     if hasattr(sys.stdin, "reconfigure"):
@@ -53,6 +48,33 @@ def _build_roll(*, total: int, target: int, outcome: RollOutcome) -> D100Roll:
         total=total,
         target=target,
         outcome=outcome,
+    )
+
+
+def _build_modified_roll(
+    *,
+    total: int,
+    target: int,
+    base_total: int,
+    extra_tens: list[int],
+    bonus_dice: int,
+    penalty_dice: int,
+) -> D100Roll:
+    selected_tens = 0 if total == 100 else total // 10
+    unit_die = 0 if total == 100 else total % 10
+    base_selected_tens = 0 if base_total == 100 else base_total // 10
+    base_unit_die = 0 if base_total == 100 else base_total % 10
+    if base_unit_die != unit_die:
+        raise ValueError("Dice-style provider returned inconsistent unit die in modified roll output")
+    return D100Roll(
+        unit_die=unit_die,
+        tens_dice=[base_selected_tens, *extra_tens],
+        selected_tens=selected_tens,
+        total=total,
+        target=target,
+        bonus_dice=bonus_dice,
+        penalty_dice=penalty_dice,
+        outcome=evaluate_d100_roll(total, target),
     )
 
 
@@ -107,22 +129,52 @@ def _parse_provider_output(
     raw_output: str,
     expected_target: int,
 ) -> DiceExecutionResult:
-    match = _DICE_RESULT_PATTERN.search(raw_output)
-    if match is None:
+    modified_match = _MODIFIED_DICE_RESULT_PATTERN.search(raw_output)
+    if modified_match is not None:
+        rolled_value = int(modified_match.group("rolled"))
+        target_value = int(modified_match.group("target"))
+        if target_value != expected_target:
+            raise ValueError(
+                f"Dice-style provider target mismatch: expected {expected_target}, got {target_value}"
+            )
+        extra_tens = [
+            int(item)
+            for item in modified_match.group("extra_tens").split()
+            if item
+        ]
+        mode = modified_match.group("mode")
+        roll = _build_modified_roll(
+            total=rolled_value,
+            target=target_value,
+            base_total=int(modified_match.group("base_total")),
+            extra_tens=extra_tens,
+            bonus_dice=len(extra_tens) if mode == "b" else 0,
+            penalty_dice=len(extra_tens) if mode == "p" else 0,
+        )
+        return DiceExecutionResult(
+            backend_name="dice_style_real_subprocess",
+            roll=roll,
+            success=roll.outcome not in {RollOutcome.FAILURE, RollOutcome.FUMBLE},
+        )
+
+    standard_match = _STANDARD_DICE_RESULT_PATTERN.search(raw_output)
+    if standard_match is None:
         raise ValueError("Dice-style provider output did not contain a parseable D100 result")
-    rolled_value = int(match.group("rolled"))
-    target_value = int(match.group("target"))
+    rolled_value = int(standard_match.group("rolled"))
+    target_value = int(standard_match.group("target"))
     if target_value != expected_target:
         raise ValueError(
             f"Dice-style provider target mismatch: expected {expected_target}, got {target_value}"
         )
-    rank = match.group("rank")
-    outcome = _RANK_TO_OUTCOME[rank]
-    roll = _build_roll(total=rolled_value, target=target_value, outcome=outcome)
+    roll = _build_roll(
+        total=rolled_value,
+        target=target_value,
+        outcome=evaluate_d100_roll(rolled_value, target_value),
+    )
     return DiceExecutionResult(
         backend_name="dice_style_real_subprocess",
         roll=roll,
-        success=outcome not in {RollOutcome.FAILURE, RollOutcome.FUMBLE},
+        success=roll.outcome not in {RollOutcome.FAILURE, RollOutcome.FUMBLE},
     )
 
 

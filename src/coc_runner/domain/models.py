@@ -1611,6 +1611,8 @@ class PlayerActionResponse(BaseModel):
 class InvestigatorSkillCheckRequest(BaseModel):
     actor_id: str
     skill_name: str = Field(min_length=1, max_length=80)
+    bonus_dice: int = Field(default=0, ge=0, le=2)
+    penalty_dice: int = Field(default=0, ge=0, le=2)
     language_preference: LanguagePreference | None = None
 
 
@@ -1629,6 +1631,8 @@ class InvestigatorSkillCheckResponse(BaseModel):
 class InvestigatorAttributeCheckRequest(BaseModel):
     actor_id: str
     attribute_name: str = Field(min_length=1, max_length=80)
+    bonus_dice: int = Field(default=0, ge=0, le=2)
+    penalty_dice: int = Field(default=0, ge=0, le=2)
     language_preference: LanguagePreference | None = None
 
 

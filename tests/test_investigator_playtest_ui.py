@@ -87,8 +87,11 @@ def test_investigator_playtest_page_opens_with_summary_and_action_form(
     assert "提交行动" in html
     assert "快速技能检定" in html
     assert 'name="skill_name"' in html
+    assert 'name="dice_modifier"' in html
     assert 'value="图书馆使用"' in html
     assert 'value="侦查"' in html
+    assert 'value="bonus_1"' in html
+    assert 'value="penalty_2"' in html
     assert "开始检定" in html
     assert "快速属性检定" in html
     assert 'name="attribute_name"' in html
@@ -403,6 +406,58 @@ def test_investigator_playtest_page_skill_check_can_use_optional_dice_backend_br
     assert ".rc 图书馆使用70" not in html
 
 
+def test_investigator_playtest_page_skill_check_can_use_bonus_die_with_real_dice_provider(
+    client: TestClient,
+) -> None:
+    session_id = _start_investigator_ui_session(client)
+
+    dice_client = DiceStyleSubprocessClient(
+        command=_bridge_command("scripted_dice_provider.py"),
+        timeout_seconds=1.0,
+    )
+    client.app.state.session_service.dice_execution_backend = DiceStyleExecutionBackend(
+        client=dice_client
+    )
+
+    response = client.post(
+        f"/playtest/sessions/{session_id}/investigator/investigator-1/skill-check",
+        data={"skill_name": "图书馆使用", "dice_modifier": "bonus_2"},
+    )
+
+    assert response.status_code == 200
+    html = response.text
+    assert "项目：图书馆使用" in html
+    assert "掷骰结果：15" in html
+    assert "判定：困难成功" in html
+    assert ".ra b2 图书馆使用70" not in html
+
+
+def test_investigator_playtest_page_skill_check_can_use_penalty_die_with_real_dice_provider(
+    client: TestClient,
+) -> None:
+    session_id = _start_investigator_ui_session(client)
+
+    dice_client = DiceStyleSubprocessClient(
+        command=_bridge_command("scripted_dice_provider.py"),
+        timeout_seconds=1.0,
+    )
+    client.app.state.session_service.dice_execution_backend = DiceStyleExecutionBackend(
+        client=dice_client
+    )
+
+    response = client.post(
+        f"/playtest/sessions/{session_id}/investigator/investigator-1/skill-check",
+        data={"skill_name": "图书馆使用", "dice_modifier": "penalty_1"},
+    )
+
+    assert response.status_code == 200
+    html = response.text
+    assert "项目：图书馆使用" in html
+    assert "掷骰结果：84" in html
+    assert "判定：失败" in html
+    assert ".ra p1 图书馆使用70" not in html
+
+
 def test_investigator_playtest_page_attribute_check_can_use_optional_dice_backend_bridge(
     client: TestClient,
 ) -> None:
@@ -431,6 +486,58 @@ def test_investigator_playtest_page_attribute_check_can_use_optional_dice_backen
     assert "掷骰结果：35" in html
     assert "判定：困难成功" in html
     assert ".rc 教育75" not in html
+
+
+def test_investigator_playtest_page_attribute_check_can_use_bonus_die_with_real_dice_provider(
+    client: TestClient,
+) -> None:
+    session_id = _start_investigator_ui_session(client)
+
+    dice_client = DiceStyleSubprocessClient(
+        command=_bridge_command("scripted_dice_provider.py"),
+        timeout_seconds=1.0,
+    )
+    client.app.state.session_service.dice_execution_backend = DiceStyleExecutionBackend(
+        client=dice_client
+    )
+
+    response = client.post(
+        f"/playtest/sessions/{session_id}/investigator/investigator-1/attribute-check",
+        data={"attribute_name": "education", "dice_modifier": "bonus_1"},
+    )
+
+    assert response.status_code == 200
+    html = response.text
+    assert "项目：教育" in html
+    assert "掷骰结果：12" in html
+    assert "判定：极难成功" in html
+    assert ".ra b1 教育75" not in html
+
+
+def test_investigator_playtest_page_attribute_check_can_use_penalty_die_with_real_dice_provider(
+    client: TestClient,
+) -> None:
+    session_id = _start_investigator_ui_session(client)
+
+    dice_client = DiceStyleSubprocessClient(
+        command=_bridge_command("scripted_dice_provider.py"),
+        timeout_seconds=1.0,
+    )
+    client.app.state.session_service.dice_execution_backend = DiceStyleExecutionBackend(
+        client=dice_client
+    )
+
+    response = client.post(
+        f"/playtest/sessions/{session_id}/investigator/investigator-1/attribute-check",
+        data={"attribute_name": "education", "dice_modifier": "penalty_2"},
+    )
+
+    assert response.status_code == 200
+    html = response.text
+    assert "项目：教育" in html
+    assert "掷骰结果：95" in html
+    assert "判定：失败" in html
+    assert ".ra p2 教育75" not in html
 
 
 def test_investigator_playtest_page_san_check_submission_rerenders_with_persisted_san_result(

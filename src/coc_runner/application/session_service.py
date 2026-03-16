@@ -285,6 +285,8 @@ class SessionService:
         label: str,
         target_value: int,
         language: LanguagePreference,
+        bonus_dice: int = 0,
+        penalty_dice: int = 0,
     ) -> DiceExecutionResult:
         backend = self._resolve_dice_execution_backend()
         try:
@@ -296,6 +298,8 @@ class SessionService:
                     label=label,
                     target_value=target_value,
                     language_preference=language,
+                    bonus_dice=bonus_dice,
+                    penalty_dice=penalty_dice,
                 )
             )
         except (DiceExecutionUnavailableError, UnsupportedDiceCheckError) as exc:
@@ -2348,6 +2352,8 @@ class SessionService:
                 label=normalized_skill_name,
                 target_value=skill_value,
                 language=effective_language,
+                bonus_dice=request.bonus_dice,
+                penalty_dice=request.penalty_dice,
             )
             return InvestigatorSkillCheckResponse(
                 message=self._message("skill_check_recorded", effective_language),
@@ -2447,6 +2453,8 @@ class SessionService:
                 label=self._attribute_check_label(normalized_attribute_name),
                 target_value=attribute_value,
                 language=effective_language,
+                bonus_dice=request.bonus_dice,
+                penalty_dice=request.penalty_dice,
             )
             return InvestigatorAttributeCheckResponse(
                 message=self._message("attribute_check_recorded", effective_language),
