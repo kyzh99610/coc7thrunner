@@ -3230,6 +3230,7 @@ class SessionService:
                 unconscious=wound_aftermath.unconscious,
                 dying=wound_aftermath.dying,
                 stable=wound_aftermath.stable,
+                rescue_window_open=wound_aftermath.rescue_window_open,
                 death_confirmed=False,
                 current_time=current_time,
             )
@@ -3282,6 +3283,7 @@ class SessionService:
                 is_unconscious=wound_aftermath.unconscious,
                 is_dying=wound_aftermath.dying,
                 is_stable=wound_aftermath.stable,
+                rescue_window_open=wound_aftermath.rescue_window_open,
                 death_confirmed=False,
                 fatal_risk=wound_aftermath.fatal_risk,
                 kp_follow_up_required=wound_aftermath.kp_follow_up_required,
@@ -3407,6 +3409,7 @@ class SessionService:
                     unconscious=True,
                     dying=False,
                     stable=True,
+                    rescue_window_open=False,
                     death_confirmed=False,
                     current_time=current_time,
                 )
@@ -3465,6 +3468,7 @@ class SessionService:
                 is_unconscious=target_state.is_unconscious,
                 is_dying=target_state.is_dying,
                 is_stable=target_state.is_stable,
+                rescue_window_open=target_state.rescue_window_open,
                 death_confirmed=target_state.death_confirmed,
             )
         except ConflictError as exc:
@@ -3558,13 +3562,42 @@ class SessionService:
                     self._message("keeper_wound_resolution_not_required", effective_language)
                 )
 
-            if request.resolution == KeeperWoundResolution.STABILIZE_UNCONSCIOUS:
+            if request.resolution == KeeperWoundResolution.KEEP_RESCUE_WINDOW_OPEN:
+                self._apply_humane_wound_state(
+                    target_state,
+                    heavy_wound=target_state.heavy_wound_active,
+                    unconscious=True,
+                    dying=True,
+                    stable=False,
+                    rescue_window_open=True,
+                    death_confirmed=False,
+                    current_time=current_time,
+                )
+                self._update_combat_follow_up_prompts_for_actor(
+                    session=session,
+                    actor_id=actor_id,
+                    actor_name=target.display_name,
+                    current_time=current_time,
+                    note=self._message(
+                        "keeper_wound_prompt_note_rescue_window_kept",
+                        effective_language,
+                    ),
+                    prompt_text=f"{target.display_name}处于濒死状态，短时抢救窗口仍开启",
+                    language=effective_language,
+                )
+                message = self._message(
+                    "keeper_wound_resolution_rescue_window_kept",
+                    effective_language,
+                    actor_name=target.display_name,
+                )
+            elif request.resolution == KeeperWoundResolution.STABILIZE_UNCONSCIOUS:
                 self._apply_humane_wound_state(
                     target_state,
                     heavy_wound=target_state.heavy_wound_active,
                     unconscious=True,
                     dying=False,
                     stable=True,
+                    rescue_window_open=False,
                     death_confirmed=False,
                     current_time=current_time,
                 )
@@ -3592,6 +3625,7 @@ class SessionService:
                     unconscious=False,
                     dying=False,
                     stable=False,
+                    rescue_window_open=False,
                     death_confirmed=True,
                     current_time=current_time,
                 )
@@ -3632,6 +3666,7 @@ class SessionService:
                 is_unconscious=target_state.is_unconscious,
                 is_dying=target_state.is_dying,
                 is_stable=target_state.is_stable,
+                rescue_window_open=target_state.rescue_window_open,
             )
         except ConflictError as exc:
             message = exc.args[0] if exc.args and isinstance(exc.args[0], str) else self._message(
@@ -6059,7 +6094,7 @@ class SessionService:
     @staticmethod
     def _sync_wound_condition_labels(character_state: SessionCharacterState) -> None:
         managed_statuses = {"重伤", "已死亡"}
-        managed_conditions = {"昏迷", "濒死", "已稳定"}
+        managed_conditions = {"昏迷", "濒死", "已稳定", "短时可救"}
         character_state.status_effects = [
             status
             for status in character_state.status_effects
@@ -6081,6 +6116,8 @@ class SessionService:
             character_state.temporary_conditions.append("濒死")
         if character_state.is_stable:
             character_state.temporary_conditions.append("已稳定")
+        if character_state.rescue_window_open:
+            character_state.temporary_conditions.append("短时可救")
 
     def _apply_humane_wound_state(
         self,
@@ -6090,6 +6127,7 @@ class SessionService:
         unconscious: bool,
         dying: bool,
         stable: bool,
+        rescue_window_open: bool,
         death_confirmed: bool,
         current_time: datetime,
     ) -> None:
@@ -6097,6 +6135,7 @@ class SessionService:
         character_state.is_unconscious = unconscious and not death_confirmed
         character_state.is_dying = dying and not death_confirmed
         character_state.is_stable = stable and not death_confirmed
+        character_state.rescue_window_open = rescue_window_open and not death_confirmed
         character_state.death_confirmed = death_confirmed
         self._sync_wound_condition_labels(character_state)
         character_state.last_updated_at = current_time
@@ -9525,11 +9564,13 @@ class SessionService:
             "first_aid_target_not_in_danger": "目标当前不处于需要紧急急救的危险状态。",
             "first_aid_target_deceased": "目标已被确认为死亡，当前不能继续紧急急救。",
             "first_aid_prompt_note_success": "{healer_name} 使用{skill_name}成功，将其稳定为昏迷状态。",
-            "first_aid_prompt_note_failure": "{healer_name} 使用{skill_name}失败，目标仍处于危险状态。",
+            "first_aid_prompt_note_failure": "{healer_name} 使用{skill_name}失败，目标仍处于危险状态，短时抢救窗口保持开启。",
             "keeper_wound_resolution_invalid": "伤势后续裁定参数无效",
             "keeper_wound_resolution_not_required": "当前角色没有需要 KP 继续裁定的危急伤势。",
+            "keeper_wound_resolution_rescue_window_kept": "已继续保留{actor_name}的短时抢救窗口",
             "keeper_wound_resolution_stabilized": "已将{actor_name}稳定为昏迷状态",
             "keeper_wound_resolution_death_confirmed": "已确认{actor_name}死亡",
+            "keeper_wound_prompt_note_rescue_window_kept": "KP 已继续保留其短时抢救窗口。",
             "keeper_wound_prompt_note_stabilized": "KP 已将其稳定为昏迷状态。",
             "keeper_wound_prompt_note_death_confirmed": "KP 已确认其死亡。",
             "dice_backend_unavailable": "当前可选判定后端不可用，且没有安全的本地回退可用。",
@@ -9697,11 +9738,13 @@ class SessionService:
             "first_aid_target_not_in_danger": "The target is not currently in a danger state that needs emergency first aid.",
             "first_aid_target_deceased": "The target has already been confirmed dead and can no longer receive emergency first aid.",
             "first_aid_prompt_note_success": "{healer_name} used {skill_name} successfully and stabilized the target into unconsciousness.",
-            "first_aid_prompt_note_failure": "{healer_name} failed with {skill_name}; the target remains in danger.",
+            "first_aid_prompt_note_failure": "{healer_name} failed with {skill_name}; the target remains in danger and the short rescue window stays open.",
             "keeper_wound_resolution_invalid": "Combat wound follow-up request is invalid",
             "keeper_wound_resolution_not_required": "This actor does not currently require a KP wound follow-up decision.",
+            "keeper_wound_resolution_rescue_window_kept": "Kept {actor_name}'s short rescue window open",
             "keeper_wound_resolution_stabilized": "{actor_name} was stabilized into unconsciousness",
             "keeper_wound_resolution_death_confirmed": "{actor_name} was confirmed dead",
+            "keeper_wound_prompt_note_rescue_window_kept": "KP kept the actor's short rescue window open.",
             "keeper_wound_prompt_note_stabilized": "KP stabilized the actor into unconsciousness.",
             "keeper_wound_prompt_note_death_confirmed": "KP confirmed the actor's death.",
             "dice_backend_unavailable": "The optional dice backend is unavailable and no safe local fallback is configured.",

@@ -592,6 +592,8 @@ def test_keeper_dashboard_can_confirm_death_for_a_dying_investigator_without_ext
     assert "危急伤势" in before_keeper_html
     assert "林舟" in before_keeper_html
     assert "濒死（仍可救助）" in before_keeper_html
+    assert "短时抢救窗口：开启" in before_keeper_html
+    assert 'value="keep_rescue_window_open"' in before_keeper_html
     assert 'value="confirm_death"' in before_keeper_html
 
     resolve_response = client.post(
@@ -613,6 +615,100 @@ def test_keeper_dashboard_can_confirm_death_for_a_dying_investigator_without_ext
     assert target_state["is_dying"] is False
     assert target_state["is_unconscious"] is False
     assert target_state["is_stable"] is False
+    assert target_state["rescue_window_open"] is False
+
+
+def test_keeper_dashboard_can_keep_rescue_window_open_for_dying_investigator(
+    client: TestClient,
+    monkeypatch,
+) -> None:
+    target = make_participant("investigator-1", "林舟")
+    attacker = make_participant("investigator-2", "周岚")
+    response = client.post(
+        "/sessions/start",
+        json={
+            "keeper_name": "KP",
+            "keeper_id": KEEPER_ID,
+            "scenario": whispering_guesthouse_payload(),
+            "participants": [target, attacker],
+        },
+    )
+    assert response.status_code == 201
+    session_id = response.json()["session_id"]
+
+    fixed_rolls = iter(
+        [
+            D100Roll(
+                unit_die=3,
+                tens_dice=[2],
+                selected_tens=2,
+                total=23,
+                target=55,
+                outcome=RollOutcome.HARD_SUCCESS,
+            ),
+            D100Roll(
+                unit_die=2,
+                tens_dice=[6],
+                selected_tens=6,
+                total=62,
+                target=40,
+                outcome=RollOutcome.FAILURE,
+            ),
+        ]
+    )
+    client.app.state.session_service.dice_execution_backend = LocalDiceExecutionBackend(
+        roller=lambda target, *, seed=None, bonus_dice=0, penalty_dice=0: next(fixed_rolls)
+    )
+    monkeypatch.setattr(
+        session_service_module,
+        "roll_damage_expression",
+        lambda expression, *, db_expression=None, seed=None: 11,
+    )
+
+    attack_response = client.post(
+        f"/playtest/sessions/{session_id}/investigator/investigator-2/melee-attack",
+        data={
+            "melee_target_actor_id": "investigator-1",
+            "attack_label": "斗殴",
+            "attack_target_value": "55",
+            "defense_mode": "dodge",
+            "defense_label": "闪避",
+            "defense_target_value": "40",
+        },
+    )
+    assert attack_response.status_code == 200
+    damage_response = client.post(
+        f"/playtest/sessions/{session_id}/investigator/investigator-2/damage-resolution",
+        data={
+            "damage_target_actor_id": "investigator-1",
+            "damage_expression": "1d6+1",
+            "damage_bonus_expression": "",
+            "armor_value": "0",
+        },
+    )
+    assert damage_response.status_code == 200
+
+    keep_open_response = client.post(
+        f"/playtest/sessions/{session_id}/keeper/wounds/investigator-1/resolve",
+        data={
+            "operator_id": KEEPER_ID,
+            "resolution": "keep_rescue_window_open",
+        },
+    )
+
+    assert keep_open_response.status_code == 200
+    html = keep_open_response.text
+    assert "已继续保留林舟的短时抢救窗口" in html
+    assert "濒死（仍可救助）" in html
+    assert "短时抢救窗口：开启" in html
+
+    snapshot = _get_snapshot(client, session_id)
+    target_state = snapshot["character_states"]["investigator-1"]
+    assert target_state["is_dying"] is True
+    assert target_state["is_unconscious"] is True
+    assert target_state["is_stable"] is False
+    assert target_state["rescue_window_open"] is True
+    assert target_state["death_confirmed"] is False
 
 def test_keeper_dashboard_displays_runtime_rules_and_knowledge_assistance_panel(
     client: TestClient,

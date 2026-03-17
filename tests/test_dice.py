@@ -138,6 +138,7 @@ def test_wound_aftermath_prefers_rescuable_states_over_immediate_auto_death() ->
     assert heavy_but_conscious.unconscious is False
     assert heavy_but_conscious.dying is False
     assert heavy_but_conscious.stable is False
+    assert heavy_but_conscious.rescue_window_open is False
     assert heavy_but_conscious.kp_follow_up_required is True
 
     dying_but_rescuable = evaluate_wound_aftermath(
@@ -149,6 +150,7 @@ def test_wound_aftermath_prefers_rescuable_states_over_immediate_auto_death() ->
     assert dying_but_rescuable.unconscious is True
     assert dying_but_rescuable.dying is True
     assert dying_but_rescuable.stable is False
+    assert dying_but_rescuable.rescue_window_open is True
     assert dying_but_rescuable.fatal_risk is True
 
     unconscious_but_stable = evaluate_wound_aftermath(
@@ -160,4 +162,5 @@ def test_wound_aftermath_prefers_rescuable_states_over_immediate_auto_death() ->
     assert unconscious_but_stable.unconscious is True
     assert unconscious_but_stable.dying is False
     assert unconscious_but_stable.stable is True
+    assert unconscious_but_stable.rescue_window_open is False
     assert unconscious_but_stable.fatal_risk is False

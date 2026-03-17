@@ -825,6 +825,7 @@ def test_investigator_damage_resolution_prefers_dying_state_over_auto_death(
     assert "结算后 HP：0" in damage_html
     assert "重伤：是（阈值 6）" in damage_html
     assert "伤势状态：濒死（仍可救助）" in damage_html
+    assert "短时抢救窗口：开启" in damage_html
     assert "已死亡" not in damage_html
 
     snapshot = _get_snapshot(client, session_id)
@@ -834,6 +835,7 @@ def test_investigator_damage_resolution_prefers_dying_state_over_auto_death(
     assert target_state["is_unconscious"] is True
     assert target_state["is_dying"] is True
     assert target_state["is_stable"] is False
+    assert target_state["rescue_window_open"] is True
     assert target_state["death_confirmed"] is False
 
     target_html = client.get(
@@ -843,12 +845,14 @@ def test_investigator_damage_resolution_prefers_dying_state_over_auto_death(
     assert "重伤" in target_html
     assert "昏迷" in target_html
     assert "濒死" in target_html
+    assert "短时可救" in target_html
     assert "已死亡" not in target_html
 
     keeper_html = client.get(f"/playtest/sessions/{session_id}/keeper").text
     assert "林舟处于濒死状态，等待 KP 确认后续处理" in keeper_html
     assert "危急伤势" in keeper_html
     assert "濒死（仍可救助）" in keeper_html
+    assert "短时抢救窗口：开启" in keeper_html
 
 
 def test_investigator_first_aid_success_stabilizes_dying_target_without_auto_death(
@@ -927,12 +931,14 @@ def test_investigator_first_aid_success_stabilizes_dying_target_without_auto_dea
     assert "判定：成功" in html
     assert "急救前状态：濒死（仍可救助）" in html
     assert "急救后状态：昏迷但稳定" in html
+    assert "短时抢救窗口：关闭" in html
 
     snapshot = _get_snapshot(client, session_id)
     target_state = snapshot["character_states"]["investigator-1"]
     assert target_state["is_dying"] is False
     assert target_state["is_unconscious"] is True
     assert target_state["is_stable"] is True
+    assert target_state["rescue_window_open"] is False
     assert target_state["death_confirmed"] is False
 
     target_html = client.get(
@@ -941,6 +947,7 @@ def test_investigator_first_aid_success_stabilizes_dying_target_without_auto_dea
     assert "昏迷" in target_html
     assert "已稳定" in target_html
     assert "濒死" not in target_html
+    assert "短时可救" not in target_html
     assert "已死亡" not in target_html
 
 
@@ -1017,6 +1024,7 @@ def test_investigator_first_aid_failure_keeps_dying_state_without_mechanical_aut
     assert "判定：失败" in html
     assert "急救前状态：濒死（仍可救助）" in html
     assert "急救后状态：濒死（仍可救助）" in html
+    assert "短时抢救窗口：开启" in html
     assert "已死亡" not in html
 
     snapshot = _get_snapshot(client, session_id)
@@ -1024,6 +1032,7 @@ def test_investigator_first_aid_failure_keeps_dying_state_without_mechanical_aut
     assert target_state["is_dying"] is True
     assert target_state["is_unconscious"] is True
     assert target_state["is_stable"] is False
+    assert target_state["rescue_window_open"] is True
     assert target_state["death_confirmed"] is False
 
 def test_investigator_playtest_page_melee_attack_distinguishes_counterattack_execution_semantics(

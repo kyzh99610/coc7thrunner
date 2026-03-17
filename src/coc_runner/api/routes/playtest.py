@@ -2229,6 +2229,11 @@ def _render_keeper_wound_follow_up_panel(
             <div class="action-row">
               <form method="post" action="/playtest/sessions/{escape(session_id)}/keeper/wounds/{escape(str(actor_id))}/resolve#wound-follow-up" data-submit-label="处理中...">
                 <input type="hidden" name="operator_id" value="{escape(operator_id)}" />
+                <input type="hidden" name="resolution" value="keep_rescue_window_open" />
+                <button type="submit">保持可救窗口</button>
+              </form>
+              <form method="post" action="/playtest/sessions/{escape(session_id)}/keeper/wounds/{escape(str(actor_id))}/resolve#wound-follow-up" data-submit-label="处理中...">
+                <input type="hidden" name="operator_id" value="{escape(operator_id)}" />
                 <input type="hidden" name="resolution" value="stabilize_unconscious" />
                 <button type="submit">稳定为昏迷</button>
               </form>
@@ -2247,6 +2252,7 @@ def _render_keeper_wound_follow_up_panel(
               </div>
               <p class="meta-line">HP：{escape(str(hp_value))}</p>
               <p class="meta-line">伤势状态：{escape(state_label)}</p>
+              <p class="meta-line">短时抢救窗口：{escape(_render_rescue_window_label_from_payload(state))}</p>
               {actions}
             </article>
             """
@@ -2970,6 +2976,12 @@ def _render_wound_state_label_from_payload(payload: dict[str, Any] | None) -> st
     return "一般受伤"
 
 
+def _render_rescue_window_label_from_payload(payload: dict[str, Any] | None) -> str:
+    if not isinstance(payload, dict):
+        return "关闭"
+    return "开启" if payload.get("rescue_window_open") else "关闭"
+
+
 def _render_combat_actor_name(actor_id: str | None, participants: list[dict[str, Any]]) -> str:
     normalized_actor_id = str(actor_id or "").strip()
     if not normalized_actor_id:
@@ -3188,6 +3200,7 @@ def _render_investigator_damage_resolution_result(
         + f"<p>结算后 HP：{escape(str(damage_resolution_result.get('hp_after', '—')))}</p>"
         + f"<p>重伤：{escape('是' if damage_resolution_result.get('heavy_wound') else '否')}（阈值 {escape(str(damage_resolution_result.get('heavy_wound_threshold', '—')))}）</p>"
         + f"<p>伤势状态：{escape(_render_wound_state_label_from_payload(damage_resolution_result))}</p>"
+        + f"<p>短时抢救窗口：{escape(_render_rescue_window_label_from_payload(damage_resolution_result))}</p>"
         + f"<p>需要 KP 进一步裁定：{escape('是' if damage_resolution_result.get('kp_follow_up_required') else '否')}</p>"
         + "</section>"
     )
@@ -3208,6 +3221,7 @@ def _render_investigator_first_aid_result(first_aid_result: dict[str, Any] | Non
         f"<p>判定：{escape(_render_skill_check_outcome_label(roll.get('outcome')))}</p>"
         f"<p>急救前状态：{escape(str(first_aid_result.get('before_state_label', '—')))}</p>"
         f"<p>急救后状态：{escape(str(first_aid_result.get('after_state_label', '—')))}</p>"
+        f"<p>短时抢救窗口：{escape(_render_rescue_window_label_from_payload(first_aid_result))}</p>"
         "</section>"
     )
 

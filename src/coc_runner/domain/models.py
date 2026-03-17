@@ -100,6 +100,7 @@ class HitLocationStatus(StrEnum):
 
 
 class KeeperWoundResolution(StrEnum):
+    KEEP_RESCUE_WINDOW_OPEN = "keep_rescue_window_open"
     STABILIZE_UNCONSCIOUS = "stabilize_unconscious"
     CONFIRM_DEATH = "confirm_death"
 
@@ -819,6 +820,7 @@ class SessionCharacterState(BaseModel):
     is_unconscious: bool = False
     is_dying: bool = False
     is_stable: bool = False
+    rescue_window_open: bool = False
     death_confirmed: bool = False
     clue_ids: list[str] = Field(default_factory=list)
     private_notes: list[str] = Field(default_factory=list)
@@ -1829,6 +1831,7 @@ class InvestigatorDamageResolutionResponse(BaseModel):
     is_unconscious: bool = False
     is_dying: bool = False
     is_stable: bool = False
+    rescue_window_open: bool = False
     death_confirmed: bool = False
     fatal_risk: bool = False
     kp_follow_up_required: bool = False
@@ -1858,6 +1861,7 @@ class InvestigatorFirstAidResponse(BaseModel):
     is_unconscious: bool = False
     is_dying: bool = False
     is_stable: bool = False
+    rescue_window_open: bool = False
     death_confirmed: bool = False
 
 
@@ -1904,6 +1908,7 @@ class KeeperWoundResolutionResponse(BaseModel):
     is_unconscious: bool = False
     is_dying: bool = False
     is_stable: bool = False
+    rescue_window_open: bool = False
 
 
 class InvestigatorSanCheckRequest(BaseModel):

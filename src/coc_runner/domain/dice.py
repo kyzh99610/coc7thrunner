@@ -52,6 +52,7 @@ class WoundAftermath(BaseModel):
     unconscious: bool = False
     dying: bool = False
     stable: bool = False
+    rescue_window_open: bool = False
     fatal_risk: bool = False
     kp_follow_up_required: bool = False
 
@@ -187,11 +188,13 @@ def evaluate_wound_aftermath(
     unconscious = hp_after == 0
     dying = unconscious and heavy_wound
     stable = unconscious and not dying
+    rescue_window_open = dying
     return WoundAftermath(
         heavy_wound=heavy_wound,
         unconscious=unconscious,
         dying=dying,
         stable=stable,
+        rescue_window_open=rescue_window_open,
         fatal_risk=dying,
         kp_follow_up_required=heavy_wound or dying,
     )
