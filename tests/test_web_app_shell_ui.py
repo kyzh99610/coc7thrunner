@@ -28,9 +28,17 @@ class _FakeLocalLLMService:
 
     def generate_assistant(self, request):
         self.requests.append(request)
+        draft_kind = {
+            "note_draft": "prompt_note_draft",
+            "draft_review_note_draft": "draft_review_note_draft",
+        }.get(request.task_key)
         suggested_target = {
             "note_draft": "prompt_note",
             "draft_review_note_draft": "draft_review_editor_notes",
+        }.get(request.task_key)
+        source_context_label = {
+            "note_draft": "基于当前 keeper workspace 摘要与待处理 prompts。",
+            "draft_review_note_draft": "基于当前 keeper workspace 摘要与待审草稿概览。",
         }.get(request.task_key)
         return LocalLLMAssistantResult(
             status="success",
@@ -45,7 +53,9 @@ class _FakeLocalLLMService:
                 bullets=["关键点一", "关键点二"],
                 suggested_questions=["后续还要确认什么？"],
                 draft_text="这是一段可继续编辑的草稿。",
+                draft_kind=draft_kind,
                 suggested_target=suggested_target,
+                source_context_label=source_context_label,
                 safety_notes=["不会直接改写 authoritative state。"],
             ),
         )
@@ -224,10 +234,16 @@ def test_web_app_keeper_assistant_uses_keeper_context_without_writing_state(
     assert "主持人备注草稿 结果" in html
     assert "这是非权威辅助输出。" in html
     assert "不会直接改写 authoritative state。" in html
+    assert "草稿类型：Prompt 备注草稿" in html
+    assert "推荐带入：Prompt 备注" in html
+    assert "来源语境：基于当前 keeper workspace 摘要与待处理 prompts。" in html
     assert 'id="keeper-assistant-draft-source"' in html
     assert 'data-adopt-source="keeper-assistant-draft-source"' in html
     assert 'data-adopt-target="prompt-note-' in html
-    assert '>带入 Assistant 草稿</button>' in html
+    assert 'data-adopt-status="prompt-note-status-' in html
+    assert 'data-adopt-status-text="已带入 Prompt 备注草稿。来源：基于当前 keeper workspace 摘要与待处理 prompts。 当前仍需 Keeper 人工编辑并提交。"' in html
+    assert '>带入当前 Prompt 备注框</button>' in html
+    assert "当前可采纳：Prompt 备注草稿。来源：基于当前 keeper workspace 摘要与待处理 prompts。 目标：当前 Prompt 备注框。" in html
     assert len(fake_service.requests) == 1
     request = fake_service.requests[0]
     assert request.workspace_key == "keeper_workspace"
@@ -260,9 +276,16 @@ def test_web_app_keeper_assistant_review_note_adoption_targets_editor_notes(
     assert response.status_code == 200
     html = response.text
     assert "草稿审阅说明草稿 结果" in html
+    assert "草稿类型：草稿审阅说明草稿" in html
+    assert "推荐带入：草稿审阅说明" in html
+    assert "来源语境：基于当前 keeper workspace 摘要与待审草稿概览。" in html
     assert 'data-adopt-source="keeper-assistant-draft-source"' in html
     assert 'data-adopt-target="draft-review-note-' in html
+    assert '>带入当前草稿审阅说明框</button>' in html
+    assert "当前可采纳：草稿审阅说明草稿。来源：基于当前 keeper workspace 摘要与待审草稿概览。 目标：当前草稿审阅说明框。" in html
     assert 'type="button"' in html
+    assert 'data-adopt-status="draft-review-status-' in html
+    assert 'data-adopt-status-text="已带入 草稿审阅说明草稿。来源：基于当前 keeper workspace 摘要与待审草稿概览。 当前仍需 Keeper 人工编辑并提交。"' in html
     after_snapshot = _get_snapshot(client, session_id)
     assert before_snapshot == after_snapshot
 

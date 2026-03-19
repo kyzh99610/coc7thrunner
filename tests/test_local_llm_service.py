@@ -88,7 +88,9 @@ def test_local_llm_service_parses_structured_json_response() -> None:
           "bullets": ["当前局势处于可继续推进状态。"],
           "suggested_questions": ["是否需要先处理待办提示？"],
           "draft_text": "可先把焦点放回账房场景。",
+          "draft_kind": "prompt_note_draft",
           "suggested_target": "prompt_note",
+          "source_context_label": "基于当前 keeper workspace 摘要与待处理 prompts。",
           "safety_notes": ["战斗和伤势仍需现有规则链裁定。"]
         }
         ```
@@ -102,7 +104,9 @@ def test_local_llm_service_parses_structured_json_response() -> None:
     assert result.assistant is not None
     assert result.assistant.title == "Keeper 草稿"
     assert "非权威" in result.assistant.summary
+    assert result.assistant.draft_kind == "prompt_note_draft"
     assert result.assistant.suggested_target == "prompt_note"
+    assert result.assistant.source_context_label == "基于当前 keeper workspace 摘要与待处理 prompts。"
     assert result.provider_name == "stub-local"
     assert result.model == "stub-model"
     assert provider.called is True

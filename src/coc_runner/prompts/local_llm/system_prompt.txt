@@ -16,6 +16,8 @@
   "bullets": ["3-5 条关键点"],
   "suggested_questions": ["0-3 条后续可追问问题"],
   "draft_text": "如本任务适合草稿文本则填写，否则为 null",
+  "draft_kind": "若适合带入 keeper 表单，则填 prompt_note_draft 或 draft_review_note_draft，否则为 null",
   "suggested_target": "若适合带入现有表单，则填 prompt_note 或 draft_review_editor_notes，否则为 null",
+  "source_context_label": "一句来源说明，例如基于当前 keeper workspace 摘要与待处理 prompts；若不适合则为 null",
   "safety_notes": ["0-3 条边界提醒，例如哪些内容仍需人工裁定"]
 }

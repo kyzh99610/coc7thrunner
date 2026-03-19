@@ -8,9 +8,12 @@
 - 不要输出任何“已确认规则结论”“已自动推进状态”“已完成裁定”的语气。
 - 涉及 combat / wound / SAN / death 时，只能提醒仍需 Keeper 或现有规则链明确处理。
 - draft_text 若填写，应是可供 Keeper 复制/改写的简短中文备注草稿。
+- 如果草稿用于 keeper prompt 备注，draft_kind 填 prompt_note_draft。
+- 如果草稿用于 draft review 的审阅说明，draft_kind 填 draft_review_note_draft。
 - 如果草稿更适合带入 keeper prompt 的备注 textarea，suggested_target 填 prompt_note。
 - 如果草稿更适合带入 draft review 的 editor_notes textarea，suggested_target 填 draft_review_editor_notes。
 - 如果当前任务只是摘要/建议而不适合直接带入现有表单，suggested_target 填 null。
+- source_context_label 用一句中文明确说明来源语境，例如“基于当前 keeper workspace 摘要与待处理 prompts”或“基于当前 keeper workspace 摘要与待审草稿概览”。
 
 上下文 JSON：
 {{context_json}}

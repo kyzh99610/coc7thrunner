@@ -493,6 +493,13 @@ legend {
   gap: 8px;
   margin-top: 12px;
 }
+.adoption-status {
+  margin: 8px 0 0;
+  padding: 10px 12px;
+  border-radius: 12px;
+  border: 1px dashed var(--line);
+  background: rgba(255, 255, 255, 0.54);
+}
 .assistant-draft-source {
   position: absolute;
   left: -9999px;
@@ -542,6 +549,8 @@ WEB_APP_SHELL_SCRIPT = """
     }
     const sourceId = trigger.getAttribute("data-adopt-source") || "";
     const targetId = trigger.getAttribute("data-adopt-target") || "";
+    const statusId = trigger.getAttribute("data-adopt-status") || "";
+    const statusText = trigger.getAttribute("data-adopt-status-text") || "";
     const source = document.getElementById(sourceId);
     const target = document.getElementById(targetId);
     if (!(source instanceof HTMLTextAreaElement) || !(target instanceof HTMLTextAreaElement)) {
@@ -551,6 +560,10 @@ WEB_APP_SHELL_SCRIPT = """
     target.focus();
     target.setSelectionRange(target.value.length, target.value.length);
     target.dispatchEvent(new Event("input", { bubbles: true }));
+    const statusNode = statusId ? document.getElementById(statusId) : null;
+    if (statusNode) {
+      statusNode.textContent = statusText;
+    }
   });
 })();
 """

@@ -64,9 +64,25 @@ KEEPER_ASSISTANT_TARGET_LABELS: dict[str, str] = {
     "prompt_note": "Prompt 备注",
     "draft_review_editor_notes": "草稿审阅说明",
 }
+KEEPER_ASSISTANT_TARGET_FIELD_LABELS: dict[str, str] = {
+    "prompt_note": "当前 Prompt 备注框",
+    "draft_review_editor_notes": "当前草稿审阅说明框",
+}
 KEEPER_ASSISTANT_TARGET_BY_TASK: dict[str, str] = {
     "note_draft": "prompt_note",
     "draft_review_note_draft": "draft_review_editor_notes",
+}
+KEEPER_ASSISTANT_DRAFT_KIND_LABELS: dict[str, str] = {
+    "prompt_note_draft": "Prompt 备注草稿",
+    "draft_review_note_draft": "草稿审阅说明草稿",
+}
+KEEPER_ASSISTANT_DRAFT_KIND_BY_TASK: dict[str, str] = {
+    "note_draft": "prompt_note_draft",
+    "draft_review_note_draft": "draft_review_note_draft",
+}
+KEEPER_ASSISTANT_SOURCE_CONTEXT_BY_KIND: dict[str, str] = {
+    "prompt_note_draft": "基于当前 keeper workspace 摘要、待处理 prompts 与近期事件。",
+    "draft_review_note_draft": "基于当前 keeper workspace 摘要与待审草稿概览。",
 }
 KEEPER_ASSISTANT_DRAFT_SOURCE_ID = "keeper-assistant-draft-source"
 KNOWLEDGE_ASSISTANT_TASKS: dict[str, str] = {
@@ -462,11 +478,29 @@ def _keeper_assistant_adoption(
     )
     if target not in KEEPER_ASSISTANT_TARGET_LABELS:
         return None
+    draft_kind = (
+        _normalize_form_text(result.assistant.draft_kind)
+        or KEEPER_ASSISTANT_DRAFT_KIND_BY_TASK.get(result.task_key)
+    )
+    if draft_kind not in KEEPER_ASSISTANT_DRAFT_KIND_LABELS:
+        return None
+    source_context_label = (
+        _normalize_form_text(result.assistant.source_context_label)
+        or KEEPER_ASSISTANT_SOURCE_CONTEXT_BY_KIND.get(draft_kind)
+        or "基于当前 keeper workspace 可见摘要。"
+    )
     return {
         "source_id": KEEPER_ASSISTANT_DRAFT_SOURCE_ID,
         "draft_text": draft_text,
         "target": target,
         "target_label": KEEPER_ASSISTANT_TARGET_LABELS[target],
+        "target_field_label": KEEPER_ASSISTANT_TARGET_FIELD_LABELS.get(
+            target,
+            f"{KEEPER_ASSISTANT_TARGET_LABELS[target]}输入框",
+        ),
+        "draft_kind": draft_kind,
+        "draft_kind_label": KEEPER_ASSISTANT_DRAFT_KIND_LABELS[draft_kind],
+        "source_context_label": source_context_label,
     }
 
 
@@ -477,7 +511,18 @@ def _render_assistant_draft_source(
         return ""
     return f"""
       <textarea id="{escape(assistant_adoption['source_id'])}" class="assistant-draft-source" aria-hidden="true" tabindex="-1">{escape(assistant_adoption['draft_text'])}</textarea>
-      <p class="helper">当前 assistant 草稿建议带入：{escape(assistant_adoption['target_label'])}。带入按钮只会填入 textarea，不会自动提交。</p>
+      <article class="list-card">
+        <div class="list-head">
+          <h3>当前可采纳草稿</h3>
+          <span class="tag success">manual adoption</span>
+        </div>
+        <ul class="meta-list">
+          <li>草稿类型：{escape(assistant_adoption['draft_kind_label'])}</li>
+          <li>推荐带入：{escape(assistant_adoption['target_label'])}</li>
+          <li>来源语境：{escape(assistant_adoption['source_context_label'])}</li>
+          <li>当前用途：供 Keeper 审阅后带入目标表单，再人工编辑并提交。</li>
+        </ul>
+      </article>
     """
 
 
@@ -486,9 +531,16 @@ def _render_assistant_adopt_button(
     assistant_adoption: dict[str, str] | None,
     target_kind: str,
     target_id: str,
+    status_id: str,
 ) -> str:
     if assistant_adoption is None or assistant_adoption.get("target") != target_kind:
         return ""
+    target_field_label = assistant_adoption["target_field_label"]
+    button_label = f"带入{target_field_label}"
+    status_text = (
+        f"已带入 {assistant_adoption['draft_kind_label']}。来源："
+        f"{assistant_adoption['source_context_label']} 当前仍需 Keeper 人工编辑并提交。"
+    )
     return f"""
       <div class="adoption-toolbar">
         <button
@@ -496,9 +548,11 @@ def _render_assistant_adopt_button(
           type="button"
           data-adopt-source="{escape(assistant_adoption['source_id'])}"
           data-adopt-target="{escape(target_id)}"
-        >带入 Assistant 草稿</button>
+          data-adopt-status="{escape(status_id)}"
+          data-adopt-status-text="{escape(status_text, quote=True)}"
+        >{escape(button_label)}</button>
       </div>
-      <p class="helper">只会带入到当前输入框，仍需 Keeper 人工编辑并手动提交。</p>
+      <p class="helper">当前草稿用途：{escape(assistant_adoption['draft_kind_label'])}。将只带入{escape(target_field_label)}，不会自动提交。</p>
     """
 
 
@@ -1522,6 +1576,7 @@ def _render_prompt_cards(
     for prompt in prompts[:4]:
         prompt_id = str(prompt.get("prompt_id") or "prompt")
         note_target_id = f"prompt-note-{prompt_id}"
+        adoption_status_id = f"prompt-note-status-{prompt_id}"
         current_notes = prompt.get("notes") or []
         notes_html = "".join(f"<li>{escape(str(note))}</li>" for note in current_notes[:3])
         cards.append(
@@ -1545,7 +1600,18 @@ def _render_prompt_cards(
                     assistant_adoption=assistant_adoption,
                     target_kind='prompt_note',
                     target_id=note_target_id,
+                    status_id=adoption_status_id,
                 )}
+                {
+                    (
+                        f'<p id="{escape(adoption_status_id)}" class="helper adoption-status">当前可采纳：'
+                        f"{escape(assistant_adoption['draft_kind_label'])}。来源："
+                        f"{escape(assistant_adoption['source_context_label'])} 目标：当前 Prompt 备注框。"
+                        ' 只会带入文本，不会自动提交。</p>'
+                    )
+                    if assistant_adoption is not None and assistant_adoption.get("target") == "prompt_note"
+                    else ""
+                }
                 <div class="inline-form-grid">
                   <button class="button-button ghost" type="submit" name="status" value="acknowledged">标记 acknowledged</button>
                   <button class="button-button secondary" type="submit" name="status" value="completed">标记 completed</button>
@@ -1574,6 +1640,7 @@ def _render_draft_cards(
     for draft in drafts[:4]:
         draft_id = str(draft.get("draft_id") or "draft")
         note_target_id = f"draft-review-note-{draft_id}"
+        adoption_status_id = f"draft-review-status-{draft_id}"
         cards.append(
             f"""
             <article class="list-card">
@@ -1592,7 +1659,18 @@ def _render_draft_cards(
                     assistant_adoption=assistant_adoption,
                     target_kind='draft_review_editor_notes',
                     target_id=note_target_id,
+                    status_id=adoption_status_id,
                 )}
+                {
+                    (
+                        f'<p id="{escape(adoption_status_id)}" class="helper adoption-status">当前可采纳：'
+                        f"{escape(assistant_adoption['draft_kind_label'])}。来源："
+                        f"{escape(assistant_adoption['source_context_label'])} 目标：当前草稿审阅说明框。"
+                        ' 只会带入文本，不会自动提交。</p>'
+                    )
+                    if assistant_adoption is not None and assistant_adoption.get("target") == "draft_review_editor_notes"
+                    else ""
+                }
                 <div class="inline-form-grid">
                   <button class="button-button secondary" type="submit" name="decision" value="approve">批准草稿</button>
                   <button class="button-button danger" type="submit" name="decision" value="reject">驳回草稿</button>
