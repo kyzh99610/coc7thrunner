@@ -587,6 +587,8 @@ def _render_assistant_adopt_button(
     target_kind: str,
     target_id: str,
     status_id: str,
+    flow_status_id: str | None = None,
+    flow_status_text: str | None = None,
     source_object_kind: str,
     source_object_id: str,
 ) -> str:
@@ -612,6 +614,8 @@ def _render_assistant_adopt_button(
           data-adopt-target="{escape(target_id)}"
           data-adopt-status="{escape(status_id)}"
           data-adopt-status-text="{escape(status_text, quote=True)}"
+          {f'data-adopt-flow-status="{escape(flow_status_id)}"' if flow_status_id else ''}
+          {f'data-adopt-flow-status-text="{escape(flow_status_text or "", quote=True)}"' if flow_status_id else ''}
         >{escape(button_label)}</button>
       </div>
       <p class="helper">当前草稿用途：{escape(assistant_adoption['draft_kind_label'])}。将只带入{escape(target_field_label)}，不会自动提交。</p>
@@ -1089,6 +1093,7 @@ def _render_prompt_generation_source_echo(
         (assistant_scope or {}).get("suggested_target")
     ) or "prompt_note"
     target_label = KEEPER_ASSISTANT_TARGET_LABELS.get(target_key, "Prompt 备注")
+    flow_status_id = f"prompt-flow-status-{prompt_id}"
     return f"""
       <div class="assistant-source-echo">
         <p class="meta-line"><strong>本次已生成的来源回显</strong></p>
@@ -1101,6 +1106,7 @@ def _render_prompt_generation_source_echo(
           <li>推荐带入目标：{escape(target_label)}</li>
           <li>边界说明：仅为草稿，不会自动提交，也不会改写 authoritative state。</li>
         </ul>
+        <p id="{escape(flow_status_id)}" class="helper assistant-flow-status">当前尚未带入。若采纳，将带入{escape(target_label)}，之后仍需 Keeper 人工编辑并提交。</p>
       </div>
     """
 
@@ -1128,6 +1134,7 @@ def _render_draft_generation_source_echo(
         (assistant_scope or {}).get("suggested_target")
     ) or "draft_review_editor_notes"
     target_label = KEEPER_ASSISTANT_TARGET_LABELS.get(target_key, "草稿审阅说明")
+    flow_status_id = f"draft-flow-status-{draft_id}"
     return f"""
       <div class="assistant-source-echo">
         <p class="meta-line"><strong>本次已生成的来源回显</strong></p>
@@ -1140,6 +1147,7 @@ def _render_draft_generation_source_echo(
           <li>推荐带入目标：{escape(target_label)}</li>
           <li>边界说明：仅为草稿，不会自动提交，也不会改写 authoritative state。</li>
         </ul>
+        <p id="{escape(flow_status_id)}" class="helper assistant-flow-status">当前尚未带入。若采纳，将带入{escape(target_label)}，之后仍需 Keeper 人工编辑并提交。</p>
       </div>
     """
 
@@ -2106,6 +2114,7 @@ def _render_prompt_cards(
         prompt_id = str(prompt.get("prompt_id") or "prompt")
         note_target_id = f"prompt-note-{prompt_id}"
         adoption_status_id = f"prompt-note-status-{prompt_id}"
+        flow_status_id = f"prompt-flow-status-{prompt_id}"
         current_notes = prompt.get("notes") or []
         notes_html = "".join(f"<li>{escape(str(note))}</li>" for note in current_notes[:3])
         prompt_local_context = _build_prompt_local_context(snapshot, prompt)
@@ -2142,6 +2151,8 @@ def _render_prompt_cards(
                     target_kind='prompt_note',
                     target_id=note_target_id,
                     status_id=adoption_status_id,
+                    flow_status_id=flow_status_id,
+                    flow_status_text='该草稿来自当前 Prompt 的 assistant 生成。已带入：Prompt 备注框。当前仍待 Keeper 人工编辑并提交。',
                     source_object_kind='prompt',
                     source_object_id=prompt_id,
                 )}
@@ -2191,6 +2202,7 @@ def _render_draft_cards(
         draft_id = str(draft.get("draft_id") or "draft")
         note_target_id = f"draft-review-note-{draft_id}"
         adoption_status_id = f"draft-review-status-{draft_id}"
+        flow_status_id = f"draft-flow-status-{draft_id}"
         draft_local_context = _build_draft_local_context(snapshot, draft)
         cards.append(
             f"""
@@ -2222,6 +2234,8 @@ def _render_draft_cards(
                     target_kind='draft_review_editor_notes',
                     target_id=note_target_id,
                     status_id=adoption_status_id,
+                    flow_status_id=flow_status_id,
+                    flow_status_text='该草稿来自当前待审草稿的 assistant 生成。已带入：草稿审阅说明框。当前仍待 Keeper 人工编辑并提交。',
                     source_object_kind='draft',
                     source_object_id=draft_id,
                 )}

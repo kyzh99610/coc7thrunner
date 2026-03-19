@@ -243,6 +243,7 @@ def test_web_app_prompt_card_shows_pre_generation_local_context_preview(
     assert "最近处理摘要：" in html
     assert "本次草稿将基于当前 prompt 与最近处理上下文生成，不会直接执行任何动作。" in html
     assert "本次已生成的来源回显" not in html
+    assert "当前尚未带入。若采纳，将带入Prompt 备注" not in html
 
 
 def test_web_app_draft_card_shows_pre_generation_local_context_preview(
@@ -261,6 +262,7 @@ def test_web_app_draft_card_shows_pre_generation_local_context_preview(
     assert "最近 review 摘要：" in html
     assert "本次草稿将基于当前 draft 与最近审阅上下文生成，不会直接执行任何动作。" in html
     assert "本次已生成的来源回显" not in html
+    assert "当前尚未带入。若采纳，将带入草稿审阅说明" not in html
 
 
 def test_web_app_keeper_assistant_uses_keeper_context_without_writing_state(
@@ -366,9 +368,13 @@ def test_web_app_prompt_card_can_generate_object_scoped_assistant_draft(
     assert "草稿归属：当前 Prompt" in html
     assert "实际参考的局部字段：当前状态 / 类别" in html
     assert "推荐带入目标：Prompt 备注" in html
+    assert f'id="prompt-flow-status-{prompt_id}"' in html
+    assert "当前尚未带入。若采纳，将带入Prompt 备注，之后仍需 Keeper 人工编辑并提交。" in html
     assert prompt.prompt_text[:12] in html
     assert f'data-adopt-target="prompt-note-{prompt_id}"' in html
     assert 'data-adopt-target="draft-review-note-' not in html
+    assert f'data-adopt-flow-status="prompt-flow-status-{prompt_id}"' in html
+    assert 'data-adopt-flow-status-text="该草稿来自当前 Prompt 的 assistant 生成。已带入：Prompt 备注框。当前仍待 Keeper 人工编辑并提交。"' in html
     assert len(fake_service.requests) == 1
     request = fake_service.requests[0]
     assert request.context["source_object"]["object_kind"] == "prompt"
@@ -406,9 +412,13 @@ def test_web_app_draft_card_can_generate_object_scoped_assistant_draft(
     assert "草稿归属：当前待审草稿" in html
     assert "推荐带入目标：草稿审阅说明" in html
     assert "最近 editor note：" in html
+    assert f'id="draft-flow-status-{draft_id}"' in html
+    assert "当前尚未带入。若采纳，将带入草稿审阅说明，之后仍需 Keeper 人工编辑并提交。" in html
     assert draft.draft_text[:12] in html
     assert f'data-adopt-target="draft-review-note-{draft_id}"' in html
     assert 'data-adopt-target="prompt-note-' not in html
+    assert f'data-adopt-flow-status="draft-flow-status-{draft_id}"' in html
+    assert 'data-adopt-flow-status-text="该草稿来自当前待审草稿的 assistant 生成。已带入：草稿审阅说明框。当前仍待 Keeper 人工编辑并提交。"' in html
     assert len(fake_service.requests) == 1
     request = fake_service.requests[0]
     assert request.context["source_object"]["object_kind"] == "draft"

@@ -520,6 +520,11 @@ legend {
 .assistant-source-echo .meta-list {
   margin: 8px 0 0;
 }
+.assistant-flow-status {
+  margin: 10px 0 0;
+  padding-top: 10px;
+  border-top: 1px dashed rgba(133, 94, 60, 0.22);
+}
 .assistant-draft-source {
   position: absolute;
   left: -9999px;
@@ -571,6 +576,8 @@ WEB_APP_SHELL_SCRIPT = """
     const targetId = trigger.getAttribute("data-adopt-target") || "";
     const statusId = trigger.getAttribute("data-adopt-status") || "";
     const statusText = trigger.getAttribute("data-adopt-status-text") || "";
+    const flowStatusId = trigger.getAttribute("data-adopt-flow-status") || "";
+    const flowStatusText = trigger.getAttribute("data-adopt-flow-status-text") || "";
     const source = document.getElementById(sourceId);
     const target = document.getElementById(targetId);
     if (!(source instanceof HTMLTextAreaElement) || !(target instanceof HTMLTextAreaElement)) {
@@ -583,6 +590,10 @@ WEB_APP_SHELL_SCRIPT = """
     const statusNode = statusId ? document.getElementById(statusId) : null;
     if (statusNode) {
       statusNode.textContent = statusText;
+    }
+    const flowStatusNode = flowStatusId ? document.getElementById(flowStatusId) : null;
+    if (flowStatusNode) {
+      flowStatusNode.textContent = flowStatusText;
     }
   });
 })();
