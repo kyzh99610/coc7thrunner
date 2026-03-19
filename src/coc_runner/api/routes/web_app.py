@@ -947,9 +947,48 @@ def _render_prompt_generation_preview(
     *,
     local_context: dict[str, Any],
 ) -> str:
+    prompt_context_display = _prompt_context_display(local_context)
     prompt_label = _excerpt(prompt.get("prompt_text"), limit=48) or str(
         prompt.get("prompt_id") or "当前 prompt"
     )
+    return f"""
+      <div class="assistant-context-preview">
+        <p class="meta-line"><strong>本次生成将使用的局部上下文摘要</strong></p>
+        <ul class="meta-list">
+          <li>当前 Prompt：{escape(prompt_label)}</li>
+          <li>当前状态 / 类别：{escape(prompt_context_display['status_category'])}</li>
+          <li>最近 note：{escape(prompt_context_display['latest_note_label'])}</li>
+          <li>最近处理摘要：{escape(prompt_context_display['recent_update_label'])}</li>
+          <li>输入说明：本次草稿将基于当前 prompt 与最近处理上下文生成，不会直接执行任何动作。</li>
+        </ul>
+      </div>
+    """
+
+
+def _render_draft_generation_preview(
+    draft: dict[str, Any],
+    *,
+    local_context: dict[str, Any],
+) -> str:
+    draft_context_display = _draft_context_display(local_context, draft=draft)
+    draft_label = _excerpt(draft.get("draft_text"), limit=48) or str(
+        draft.get("draft_id") or "当前草稿"
+    )
+    return f"""
+      <div class="assistant-context-preview">
+        <p class="meta-line"><strong>本次生成将使用的局部上下文摘要</strong></p>
+        <ul class="meta-list">
+          <li>当前草稿：{escape(draft_label)}</li>
+          <li>当前 review 状态：{escape(draft_context_display['current_review_status'])}</li>
+          <li>最近 editor note：{escape(draft_context_display['recent_editor_note_label'])}</li>
+          <li>最近 review 摘要：{escape(draft_context_display['recent_review_label'])}</li>
+          <li>输入说明：本次草稿将基于当前 draft 与最近审阅上下文生成，不会直接执行任何动作。</li>
+        </ul>
+      </div>
+    """
+
+
+def _prompt_context_display(local_context: dict[str, Any]) -> dict[str, str]:
     current_status = _normalize_form_text(local_context.get("current_status")) or "未标记"
     current_category = _normalize_form_text(local_context.get("current_category")) or "未标记"
     latest_note = _normalize_form_text(local_context.get("latest_note"))
@@ -973,28 +1012,18 @@ def _render_prompt_generation_preview(
         if recent_update_summary
         else "无，将不额外引用处理摘要"
     )
-    return f"""
-      <div class="assistant-context-preview">
-        <p class="meta-line"><strong>本次生成将使用的局部上下文摘要</strong></p>
-        <ul class="meta-list">
-          <li>当前 Prompt：{escape(prompt_label)}</li>
-          <li>当前状态 / 类别：{escape(current_status)} / {escape(current_category)}</li>
-          <li>最近 note：{escape(latest_note_label)}</li>
-          <li>最近处理摘要：{escape(recent_update_label)}</li>
-          <li>输入说明：本次草稿将基于当前 prompt 与最近处理上下文生成，不会直接执行任何动作。</li>
-        </ul>
-      </div>
-    """
+    return {
+        "status_category": f"{current_status} / {current_category}",
+        "latest_note_label": latest_note_label,
+        "recent_update_label": recent_update_label,
+    }
 
 
-def _render_draft_generation_preview(
-    draft: dict[str, Any],
-    *,
+def _draft_context_display(
     local_context: dict[str, Any],
-) -> str:
-    draft_label = _excerpt(draft.get("draft_text"), limit=48) or str(
-        draft.get("draft_id") or "当前草稿"
-    )
+    *,
+    draft: dict[str, Any],
+) -> dict[str, str]:
     current_review_status = _normalize_form_text(local_context.get("current_review_status")) or (
         _normalize_form_text(draft.get("review_status")) or "未标记"
     )
@@ -1016,15 +1045,100 @@ def _render_draft_generation_preview(
         if recent_review_summary
         else "无，将不额外引用审阅摘要"
     )
+    return {
+        "current_review_status": current_review_status,
+        "recent_editor_note_label": recent_editor_note_label,
+        "recent_review_label": recent_review_label,
+    }
+
+
+def _assistant_scope_matches_object(
+    assistant_scope: dict[str, str] | None,
+    *,
+    source_object_kind: str,
+    source_object_id: str,
+) -> bool:
+    if not assistant_scope:
+        return False
+    return (
+        _normalize_form_text(assistant_scope.get("source_object_kind")) == source_object_kind
+        and _normalize_form_text(assistant_scope.get("source_object_id")) == source_object_id
+    )
+
+
+def _render_prompt_generation_source_echo(
+    prompt: dict[str, Any],
+    *,
+    local_context: dict[str, Any],
+    assistant_scope: dict[str, str] | None,
+    assistant_adoption: dict[str, str] | None,
+    prompt_id: str,
+) -> str:
+    if not _assistant_scope_matches_object(
+        assistant_scope,
+        source_object_kind="prompt",
+        source_object_id=prompt_id,
+    ):
+        return ""
+    prompt_label = _excerpt(prompt.get("prompt_text"), limit=48) or prompt_id
+    context_display = _prompt_context_display(local_context)
+    source_context_label = _normalize_form_text((assistant_scope or {}).get("source_context_label")) or (
+        f"基于当前 prompt：{prompt_label}（{prompt_id}）。"
+    )
+    target_key = _normalize_form_text((assistant_adoption or {}).get("target")) or _normalize_form_text(
+        (assistant_scope or {}).get("suggested_target")
+    ) or "prompt_note"
+    target_label = KEEPER_ASSISTANT_TARGET_LABELS.get(target_key, "Prompt 备注")
     return f"""
-      <div class="assistant-context-preview">
-        <p class="meta-line"><strong>本次生成将使用的局部上下文摘要</strong></p>
+      <div class="assistant-source-echo">
+        <p class="meta-line"><strong>本次已生成的来源回显</strong></p>
         <ul class="meta-list">
-          <li>当前草稿：{escape(draft_label)}</li>
-          <li>当前 review 状态：{escape(current_review_status)}</li>
-          <li>最近 editor note：{escape(recent_editor_note_label)}</li>
-          <li>最近 review 摘要：{escape(recent_review_label)}</li>
-          <li>输入说明：本次草稿将基于当前 draft 与最近审阅上下文生成，不会直接执行任何动作。</li>
+          <li>草稿归属：当前 Prompt {escape(prompt_label)}</li>
+          <li>实际来源：{escape(source_context_label)}</li>
+          <li>实际参考的局部字段：当前状态 / 类别（{escape(context_display['status_category'])}）</li>
+          <li>最近 note：{escape(context_display['latest_note_label'])}</li>
+          <li>最近处理摘要：{escape(context_display['recent_update_label'])}</li>
+          <li>推荐带入目标：{escape(target_label)}</li>
+          <li>边界说明：仅为草稿，不会自动提交，也不会改写 authoritative state。</li>
+        </ul>
+      </div>
+    """
+
+
+def _render_draft_generation_source_echo(
+    draft: dict[str, Any],
+    *,
+    local_context: dict[str, Any],
+    assistant_scope: dict[str, str] | None,
+    assistant_adoption: dict[str, str] | None,
+    draft_id: str,
+) -> str:
+    if not _assistant_scope_matches_object(
+        assistant_scope,
+        source_object_kind="draft",
+        source_object_id=draft_id,
+    ):
+        return ""
+    draft_label = _excerpt(draft.get("draft_text"), limit=48) or draft_id
+    context_display = _draft_context_display(local_context, draft=draft)
+    source_context_label = _normalize_form_text((assistant_scope or {}).get("source_context_label")) or (
+        f"基于当前待审草稿：{draft_label}（{draft_id}）。"
+    )
+    target_key = _normalize_form_text((assistant_adoption or {}).get("target")) or _normalize_form_text(
+        (assistant_scope or {}).get("suggested_target")
+    ) or "draft_review_editor_notes"
+    target_label = KEEPER_ASSISTANT_TARGET_LABELS.get(target_key, "草稿审阅说明")
+    return f"""
+      <div class="assistant-source-echo">
+        <p class="meta-line"><strong>本次已生成的来源回显</strong></p>
+        <ul class="meta-list">
+          <li>草稿归属：当前待审草稿 {escape(draft_label)}</li>
+          <li>实际来源：{escape(source_context_label)}</li>
+          <li>当前 review 状态：{escape(context_display['current_review_status'])}</li>
+          <li>最近 editor note：{escape(context_display['recent_editor_note_label'])}</li>
+          <li>最近 review 摘要：{escape(context_display['recent_review_label'])}</li>
+          <li>推荐带入目标：{escape(target_label)}</li>
+          <li>边界说明：仅为草稿，不会自动提交，也不会改写 authoritative state。</li>
         </ul>
       </div>
     """
@@ -1982,6 +2096,7 @@ def _render_prompt_cards(
     snapshot: dict[str, Any],
     session_id: str,
     operator_id: str,
+    assistant_scope: dict[str, str] | None = None,
     assistant_adoption: dict[str, str] | None = None,
 ) -> str:
     if not prompts:
@@ -2009,6 +2124,13 @@ def _render_prompt_cards(
               <form method="post" action="/app/sessions/{escape(session_id)}/keeper/prompts/{escape(prompt_id)}/assistant">
                 <button class="button-button secondary" type="submit">为这条 Prompt 生成备注草稿</button>
               </form>
+              {_render_prompt_generation_source_echo(
+                  prompt,
+                  local_context=prompt_local_context,
+                  assistant_scope=assistant_scope,
+                  assistant_adoption=assistant_adoption,
+                  prompt_id=prompt_id,
+              )}
               <form method="post" action="/app/sessions/{escape(session_id)}/keeper/prompts/{escape(prompt_id)}/status">
                 <input type="hidden" name="operator_id" value="{escape(operator_id)}" />
                 <label>
@@ -2059,6 +2181,7 @@ def _render_draft_cards(
     snapshot: dict[str, Any],
     session_id: str,
     reviewer_id: str,
+    assistant_scope: dict[str, str] | None = None,
     assistant_adoption: dict[str, str] | None = None,
 ) -> str:
     if not drafts:
@@ -2081,6 +2204,13 @@ def _render_draft_cards(
               <form method="post" action="/app/sessions/{escape(session_id)}/draft-actions/{escape(draft_id)}/assistant">
                 <button class="button-button secondary" type="submit">为这条草稿生成审阅说明</button>
               </form>
+              {_render_draft_generation_source_echo(
+                  draft,
+                  local_context=draft_local_context,
+                  assistant_scope=assistant_scope,
+                  assistant_adoption=assistant_adoption,
+                  draft_id=draft_id,
+              )}
               <form method="post" action="/app/sessions/{escape(session_id)}/draft-actions/{escape(draft_id)}/review">
                 <input type="hidden" name="reviewer_id" value="{escape(reviewer_id)}" />
                 <label>
@@ -2530,6 +2660,7 @@ def _render_keeper_workspace_page(
                         snapshot=snapshot,
                         session_id=session_id,
                         operator_id=operator_id,
+                        assistant_scope=assistant_scope,
                         assistant_adoption=assistant_adoption,
                     )}
                   </div>
@@ -2545,6 +2676,7 @@ def _render_keeper_workspace_page(
                         snapshot=snapshot,
                         session_id=session_id,
                         reviewer_id=operator_id,
+                        assistant_scope=assistant_scope,
                         assistant_adoption=assistant_adoption,
                     )}
                   </div>

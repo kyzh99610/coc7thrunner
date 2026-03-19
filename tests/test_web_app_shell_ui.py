@@ -242,6 +242,7 @@ def test_web_app_prompt_card_shows_pre_generation_local_context_preview(
     assert "最近 note：" in html
     assert "最近处理摘要：" in html
     assert "本次草稿将基于当前 prompt 与最近处理上下文生成，不会直接执行任何动作。" in html
+    assert "本次已生成的来源回显" not in html
 
 
 def test_web_app_draft_card_shows_pre_generation_local_context_preview(
@@ -259,6 +260,7 @@ def test_web_app_draft_card_shows_pre_generation_local_context_preview(
     assert "最近 editor note：" in html
     assert "最近 review 摘要：" in html
     assert "本次草稿将基于当前 draft 与最近审阅上下文生成，不会直接执行任何动作。" in html
+    assert "本次已生成的来源回显" not in html
 
 
 def test_web_app_keeper_assistant_uses_keeper_context_without_writing_state(
@@ -359,6 +361,11 @@ def test_web_app_prompt_card_can_generate_object_scoped_assistant_draft(
     assert "来源语境：基于当前 prompt：" in html
     assert "及最近处理上下文。" in html
     assert "局部上下文：" in html
+    assert "本次生成将使用的局部上下文摘要" in html
+    assert "本次已生成的来源回显" in html
+    assert "草稿归属：当前 Prompt" in html
+    assert "实际参考的局部字段：当前状态 / 类别" in html
+    assert "推荐带入目标：Prompt 备注" in html
     assert prompt.prompt_text[:12] in html
     assert f'data-adopt-target="prompt-note-{prompt_id}"' in html
     assert 'data-adopt-target="draft-review-note-' not in html
@@ -394,6 +401,11 @@ def test_web_app_draft_card_can_generate_object_scoped_assistant_draft(
     assert "来源语境：基于当前待审草稿：" in html
     assert "及最近审阅上下文。" in html
     assert "局部上下文：" in html
+    assert "本次生成将使用的局部上下文摘要" in html
+    assert "本次已生成的来源回显" in html
+    assert "草稿归属：当前待审草稿" in html
+    assert "推荐带入目标：草稿审阅说明" in html
+    assert "最近 editor note：" in html
     assert draft.draft_text[:12] in html
     assert f'data-adopt-target="draft-review-note-{draft_id}"' in html
     assert 'data-adopt-target="prompt-note-' not in html

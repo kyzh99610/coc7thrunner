@@ -510,6 +510,16 @@ legend {
 .assistant-context-preview .meta-list {
   margin: 8px 0 0;
 }
+.assistant-source-echo {
+  margin: 12px 0;
+  padding: 12px;
+  border-radius: 14px;
+  border: 1px dashed rgba(133, 94, 60, 0.38);
+  background: rgba(246, 241, 231, 0.92);
+}
+.assistant-source-echo .meta-list {
+  margin: 8px 0 0;
+}
 .assistant-draft-source {
   position: absolute;
   left: -9999px;
