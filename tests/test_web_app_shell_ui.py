@@ -450,6 +450,10 @@ def test_web_app_keeper_prompt_submit_requires_manual_post_after_adoption_markup
     html = response.text
     assert "Keeper Prompt 已更新" in html
     assert "先记入主持人备注，再观察调查员是否继续追问。" in html
+    assert "当前 Prompt 已人工提交，对象卡已恢复默认状态，不再显示上一轮待提交提示。" in html
+    assert "本次已生成的来源回显" not in html
+    assert "当前尚未带入。若采纳，将带入Prompt 备注" not in html
+    assert "已带入：Prompt 备注框" not in html
 
 
 def test_web_app_keeper_draft_review_submit_requires_manual_post_after_adoption_markup(
@@ -473,6 +477,10 @@ def test_web_app_keeper_draft_review_submit_requires_manual_post_after_adoption_
     html = response.text
     assert "Draft Review 已提交" in html
     assert "采用这条草稿，但仍由 Keeper 手工确认后提交。" in html
+    assert "当前草稿审阅已人工提交，对象卡已恢复默认状态，不再显示上一轮待提交提示。" in html
+    assert "本次已生成的来源回显" not in html
+    assert "当前尚未带入。若采纳，将带入草稿审阅说明" not in html
+    assert "已带入：草稿审阅说明框" not in html
 
 
 def test_web_app_investigator_workspace_preserves_secret_boundary_and_action_groups(

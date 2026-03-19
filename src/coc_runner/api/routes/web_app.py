@@ -638,6 +638,22 @@ def _assistant_targets_current_object(
     return True
 
 
+def _build_keeper_completion_notices(
+    action_result: dict[str, Any] | None,
+) -> tuple[dict[str, str], dict[str, str]]:
+    prompt_notices: dict[str, str] = {}
+    draft_notices: dict[str, str] = {}
+    if not action_result:
+        return prompt_notices, draft_notices
+    kind = _normalize_form_text(action_result.get("kind"))
+    target_id = _normalize_form_text(action_result.get("target_id"))
+    if kind == "prompt_status" and target_id:
+        prompt_notices[target_id] = "当前 Prompt 已人工提交，对象卡已恢复默认状态，不再显示上一轮待提交提示。"
+    if kind == "draft_review" and target_id:
+        draft_notices[target_id] = "当前草稿审阅已人工提交，对象卡已恢复默认状态，不再显示上一轮待提交提示。"
+    return prompt_notices, draft_notices
+
+
 def _render_local_llm_assistant_panel(
     *,
     title: str,
@@ -2104,6 +2120,7 @@ def _render_prompt_cards(
     snapshot: dict[str, Any],
     session_id: str,
     operator_id: str,
+    completion_notices: dict[str, str] | None = None,
     assistant_scope: dict[str, str] | None = None,
     assistant_adoption: dict[str, str] | None = None,
 ) -> str:
@@ -2177,6 +2194,13 @@ def _render_prompt_cards(
                   <button class="button-button danger" type="submit" name="status" value="dismissed">标记 dismissed</button>
                 </div>
               </form>
+              {
+                  (
+                      f'<p class="helper assistant-completion-status">{escape((completion_notices or {}).get(prompt_id) or "")}</p>'
+                  )
+                  if (completion_notices or {}).get(prompt_id)
+                  else ""
+              }
               <div class="toolbar">
                 <a class="button-link ghost" href="/playtest/sessions/{escape(session_id)}/keeper#prompt-targets">旧版提示处理区</a>
               </div>
@@ -2192,6 +2216,7 @@ def _render_draft_cards(
     snapshot: dict[str, Any],
     session_id: str,
     reviewer_id: str,
+    completion_notices: dict[str, str] | None = None,
     assistant_scope: dict[str, str] | None = None,
     assistant_adoption: dict[str, str] | None = None,
 ) -> str:
@@ -2259,6 +2284,13 @@ def _render_draft_cards(
                   <button class="button-button danger" type="submit" name="decision" value="reject">驳回草稿</button>
                 </div>
               </form>
+              {
+                  (
+                      f'<p class="helper assistant-completion-status">{escape((completion_notices or {}).get(draft_id) or "")}</p>'
+                  )
+                  if (completion_notices or {}).get(draft_id)
+                  else ""
+              }
               <div class="toolbar">
                 <a class="button-link ghost" href="/playtest/sessions/{escape(session_id)}/keeper#draft-review-targets">旧版草稿审阅区</a>
               </div>
@@ -2555,6 +2587,9 @@ def _render_keeper_workspace_page(
         assistant_result,
         assistant_scope=assistant_scope,
     )
+    prompt_completion_notices, draft_completion_notices = _build_keeper_completion_notices(
+        action_result,
+    )
     current_scene, beat_id, beat_title = _scene_and_beat(snapshot)
     turn_order = combat_context.get("turn_order") or []
     next_actor = None
@@ -2674,6 +2709,7 @@ def _render_keeper_workspace_page(
                         snapshot=snapshot,
                         session_id=session_id,
                         operator_id=operator_id,
+                        completion_notices=prompt_completion_notices,
                         assistant_scope=assistant_scope,
                         assistant_adoption=assistant_adoption,
                     )}
@@ -2690,6 +2726,7 @@ def _render_keeper_workspace_page(
                         snapshot=snapshot,
                         session_id=session_id,
                         reviewer_id=operator_id,
+                        completion_notices=draft_completion_notices,
                         assistant_scope=assistant_scope,
                         assistant_adoption=assistant_adoption,
                     )}
@@ -4303,6 +4340,7 @@ async def web_app_keeper_prompt_status(
             notice=response.message,
             action_result={
                 "kind": "prompt_status",
+                "target_id": prompt_id,
                 "payload": response.model_dump(mode="json"),
                 "note": note,
             },
@@ -4344,6 +4382,7 @@ async def web_app_keeper_draft_review(
             notice=response.message,
             action_result={
                 "kind": "draft_review",
+                "target_id": draft_id,
                 "payload": response.model_dump(mode="json"),
                 "editor_notes": editor_notes,
             },

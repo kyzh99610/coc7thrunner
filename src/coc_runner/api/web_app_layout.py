@@ -525,6 +525,13 @@ legend {
   padding-top: 10px;
   border-top: 1px dashed rgba(133, 94, 60, 0.22);
 }
+.assistant-completion-status {
+  margin: 10px 0 0;
+  padding: 10px 12px;
+  border-radius: 12px;
+  border: 1px solid rgba(49, 107, 72, 0.22);
+  background: rgba(237, 247, 239, 0.92);
+}
 .assistant-draft-source {
   position: absolute;
   left: -9999px;
