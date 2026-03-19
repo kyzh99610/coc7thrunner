@@ -226,6 +226,41 @@ def test_web_app_keeper_workspace_surfaces_pending_ops_and_legacy_handoffs(
     assert f'/playtest/sessions/{session_id}/keeper#live-control"' in html
 
 
+def test_web_app_prompt_card_shows_pre_generation_local_context_preview(
+    client: TestClient,
+) -> None:
+    session_id = _start_keeper_dashboard_session(client)
+    _advance_keeper_dashboard_session(client, session_id)
+
+    response = client.get(f"/app/sessions/{session_id}/keeper")
+
+    assert response.status_code == 200
+    html = response.text
+    assert "本次生成将使用的局部上下文摘要" in html
+    assert "当前 Prompt：" in html
+    assert "当前状态 / 类别：" in html
+    assert "最近 note：" in html
+    assert "最近处理摘要：" in html
+    assert "本次草稿将基于当前 prompt 与最近处理上下文生成，不会直接执行任何动作。" in html
+
+
+def test_web_app_draft_card_shows_pre_generation_local_context_preview(
+    client: TestClient,
+) -> None:
+    session_id = _start_keeper_dashboard_session(client)
+    _advance_keeper_dashboard_session(client, session_id)
+
+    response = client.get(f"/app/sessions/{session_id}/keeper")
+
+    assert response.status_code == 200
+    html = response.text
+    assert "当前草稿：" in html
+    assert "当前 review 状态：" in html
+    assert "最近 editor note：" in html
+    assert "最近 review 摘要：" in html
+    assert "本次草稿将基于当前 draft 与最近审阅上下文生成，不会直接执行任何动作。" in html
+
+
 def test_web_app_keeper_assistant_uses_keeper_context_without_writing_state(
     client: TestClient,
 ) -> None:

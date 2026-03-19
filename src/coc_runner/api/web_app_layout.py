@@ -500,6 +500,16 @@ legend {
   border: 1px dashed var(--line);
   background: rgba(255, 255, 255, 0.54);
 }
+.assistant-context-preview {
+  margin: 12px 0;
+  padding: 12px;
+  border-radius: 14px;
+  border: 1px solid var(--line);
+  background: rgba(255, 250, 242, 0.76);
+}
+.assistant-context-preview .meta-list {
+  margin: 8px 0 0;
+}
 .assistant-draft-source {
   position: absolute;
   left: -9999px;

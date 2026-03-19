@@ -942,6 +942,94 @@ def _keeper_draft_scope_metadata(
     }
 
 
+def _render_prompt_generation_preview(
+    prompt: dict[str, Any],
+    *,
+    local_context: dict[str, Any],
+) -> str:
+    prompt_label = _excerpt(prompt.get("prompt_text"), limit=48) or str(
+        prompt.get("prompt_id") or "当前 prompt"
+    )
+    current_status = _normalize_form_text(local_context.get("current_status")) or "未标记"
+    current_category = _normalize_form_text(local_context.get("current_category")) or "未标记"
+    latest_note = _normalize_form_text(local_context.get("latest_note"))
+    recent_update = local_context.get("recent_update") or {}
+    recent_update_bits: list[str] = []
+    if recent_update.get("status"):
+        recent_update_bits.append(f"状态 {recent_update.get('status')}")
+    if recent_update.get("priority") is not None:
+        recent_update_bits.append(f"优先级 {recent_update.get('priority')}")
+    note_count_added = recent_update.get("note_count_added")
+    if note_count_added not in (None, "", 0):
+        recent_update_bits.append(f"新增备注 {note_count_added}")
+    recent_update_summary = " / ".join(recent_update_bits)
+    latest_note_label = (
+        f"已纳入（{_excerpt(latest_note, limit=28)}）"
+        if latest_note
+        else "无，将仅参考当前 Prompt"
+    )
+    recent_update_label = (
+        f"已纳入（{recent_update_summary}）"
+        if recent_update_summary
+        else "无，将不额外引用处理摘要"
+    )
+    return f"""
+      <div class="assistant-context-preview">
+        <p class="meta-line"><strong>本次生成将使用的局部上下文摘要</strong></p>
+        <ul class="meta-list">
+          <li>当前 Prompt：{escape(prompt_label)}</li>
+          <li>当前状态 / 类别：{escape(current_status)} / {escape(current_category)}</li>
+          <li>最近 note：{escape(latest_note_label)}</li>
+          <li>最近处理摘要：{escape(recent_update_label)}</li>
+          <li>输入说明：本次草稿将基于当前 prompt 与最近处理上下文生成，不会直接执行任何动作。</li>
+        </ul>
+      </div>
+    """
+
+
+def _render_draft_generation_preview(
+    draft: dict[str, Any],
+    *,
+    local_context: dict[str, Any],
+) -> str:
+    draft_label = _excerpt(draft.get("draft_text"), limit=48) or str(
+        draft.get("draft_id") or "当前草稿"
+    )
+    current_review_status = _normalize_form_text(local_context.get("current_review_status")) or (
+        _normalize_form_text(draft.get("review_status")) or "未标记"
+    )
+    recent_review = local_context.get("recent_review") or {}
+    recent_editor_note = _normalize_form_text(recent_review.get("editor_notes"))
+    recent_review_bits: list[str] = []
+    if recent_review.get("decision"):
+        recent_review_bits.append(f"决策 {recent_review.get('decision')}")
+    if recent_review.get("review_status"):
+        recent_review_bits.append(f"状态 {recent_review.get('review_status')}")
+    recent_review_summary = " / ".join(recent_review_bits)
+    recent_editor_note_label = (
+        f"已纳入（{_excerpt(recent_editor_note, limit=28)}）"
+        if recent_editor_note
+        else "无，将仅参考当前待审草稿"
+    )
+    recent_review_label = (
+        f"已纳入（{recent_review_summary}）"
+        if recent_review_summary
+        else "无，将不额外引用审阅摘要"
+    )
+    return f"""
+      <div class="assistant-context-preview">
+        <p class="meta-line"><strong>本次生成将使用的局部上下文摘要</strong></p>
+        <ul class="meta-list">
+          <li>当前草稿：{escape(draft_label)}</li>
+          <li>当前 review 状态：{escape(current_review_status)}</li>
+          <li>最近 editor note：{escape(recent_editor_note_label)}</li>
+          <li>最近 review 摘要：{escape(recent_review_label)}</li>
+          <li>输入说明：本次草稿将基于当前 draft 与最近审阅上下文生成，不会直接执行任何动作。</li>
+        </ul>
+      </div>
+    """
+
+
 def _build_keeper_prompt_object_assistant_context(
     *,
     snapshot: dict[str, Any],
@@ -1891,6 +1979,7 @@ def _render_session_overview_page(*, session_id: str, snapshot: dict[str, Any]) 
 def _render_prompt_cards(
     prompts: list[dict[str, Any]],
     *,
+    snapshot: dict[str, Any],
     session_id: str,
     operator_id: str,
     assistant_adoption: dict[str, str] | None = None,
@@ -1904,6 +1993,7 @@ def _render_prompt_cards(
         adoption_status_id = f"prompt-note-status-{prompt_id}"
         current_notes = prompt.get("notes") or []
         notes_html = "".join(f"<li>{escape(str(note))}</li>" for note in current_notes[:3])
+        prompt_local_context = _build_prompt_local_context(snapshot, prompt)
         cards.append(
             f"""
             <article class="list-card">
@@ -1915,6 +2005,7 @@ def _render_prompt_cards(
                 <div class="divider"></div>
               <p class="meta-line">当前备注</p>
               {f'<ul class="meta-list">{notes_html}</ul>' if notes_html else '<p class="empty">当前还没有 keeper 备注。</p>'}
+              {_render_prompt_generation_preview(prompt, local_context=prompt_local_context)}
               <form method="post" action="/app/sessions/{escape(session_id)}/keeper/prompts/{escape(prompt_id)}/assistant">
                 <button class="button-button secondary" type="submit">为这条 Prompt 生成备注草稿</button>
               </form>
@@ -1965,6 +2056,7 @@ def _render_prompt_cards(
 def _render_draft_cards(
     drafts: list[dict[str, Any]],
     *,
+    snapshot: dict[str, Any],
     session_id: str,
     reviewer_id: str,
     assistant_adoption: dict[str, str] | None = None,
@@ -1976,6 +2068,7 @@ def _render_draft_cards(
         draft_id = str(draft.get("draft_id") or "draft")
         note_target_id = f"draft-review-note-{draft_id}"
         adoption_status_id = f"draft-review-status-{draft_id}"
+        draft_local_context = _build_draft_local_context(snapshot, draft)
         cards.append(
             f"""
             <article class="list-card">
@@ -1984,6 +2077,7 @@ def _render_draft_cards(
                 <span class="tag warn">{escape(str(draft.get('risk_level') or 'low'))}</span>
               </div>
               <p>{escape(_excerpt(draft.get('rationale_summary') or '待人工审核'))}</p>
+              {_render_draft_generation_preview(draft, local_context=draft_local_context)}
               <form method="post" action="/app/sessions/{escape(session_id)}/draft-actions/{escape(draft_id)}/assistant">
                 <button class="button-button secondary" type="submit">为这条草稿生成审阅说明</button>
               </form>
@@ -2433,6 +2527,7 @@ def _render_keeper_workspace_page(
                   <div class="card-list">
                     {_render_prompt_cards(
                         list(workflow.get('active_prompts') or []),
+                        snapshot=snapshot,
                         session_id=session_id,
                         operator_id=operator_id,
                         assistant_adoption=assistant_adoption,
@@ -2447,6 +2542,7 @@ def _render_keeper_workspace_page(
                   <div class="card-list">
                     {_render_draft_cards(
                         list(keeper_view.get('visible_draft_actions') or []),
+                        snapshot=snapshot,
                         session_id=session_id,
                         reviewer_id=operator_id,
                         assistant_adoption=assistant_adoption,
