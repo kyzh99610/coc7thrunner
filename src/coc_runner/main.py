@@ -9,6 +9,7 @@ from coc_runner.api.exception_handlers import request_validation_exception_handl
 from coc_runner.api.routes.health import router as health_router
 from coc_runner.api.routes.knowledge import router as knowledge_router
 from coc_runner.api.routes.playtest import router as playtest_router
+from coc_runner.api.routes.web_app import router as web_app_router
 from coc_runner.api.routes.rules import router as rules_router
 from coc_runner.api.routes.sessions import router as sessions_router
 from coc_runner.application.dice_execution import (
@@ -17,6 +18,10 @@ from coc_runner.application.dice_execution import (
     build_default_dice_style_subprocess_command,
 )
 from coc_runner.application.knowledge_service import KnowledgeService
+from coc_runner.application.local_llm_service import (
+    LocalLLMService,
+    OpenAICompatibleLocalLLMProvider,
+)
 from coc_runner.application.session_service import SessionService
 from coc_runner.config import Settings, get_settings
 from coc_runner.infrastructure.database import Database
@@ -28,6 +33,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     runtime_settings = settings or get_settings()
     database = Database(runtime_settings.db_url)
     dice_execution_backend = None
+    local_llm_provider = None
+    local_llm_configuration_error = None
     if runtime_settings.dice_backend_mode == "dice_style_subprocess":
         dice_execution_backend = DiceStyleExecutionBackend(
             client=DiceStyleSubprocessClient(
@@ -37,6 +44,16 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 timeout_seconds=runtime_settings.dice_subprocess_timeout_seconds,
             )
         )
+    if runtime_settings.local_llm_enabled:
+        if runtime_settings.local_llm_base_url:
+            local_llm_provider = OpenAICompatibleLocalLLMProvider(
+                base_url=runtime_settings.local_llm_base_url,
+                model=runtime_settings.local_llm_model,
+                api_key=runtime_settings.local_llm_api_key,
+                timeout_seconds=runtime_settings.local_llm_timeout_seconds,
+            )
+        else:
+            local_llm_configuration_error = "已启用本地 LLM，但尚未配置本地 OpenAI-compatible endpoint。"
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
@@ -54,6 +71,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             knowledge_repository,
             default_language=runtime_settings.default_language,
         )
+        app.state.local_llm_service = LocalLLMService(
+            local_llm_provider,
+            enabled=runtime_settings.local_llm_enabled,
+            configuration_error=local_llm_configuration_error,
+        )
         app.state.settings = runtime_settings
         yield
 
@@ -65,6 +87,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(health_router)
     app.include_router(sessions_router)
     app.include_router(playtest_router)
+    app.include_router(web_app_router)
     app.include_router(knowledge_router)
     app.include_router(rules_router)
     return app

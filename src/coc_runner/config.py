@@ -15,6 +15,11 @@ class Settings(BaseModel):
     db_url: str = Field(default="sqlite:///./data/coc_runner.db")
     default_language: LanguagePreference = LanguagePreference.ZH_CN
     behavior_memory_limit: int = Field(default=5, ge=1)
+    local_llm_enabled: bool = False
+    local_llm_base_url: str | None = None
+    local_llm_model: str = Field(default="local-model", min_length=1)
+    local_llm_api_key: str | None = None
+    local_llm_timeout_seconds: float = Field(default=10.0, gt=0)
     dice_backend_mode: Literal["local", "dice_style_subprocess"] = "local"
     dice_subprocess_timeout_seconds: float = Field(default=3.0, gt=0)
     dice_style_provider_command: tuple[str, ...] = ()
@@ -35,6 +40,14 @@ def get_settings() -> Settings:
         db_url=os.getenv("COC_RUNNER_DB_URL", "sqlite:///./data/coc_runner.db"),
         default_language=os.getenv("COC_RUNNER_DEFAULT_LANGUAGE", LanguagePreference.ZH_CN),
         behavior_memory_limit=int(os.getenv("COC_RUNNER_BEHAVIOR_MEMORY_LIMIT", "5")),
+        local_llm_enabled=os.getenv("COC_RUNNER_LOCAL_LLM_ENABLED", "").strip().lower()
+        in {"1", "true", "yes", "on"},
+        local_llm_base_url=os.getenv("COC_RUNNER_LOCAL_LLM_BASE_URL") or None,
+        local_llm_model=os.getenv("COC_RUNNER_LOCAL_LLM_MODEL", "local-model"),
+        local_llm_api_key=os.getenv("COC_RUNNER_LOCAL_LLM_API_KEY") or None,
+        local_llm_timeout_seconds=float(
+            os.getenv("COC_RUNNER_LOCAL_LLM_TIMEOUT_SECONDS", "10.0")
+        ),
         dice_backend_mode=os.getenv("COC_RUNNER_DICE_BACKEND_MODE", "local"),
         dice_subprocess_timeout_seconds=float(
             os.getenv("COC_RUNNER_DICE_SUBPROCESS_TIMEOUT_SECONDS", "3.0")

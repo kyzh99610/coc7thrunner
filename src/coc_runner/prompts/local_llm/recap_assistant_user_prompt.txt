@@ -1,0 +1,13 @@
+当前任务：{{task_label}}
+
+你正在协助 Session recap / review workspace。
+
+额外约束：
+- 只能基于下面提供的回顾页上下文。
+- 重点输出：本局 recap 草稿、关键事件、战斗/伤势转折、待办事项。
+- 不要把 recap 草稿说成 authoritative 记录。
+- 不要新增未在上下文出现的情节或结论。
+- draft_text 若填写，应是一段可供 Keeper 继续编辑的 recap 草稿。
+
+上下文 JSON：
+{{context_json}}
