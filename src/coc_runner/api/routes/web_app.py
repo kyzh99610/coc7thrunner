@@ -84,6 +84,10 @@ KEEPER_ASSISTANT_SOURCE_CONTEXT_BY_KIND: dict[str, str] = {
     "prompt_note_draft": "基于当前 keeper workspace 摘要、待处理 prompts 与近期事件。",
     "draft_review_note_draft": "基于当前 keeper workspace 摘要与待审草稿概览。",
 }
+KEEPER_ASSISTANT_SOURCE_OBJECT_TYPE_LABELS: dict[str, str] = {
+    "prompt": "单条 Prompt",
+    "draft": "单条待审草稿",
+}
 KEEPER_ASSISTANT_DRAFT_SOURCE_ID = "keeper-assistant-draft-source"
 KNOWLEDGE_ASSISTANT_TASKS: dict[str, str] = {
     "source_summary": "资料摘要",
@@ -466,6 +470,8 @@ def _render_local_llm_assistant_output(
 
 def _keeper_assistant_adoption(
     result: LocalLLMAssistantResult | None,
+    *,
+    assistant_scope: dict[str, str] | None = None,
 ) -> dict[str, str] | None:
     if result is None or result.status != "success" or result.assistant is None:
         return None
@@ -473,23 +479,26 @@ def _keeper_assistant_adoption(
     if not draft_text:
         return None
     target = (
-        _normalize_form_text(result.assistant.suggested_target)
+        _normalize_form_text((assistant_scope or {}).get("suggested_target"))
+        or _normalize_form_text(result.assistant.suggested_target)
         or KEEPER_ASSISTANT_TARGET_BY_TASK.get(result.task_key)
     )
     if target not in KEEPER_ASSISTANT_TARGET_LABELS:
         return None
     draft_kind = (
-        _normalize_form_text(result.assistant.draft_kind)
+        _normalize_form_text((assistant_scope or {}).get("draft_kind"))
+        or _normalize_form_text(result.assistant.draft_kind)
         or KEEPER_ASSISTANT_DRAFT_KIND_BY_TASK.get(result.task_key)
     )
     if draft_kind not in KEEPER_ASSISTANT_DRAFT_KIND_LABELS:
         return None
     source_context_label = (
-        _normalize_form_text(result.assistant.source_context_label)
+        _normalize_form_text((assistant_scope or {}).get("source_context_label"))
+        or _normalize_form_text(result.assistant.source_context_label)
         or KEEPER_ASSISTANT_SOURCE_CONTEXT_BY_KIND.get(draft_kind)
         or "基于当前 keeper workspace 可见摘要。"
     )
-    return {
+    adoption = {
         "source_id": KEEPER_ASSISTANT_DRAFT_SOURCE_ID,
         "draft_text": draft_text,
         "target": target,
@@ -502,25 +511,68 @@ def _keeper_assistant_adoption(
         "draft_kind_label": KEEPER_ASSISTANT_DRAFT_KIND_LABELS[draft_kind],
         "source_context_label": source_context_label,
     }
+    if assistant_scope:
+        for key in (
+            "source_object_kind",
+            "source_object_id",
+            "source_object_label",
+            "source_object_type_label",
+        ):
+            value = _normalize_form_text(assistant_scope.get(key))
+            if value:
+                adoption[key] = value
+    return adoption
 
 
 def _render_assistant_draft_source(
+    *,
+    assistant_scope: dict[str, str] | None,
     assistant_adoption: dict[str, str] | None,
 ) -> str:
-    if assistant_adoption is None:
+    if assistant_adoption is None and assistant_scope is None:
         return ""
+    object_lines = ""
+    if assistant_scope:
+        object_type_label = str(assistant_scope.get("source_object_type_label") or "当前对象")
+        object_id = str(assistant_scope.get("source_object_id") or "—")
+        object_label = str(assistant_scope.get("source_object_label") or object_id)
+        scope_context = str(
+            assistant_scope.get("source_context_label")
+            or "基于当前 keeper workspace 可见摘要。"
+        )
+        object_lines = f"""
+          <li>当前对象：{escape(object_type_label)}</li>
+          <li>对象标识：{escape(object_id)}</li>
+          <li>对象标签：{escape(object_label)}</li>
+          <li>来源语境：{escape(scope_context)}</li>
+        """
+    draft_lines = ""
+    hidden_source = ""
+    if assistant_adoption is not None:
+        hidden_source = f"""
+          <textarea id="{escape(assistant_adoption['source_id'])}" class="assistant-draft-source" aria-hidden="true" tabindex="-1">{escape(assistant_adoption['draft_text'])}</textarea>
+        """
+        source_line = (
+            f"<li>来源语境：{escape(assistant_adoption['source_context_label'])}</li>"
+            if not assistant_scope
+            else ""
+        )
+        draft_lines = f"""
+          <li>草稿类型：{escape(assistant_adoption['draft_kind_label'])}</li>
+          <li>推荐带入：{escape(assistant_adoption['target_label'])}</li>
+          {source_line}
+          <li>当前用途：供 Keeper 审阅后带入目标表单，再人工编辑并提交。</li>
+        """
     return f"""
-      <textarea id="{escape(assistant_adoption['source_id'])}" class="assistant-draft-source" aria-hidden="true" tabindex="-1">{escape(assistant_adoption['draft_text'])}</textarea>
+      {hidden_source}
       <article class="list-card">
         <div class="list-head">
-          <h3>当前可采纳草稿</h3>
+          <h3>{'当前可采纳草稿' if assistant_adoption is not None else '当前生成上下文'}</h3>
           <span class="tag success">manual adoption</span>
         </div>
         <ul class="meta-list">
-          <li>草稿类型：{escape(assistant_adoption['draft_kind_label'])}</li>
-          <li>推荐带入：{escape(assistant_adoption['target_label'])}</li>
-          <li>来源语境：{escape(assistant_adoption['source_context_label'])}</li>
-          <li>当前用途：供 Keeper 审阅后带入目标表单，再人工编辑并提交。</li>
+          {object_lines}
+          {draft_lines}
         </ul>
       </article>
     """
@@ -532,9 +584,16 @@ def _render_assistant_adopt_button(
     target_kind: str,
     target_id: str,
     status_id: str,
+    source_object_kind: str,
+    source_object_id: str,
 ) -> str:
     if assistant_adoption is None or assistant_adoption.get("target") != target_kind:
         return ""
+    scoped_object_kind = _normalize_form_text(assistant_adoption.get("source_object_kind"))
+    scoped_object_id = _normalize_form_text(assistant_adoption.get("source_object_id"))
+    if scoped_object_kind and scoped_object_id:
+        if scoped_object_kind != source_object_kind or scoped_object_id != source_object_id:
+            return ""
     target_field_label = assistant_adoption["target_field_label"]
     button_label = f"带入{target_field_label}"
     status_text = (
@@ -554,6 +613,22 @@ def _render_assistant_adopt_button(
       </div>
       <p class="helper">当前草稿用途：{escape(assistant_adoption['draft_kind_label'])}。将只带入{escape(target_field_label)}，不会自动提交。</p>
     """
+
+
+def _assistant_targets_current_object(
+    assistant_adoption: dict[str, str] | None,
+    *,
+    target_kind: str,
+    source_object_kind: str,
+    source_object_id: str,
+) -> bool:
+    if assistant_adoption is None or assistant_adoption.get("target") != target_kind:
+        return False
+    scoped_object_kind = _normalize_form_text(assistant_adoption.get("source_object_kind"))
+    scoped_object_id = _normalize_form_text(assistant_adoption.get("source_object_id"))
+    if scoped_object_kind and scoped_object_id:
+        return scoped_object_kind == source_object_kind and scoped_object_id == source_object_id
+    return True
 
 
 def _render_local_llm_assistant_panel(
@@ -719,6 +794,119 @@ def _build_keeper_assistant_context(
             for prompt_id, items in list(san_aftermath_suggestions.items())[:4]
         ],
         "recent_events": _event_excerpt_items(list(reversed(keeper_view.get("visible_events") or [])), limit=5),
+    }
+
+
+def _keeper_prompt_scope_metadata(prompt: dict[str, Any]) -> dict[str, str]:
+    prompt_id = str(prompt.get("prompt_id") or "prompt")
+    prompt_label = _excerpt(prompt.get("prompt_text"), limit=48) or prompt_id
+    return {
+        "source_object_kind": "prompt",
+        "source_object_id": prompt_id,
+        "source_object_label": prompt_label,
+        "source_object_type_label": KEEPER_ASSISTANT_SOURCE_OBJECT_TYPE_LABELS["prompt"],
+        "draft_kind": "prompt_note_draft",
+        "suggested_target": "prompt_note",
+        "source_context_label": f"基于当前 prompt：{prompt_label}（{prompt_id}）。",
+    }
+
+
+def _keeper_draft_scope_metadata(draft: dict[str, Any]) -> dict[str, str]:
+    draft_id = str(draft.get("draft_id") or "draft")
+    draft_label = _excerpt(draft.get("draft_text"), limit=48) or draft_id
+    return {
+        "source_object_kind": "draft",
+        "source_object_id": draft_id,
+        "source_object_label": draft_label,
+        "source_object_type_label": KEEPER_ASSISTANT_SOURCE_OBJECT_TYPE_LABELS["draft"],
+        "draft_kind": "draft_review_note_draft",
+        "suggested_target": "draft_review_editor_notes",
+        "source_context_label": f"基于当前待审草稿：{draft_label}（{draft_id}）。",
+    }
+
+
+def _build_keeper_prompt_object_assistant_context(
+    *,
+    snapshot: dict[str, Any],
+    keeper_view: dict[str, Any],
+    prompt: dict[str, Any],
+) -> dict[str, Any]:
+    current_scene, beat_id, beat_title = _scene_and_beat(snapshot)
+    scope = _keeper_prompt_scope_metadata(prompt)
+    workflow = keeper_view.get("keeper_workflow") or {}
+    return {
+        "session": {
+            "session_id": snapshot.get("session_id"),
+            "scenario_title": (snapshot.get("scenario") or {}).get("title"),
+            "status": snapshot.get("status"),
+            "current_scene": current_scene,
+            "current_beat": beat_id,
+            "current_beat_title": beat_title,
+        },
+        "source_object": {
+            "object_kind": scope["source_object_kind"],
+            "object_id": scope["source_object_id"],
+            "object_label": scope["source_object_label"],
+        },
+        "prompt": {
+            "prompt_id": prompt.get("prompt_id"),
+            "prompt_text": prompt.get("prompt_text"),
+            "category": prompt.get("category"),
+            "priority": prompt.get("priority"),
+            "status": prompt.get("status"),
+            "scene_id": prompt.get("scene_id"),
+            "beat_id": prompt.get("beat_id"),
+            "trigger_reason": prompt.get("trigger_reason"),
+            "notes": list(prompt.get("notes") or [])[:4],
+            "aftermath_label": prompt.get("aftermath_label"),
+            "duration_rounds": prompt.get("duration_rounds"),
+        },
+        "workflow_summary_lines": list((workflow.get("summary") or {}).get("summary_lines") or [])[:4],
+        "recent_events": _event_excerpt_items(list(reversed(keeper_view.get("visible_events") or [])), limit=3),
+    }
+
+
+def _build_keeper_draft_object_assistant_context(
+    *,
+    snapshot: dict[str, Any],
+    keeper_view: dict[str, Any],
+    draft: dict[str, Any],
+) -> dict[str, Any]:
+    current_scene, beat_id, beat_title = _scene_and_beat(snapshot)
+    participants = _participant_map(
+        [participant for participant in snapshot.get("participants") or [] if isinstance(participant, dict)]
+    )
+    scope = _keeper_draft_scope_metadata(draft)
+    actor_id = str(draft.get("actor_id") or "")
+    return {
+        "session": {
+            "session_id": snapshot.get("session_id"),
+            "scenario_title": (snapshot.get("scenario") or {}).get("title"),
+            "status": snapshot.get("status"),
+            "current_scene": current_scene,
+            "current_beat": beat_id,
+            "current_beat_title": beat_title,
+        },
+        "source_object": {
+            "object_kind": scope["source_object_kind"],
+            "object_id": scope["source_object_id"],
+            "object_label": scope["source_object_label"],
+        },
+        "draft_review": {
+            "draft_id": draft.get("draft_id"),
+            "draft_text": draft.get("draft_text"),
+            "risk_level": draft.get("risk_level"),
+            "review_status": draft.get("review_status"),
+            "rationale_summary": draft.get("rationale_summary"),
+            "requires_explicit_approval": draft.get("requires_explicit_approval"),
+            "actor_id": actor_id or None,
+            "actor_name": (
+                (participants.get(actor_id) or {}).get("display_name")
+                if actor_id
+                else None
+            ),
+        },
+        "recent_events": _event_excerpt_items(list(reversed(keeper_view.get("visible_events") or [])), limit=3),
     }
 
 
@@ -1587,9 +1775,12 @@ def _render_prompt_cards(
                 <span class="tag">{escape(str(prompt.get('status') or 'pending'))}</span>
               </div>
               <p>{escape(str(prompt.get('trigger_reason') or prompt.get('category') or 'kp_prompt'))}</p>
-              <div class="divider"></div>
+                <div class="divider"></div>
               <p class="meta-line">当前备注</p>
               {f'<ul class="meta-list">{notes_html}</ul>' if notes_html else '<p class="empty">当前还没有 keeper 备注。</p>'}
+              <form method="post" action="/app/sessions/{escape(session_id)}/keeper/prompts/{escape(prompt_id)}/assistant">
+                <button class="button-button secondary" type="submit">为这条 Prompt 生成备注草稿</button>
+              </form>
               <form method="post" action="/app/sessions/{escape(session_id)}/keeper/prompts/{escape(prompt_id)}/status">
                 <input type="hidden" name="operator_id" value="{escape(operator_id)}" />
                 <label>
@@ -1601,6 +1792,8 @@ def _render_prompt_cards(
                     target_kind='prompt_note',
                     target_id=note_target_id,
                     status_id=adoption_status_id,
+                    source_object_kind='prompt',
+                    source_object_id=prompt_id,
                 )}
                 {
                     (
@@ -1609,7 +1802,12 @@ def _render_prompt_cards(
                         f"{escape(assistant_adoption['source_context_label'])} 目标：当前 Prompt 备注框。"
                         ' 只会带入文本，不会自动提交。</p>'
                     )
-                    if assistant_adoption is not None and assistant_adoption.get("target") == "prompt_note"
+                    if _assistant_targets_current_object(
+                        assistant_adoption,
+                        target_kind="prompt_note",
+                        source_object_kind="prompt",
+                        source_object_id=prompt_id,
+                    )
                     else ""
                 }
                 <div class="inline-form-grid">
@@ -1649,6 +1847,9 @@ def _render_draft_cards(
                 <span class="tag warn">{escape(str(draft.get('risk_level') or 'low'))}</span>
               </div>
               <p>{escape(_excerpt(draft.get('rationale_summary') or '待人工审核'))}</p>
+              <form method="post" action="/app/sessions/{escape(session_id)}/draft-actions/{escape(draft_id)}/assistant">
+                <button class="button-button secondary" type="submit">为这条草稿生成审阅说明</button>
+              </form>
               <form method="post" action="/app/sessions/{escape(session_id)}/draft-actions/{escape(draft_id)}/review">
                 <input type="hidden" name="reviewer_id" value="{escape(reviewer_id)}" />
                 <label>
@@ -1660,6 +1861,8 @@ def _render_draft_cards(
                     target_kind='draft_review_editor_notes',
                     target_id=note_target_id,
                     status_id=adoption_status_id,
+                    source_object_kind='draft',
+                    source_object_id=draft_id,
                 )}
                 {
                     (
@@ -1668,7 +1871,12 @@ def _render_draft_cards(
                         f"{escape(assistant_adoption['source_context_label'])} 目标：当前草稿审阅说明框。"
                         ' 只会带入文本，不会自动提交。</p>'
                     )
-                    if assistant_adoption is not None and assistant_adoption.get("target") == "draft_review_editor_notes"
+                    if _assistant_targets_current_object(
+                        assistant_adoption,
+                        target_kind="draft_review_editor_notes",
+                        source_object_kind="draft",
+                        source_object_id=draft_id,
+                    )
                     else ""
                 }
                 <div class="inline-form-grid">
@@ -1949,6 +2157,7 @@ def _render_keeper_workspace_page(
     detail: dict[str, Any] | str | None = None,
     action_result: dict[str, Any] | None = None,
     assistant_result: LocalLLMAssistantResult | None = None,
+    assistant_scope: dict[str, str] | None = None,
     selected_assistant_task: str | None = None,
 ) -> HTMLResponse:
     participants = [
@@ -1967,7 +2176,10 @@ def _render_keeper_workspace_page(
     progress_state = keeper_view.get("progress_state") or {}
     combat_context = snapshot.get("combat_context") or {}
     operator_id = _keeper_operator_id(snapshot)
-    assistant_adoption = _keeper_assistant_adoption(assistant_result)
+    assistant_adoption = _keeper_assistant_adoption(
+        assistant_result,
+        assistant_scope=assistant_scope,
+    )
     current_scene, beat_id, beat_title = _scene_and_beat(snapshot)
     turn_order = combat_context.get("turn_order") or []
     next_actor = None
@@ -2177,7 +2389,10 @@ def _render_keeper_workspace_page(
                 tasks=KEEPER_ASSISTANT_TASKS,
                 selected_task=selected_assistant_task,
                 result=assistant_result,
-                extra_output_html=_render_assistant_draft_source(assistant_adoption),
+                extra_output_html=_render_assistant_draft_source(
+                    assistant_scope=assistant_scope,
+                    assistant_adoption=assistant_adoption,
+                ),
             )}
             <section class="surface">
               <div class="surface-header">
@@ -3216,6 +3431,7 @@ def _render_app_keeper_from_service(
     detail: dict[str, Any] | str | None = None,
     action_result: dict[str, Any] | None = None,
     assistant_result: LocalLLMAssistantResult | None = None,
+    assistant_scope: dict[str, str] | None = None,
     selected_assistant_task: str | None = None,
     status_code: int = status.HTTP_200_OK,
 ) -> HTMLResponse:
@@ -3252,6 +3468,7 @@ def _render_app_keeper_from_service(
         detail=detail,
         action_result=action_result,
         assistant_result=assistant_result,
+        assistant_scope=assistant_scope,
         selected_assistant_task=selected_assistant_task,
     )
     response.status_code = status_code
@@ -3529,6 +3746,142 @@ async def web_app_keeper_assistant(
         san_aftermath_suggestions=san_aftermath_suggestions,
         assistant_result=assistant_result,
         selected_assistant_task=selected_task,
+    )
+
+
+@router.post("/sessions/{session_id}/keeper/prompts/{prompt_id}/assistant", response_class=HTMLResponse)
+def web_app_keeper_prompt_assistant(
+    session_id: str,
+    prompt_id: str,
+    service: SessionService = Depends(get_session_service),
+    local_llm_service: LocalLLMService = Depends(get_local_llm_service),
+) -> HTMLResponse:
+    try:
+        session, keeper_view, checkpoints, warnings = service.get_keeper_workspace(session_id)
+    except LookupError as exc:
+        body = _detail_block(extract_error_detail(exc)) + _page_head(
+            eyebrow="Keeper Workspace",
+            title="Keeper 工作区不可用",
+            summary="当前无法加载 keeper workspace。",
+            actions=[("返回 Sessions", "/app/sessions", "ghost")],
+        )
+        return render_web_app_shell(
+            title=f"Session {session_id} Keeper Missing",
+            sidebar_html=_render_sidebar(active_section="keeper"),
+            body_html=body,
+            status_code=status.HTTP_404_NOT_FOUND,
+        )
+    snapshot = session.model_dump(mode="json")
+    keeper_view_snapshot = keeper_view.model_dump(mode="json")
+    prompt = next(
+        (
+            item
+            for item in list((keeper_view_snapshot.get("keeper_workflow") or {}).get("active_prompts") or [])
+            if str(item.get("prompt_id") or "") == prompt_id
+        ),
+        None,
+    )
+    if prompt is None:
+        return _render_app_keeper_from_service(
+            service=service,
+            session_id=session_id,
+            local_llm_service=local_llm_service,
+            detail=f"当前无法定位 prompt {prompt_id} 的 keeper 可见上下文。",
+            status_code=status.HTTP_404_NOT_FOUND,
+        )
+    runtime_assistance = service.get_keeper_runtime_assistance(keeper_view=keeper_view)
+    san_aftermath_suggestions = service.get_keeper_san_aftermath_suggestions(session=session)
+    assistant_scope = _keeper_prompt_scope_metadata(prompt)
+    assistant_result = _generate_local_llm_assistant(
+        local_llm_service=local_llm_service,
+        workspace_key="keeper_workspace",
+        task_key="note_draft",
+        task_label=KEEPER_ASSISTANT_TASKS["note_draft"],
+        context=_build_keeper_prompt_object_assistant_context(
+            snapshot=snapshot,
+            keeper_view=keeper_view_snapshot,
+            prompt=prompt,
+        ),
+    )
+    return _render_keeper_workspace_page(
+        session_id=session_id,
+        snapshot=snapshot,
+        keeper_view=keeper_view_snapshot,
+        checkpoints=[checkpoint.model_dump(mode="json") for checkpoint in checkpoints],
+        warnings=[warning.model_dump(mode="json") for warning in warnings],
+        runtime_assistance=runtime_assistance,
+        san_aftermath_suggestions=san_aftermath_suggestions,
+        assistant_result=assistant_result,
+        assistant_scope=assistant_scope,
+        selected_assistant_task="note_draft",
+    )
+
+
+@router.post("/sessions/{session_id}/draft-actions/{draft_id}/assistant", response_class=HTMLResponse)
+def web_app_keeper_draft_assistant(
+    session_id: str,
+    draft_id: str,
+    service: SessionService = Depends(get_session_service),
+    local_llm_service: LocalLLMService = Depends(get_local_llm_service),
+) -> HTMLResponse:
+    try:
+        session, keeper_view, checkpoints, warnings = service.get_keeper_workspace(session_id)
+    except LookupError as exc:
+        body = _detail_block(extract_error_detail(exc)) + _page_head(
+            eyebrow="Keeper Workspace",
+            title="Keeper 工作区不可用",
+            summary="当前无法加载 keeper workspace。",
+            actions=[("返回 Sessions", "/app/sessions", "ghost")],
+        )
+        return render_web_app_shell(
+            title=f"Session {session_id} Keeper Missing",
+            sidebar_html=_render_sidebar(active_section="keeper"),
+            body_html=body,
+            status_code=status.HTTP_404_NOT_FOUND,
+        )
+    snapshot = session.model_dump(mode="json")
+    keeper_view_snapshot = keeper_view.model_dump(mode="json")
+    draft = next(
+        (
+            item
+            for item in list(keeper_view_snapshot.get("visible_draft_actions") or [])
+            if str(item.get("draft_id") or "") == draft_id
+        ),
+        None,
+    )
+    if draft is None:
+        return _render_app_keeper_from_service(
+            service=service,
+            session_id=session_id,
+            local_llm_service=local_llm_service,
+            detail=f"当前无法定位待审草稿 {draft_id} 的 keeper 可见上下文。",
+            status_code=status.HTTP_404_NOT_FOUND,
+        )
+    runtime_assistance = service.get_keeper_runtime_assistance(keeper_view=keeper_view)
+    san_aftermath_suggestions = service.get_keeper_san_aftermath_suggestions(session=session)
+    assistant_scope = _keeper_draft_scope_metadata(draft)
+    assistant_result = _generate_local_llm_assistant(
+        local_llm_service=local_llm_service,
+        workspace_key="keeper_workspace",
+        task_key="draft_review_note_draft",
+        task_label=KEEPER_ASSISTANT_TASKS["draft_review_note_draft"],
+        context=_build_keeper_draft_object_assistant_context(
+            snapshot=snapshot,
+            keeper_view=keeper_view_snapshot,
+            draft=draft,
+        ),
+    )
+    return _render_keeper_workspace_page(
+        session_id=session_id,
+        snapshot=snapshot,
+        keeper_view=keeper_view_snapshot,
+        checkpoints=[checkpoint.model_dump(mode="json") for checkpoint in checkpoints],
+        warnings=[warning.model_dump(mode="json") for warning in warnings],
+        runtime_assistance=runtime_assistance,
+        san_aftermath_suggestions=san_aftermath_suggestions,
+        assistant_result=assistant_result,
+        assistant_scope=assistant_scope,
+        selected_assistant_task="draft_review_note_draft",
     )
 
 

@@ -28,6 +28,10 @@ class _FakeLocalLLMService:
 
     def generate_assistant(self, request):
         self.requests.append(request)
+        source_object = request.context.get("source_object") or {}
+        object_kind = source_object.get("object_kind")
+        object_id = source_object.get("object_id")
+        object_label = source_object.get("object_label")
         draft_kind = {
             "note_draft": "prompt_note_draft",
             "draft_review_note_draft": "draft_review_note_draft",
@@ -40,6 +44,10 @@ class _FakeLocalLLMService:
             "note_draft": "基于当前 keeper workspace 摘要与待处理 prompts。",
             "draft_review_note_draft": "基于当前 keeper workspace 摘要与待审草稿概览。",
         }.get(request.task_key)
+        if object_kind == "prompt" and object_id and object_label:
+            source_context_label = f"基于当前 prompt：{object_label}（{object_id}）。"
+        if object_kind == "draft" and object_id and object_label:
+            source_context_label = f"基于当前待审草稿：{object_label}（{object_id}）。"
         return LocalLLMAssistantResult(
             status="success",
             workspace_key=request.workspace_key,
@@ -206,8 +214,11 @@ def test_web_app_keeper_workspace_surfaces_pending_ops_and_legacy_handoffs(
     assert "KP：秦老板看到调查员翻出旧图纸时，应表现出短暂失态。" in html
     assert "KP 草稿：若调查员继续追问秦老板，应准备对话压力。" in html
     assert f'action="/app/sessions/{session_id}/keeper/prompts/' in html
-    assert 'name="note"' in html
+    assert f'action="/app/sessions/{session_id}/keeper/prompts/' in html
     assert f'action="/app/sessions/{session_id}/draft-actions/' in html
+    assert "为这条 Prompt 生成备注草稿" in html
+    assert "为这条草稿生成审阅说明" in html
+    assert 'name="note"' in html
     assert 'name="editor_notes"' in html
     assert f'/playtest/sessions/{session_id}/keeper#prompt-targets"' in html
     assert f'/playtest/sessions/{session_id}/keeper#draft-review-targets"' in html
@@ -286,6 +297,70 @@ def test_web_app_keeper_assistant_review_note_adoption_targets_editor_notes(
     assert 'type="button"' in html
     assert 'data-adopt-status="draft-review-status-' in html
     assert 'data-adopt-status-text="已带入 草稿审阅说明草稿。来源：基于当前 keeper workspace 摘要与待审草稿概览。 当前仍需 Keeper 人工编辑并提交。"' in html
+    after_snapshot = _get_snapshot(client, session_id)
+    assert before_snapshot == after_snapshot
+
+
+def test_web_app_prompt_card_can_generate_object_scoped_assistant_draft(
+    client: TestClient,
+) -> None:
+    session_id = _start_keeper_dashboard_session(client)
+    _advance_keeper_dashboard_session(client, session_id)
+    fake_service = _FakeLocalLLMService()
+    client.app.state.local_llm_service = fake_service
+    _, keeper_view, _, _ = client.app.state.session_service.get_keeper_workspace(session_id)
+    prompt = keeper_view.keeper_workflow.active_prompts[0]
+    prompt_id = prompt.prompt_id
+    before_snapshot = _get_snapshot(client, session_id)
+
+    response = client.post(
+        f"/app/sessions/{session_id}/keeper/prompts/{prompt_id}/assistant",
+    )
+
+    assert response.status_code == 200
+    html = response.text
+    assert "当前对象：单条 Prompt" in html
+    assert f"对象标识：{prompt_id}" in html
+    assert "来源语境：基于当前 prompt：" in html
+    assert prompt.prompt_text[:12] in html
+    assert f'data-adopt-target="prompt-note-{prompt_id}"' in html
+    assert 'data-adopt-target="draft-review-note-' not in html
+    assert len(fake_service.requests) == 1
+    request = fake_service.requests[0]
+    assert request.context["source_object"]["object_kind"] == "prompt"
+    assert request.context["source_object"]["object_id"] == prompt_id
+    after_snapshot = _get_snapshot(client, session_id)
+    assert before_snapshot == after_snapshot
+
+
+def test_web_app_draft_card_can_generate_object_scoped_assistant_draft(
+    client: TestClient,
+) -> None:
+    session_id = _start_keeper_dashboard_session(client)
+    _advance_keeper_dashboard_session(client, session_id)
+    fake_service = _FakeLocalLLMService()
+    client.app.state.local_llm_service = fake_service
+    _, keeper_view, _, _ = client.app.state.session_service.get_keeper_workspace(session_id)
+    draft = keeper_view.visible_draft_actions[0]
+    draft_id = draft.draft_id
+    before_snapshot = _get_snapshot(client, session_id)
+
+    response = client.post(
+        f"/app/sessions/{session_id}/draft-actions/{draft_id}/assistant",
+    )
+
+    assert response.status_code == 200
+    html = response.text
+    assert "当前对象：单条待审草稿" in html
+    assert f"对象标识：{draft_id}" in html
+    assert "来源语境：基于当前待审草稿：" in html
+    assert draft.draft_text[:12] in html
+    assert f'data-adopt-target="draft-review-note-{draft_id}"' in html
+    assert 'data-adopt-target="prompt-note-' not in html
+    assert len(fake_service.requests) == 1
+    request = fake_service.requests[0]
+    assert request.context["source_object"]["object_kind"] == "draft"
+    assert request.context["source_object"]["object_id"] == draft_id
     after_snapshot = _get_snapshot(client, session_id)
     assert before_snapshot == after_snapshot
 

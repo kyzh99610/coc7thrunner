@@ -14,6 +14,7 @@
 - 如果草稿更适合带入 draft review 的 editor_notes textarea，suggested_target 填 draft_review_editor_notes。
 - 如果当前任务只是摘要/建议而不适合直接带入现有表单，suggested_target 填 null。
 - source_context_label 用一句中文明确说明来源语境，例如“基于当前 keeper workspace 摘要与待处理 prompts”或“基于当前 keeper workspace 摘要与待审草稿概览”。
+- 如果上下文包含 source_object，source_context_label 应进一步收紧到当前对象，例如“基于当前 prompt：<object_label>（<object_id>）”或“基于当前待审草稿：<object_label>（<object_id>）”。
 
 上下文 JSON：
 {{context_json}}
