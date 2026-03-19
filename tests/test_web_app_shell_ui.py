@@ -322,6 +322,8 @@ def test_web_app_prompt_card_can_generate_object_scoped_assistant_draft(
     assert "当前对象：单条 Prompt" in html
     assert f"对象标识：{prompt_id}" in html
     assert "来源语境：基于当前 prompt：" in html
+    assert "及最近处理上下文。" in html
+    assert "局部上下文：" in html
     assert prompt.prompt_text[:12] in html
     assert f'data-adopt-target="prompt-note-{prompt_id}"' in html
     assert 'data-adopt-target="draft-review-note-' not in html
@@ -329,6 +331,7 @@ def test_web_app_prompt_card_can_generate_object_scoped_assistant_draft(
     request = fake_service.requests[0]
     assert request.context["source_object"]["object_kind"] == "prompt"
     assert request.context["source_object"]["object_id"] == prompt_id
+    assert request.context["prompt_local_context"]["context_summary"]
     after_snapshot = _get_snapshot(client, session_id)
     assert before_snapshot == after_snapshot
 
@@ -354,6 +357,8 @@ def test_web_app_draft_card_can_generate_object_scoped_assistant_draft(
     assert "当前对象：单条待审草稿" in html
     assert f"对象标识：{draft_id}" in html
     assert "来源语境：基于当前待审草稿：" in html
+    assert "及最近审阅上下文。" in html
+    assert "局部上下文：" in html
     assert draft.draft_text[:12] in html
     assert f'data-adopt-target="draft-review-note-{draft_id}"' in html
     assert 'data-adopt-target="prompt-note-' not in html
@@ -361,6 +366,8 @@ def test_web_app_draft_card_can_generate_object_scoped_assistant_draft(
     request = fake_service.requests[0]
     assert request.context["source_object"]["object_kind"] == "draft"
     assert request.context["source_object"]["object_id"] == draft_id
+    assert request.context["draft_local_context"]["current_review_status"] == "pending"
+    assert "当前 review 状态" in request.context["draft_local_context"]["context_summary"]
     after_snapshot = _get_snapshot(client, session_id)
     assert before_snapshot == after_snapshot
 

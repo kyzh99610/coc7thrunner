@@ -33,6 +33,7 @@ from coc_runner.application.session_service import SessionService
 from coc_runner.domain.errors import ConflictError
 from coc_runner.domain.models import (
     AdvanceCombatTurnRequest,
+    AuditActionType,
     InvestigatorAttributeCheckRequest,
     InvestigatorDamageResolutionRequest,
     InvestigatorFirstAidRequest,
@@ -540,11 +541,13 @@ def _render_assistant_draft_source(
             assistant_scope.get("source_context_label")
             or "基于当前 keeper workspace 可见摘要。"
         )
+        local_context_summary = _normalize_form_text(assistant_scope.get("local_context_summary"))
         object_lines = f"""
           <li>当前对象：{escape(object_type_label)}</li>
           <li>对象标识：{escape(object_id)}</li>
           <li>对象标签：{escape(object_label)}</li>
           <li>来源语境：{escape(scope_context)}</li>
+          {f'<li>局部上下文：{escape(local_context_summary)}</li>' if local_context_summary else ''}
         """
     draft_lines = ""
     hidden_source = ""
@@ -797,9 +800,114 @@ def _build_keeper_assistant_context(
     }
 
 
-def _keeper_prompt_scope_metadata(prompt: dict[str, Any]) -> dict[str, str]:
+def _latest_audit_entry(
+    snapshot: dict[str, Any],
+    *,
+    action: str | None = None,
+    subject_id: str | None = None,
+    detail_draft_id: str | None = None,
+) -> dict[str, Any] | None:
+    for entry in reversed(snapshot.get("audit_log") or []):
+        if not isinstance(entry, dict):
+            continue
+        if action is not None and str(entry.get("action") or "") != action:
+            continue
+        if subject_id is not None and str(entry.get("subject_id") or "") != subject_id:
+            continue
+        details = entry.get("details") or {}
+        if detail_draft_id is not None and str(details.get("draft_id") or "") != detail_draft_id:
+            continue
+        return entry
+    return None
+
+
+def _build_prompt_local_context(
+    snapshot: dict[str, Any],
+    prompt: dict[str, Any],
+) -> dict[str, Any]:
+    prompt_id = str(prompt.get("prompt_id") or "")
+    current_status = _normalize_form_text(prompt.get("status"))
+    current_category = _normalize_form_text(prompt.get("category"))
+    latest_note = _normalize_form_text((prompt.get("notes") or [None])[-1]) if prompt.get("notes") else None
+    recent_update_entry = _latest_audit_entry(
+        snapshot,
+        action=AuditActionType.KEEPER_PROMPT_UPDATED.value,
+        subject_id=prompt_id,
+    )
+    recent_update_details = (recent_update_entry or {}).get("details") or {}
+    recent_update = (
+        {
+            "status": recent_update_details.get("status"),
+            "priority": recent_update_details.get("priority"),
+            "note_count_added": recent_update_details.get("note_count_added"),
+        }
+        if recent_update_entry is not None
+        else None
+    )
+    context_parts: list[str] = []
+    if current_status:
+        context_parts.append(f"当前状态：{current_status}")
+    if current_category:
+        context_parts.append(f"类别：{current_category}")
+    if latest_note:
+        context_parts.append(f"最近 note：{_excerpt(latest_note, limit=40)}")
+    if recent_update is not None and recent_update.get("status"):
+        context_parts.append(f"最近处理状态：{recent_update.get('status')}")
+    return {
+        "current_status": current_status,
+        "current_category": current_category,
+        "latest_note": latest_note,
+        "recent_update": recent_update,
+        "context_summary": " / ".join(context_parts) or None,
+    }
+
+
+def _build_draft_local_context(
+    snapshot: dict[str, Any],
+    draft: dict[str, Any],
+) -> dict[str, Any]:
+    draft_id = str(draft.get("draft_id") or "")
+    current_review_status = draft.get("review_status")
+    recent_review_entry = _latest_audit_entry(
+        snapshot,
+        action=AuditActionType.REVIEW_DECISION.value,
+        detail_draft_id=draft_id,
+    )
+    recent_review_details = (recent_review_entry or {}).get("details") or {}
+    recent_review = (
+        {
+            "decision": recent_review_details.get("decision"),
+            "review_status": recent_review_details.get("review_status"),
+            "editor_notes": recent_review_details.get("editor_notes"),
+        }
+        if recent_review_entry is not None
+        else None
+    )
+    context_parts: list[str] = []
+    if current_review_status:
+        context_parts.append(f"当前 review 状态：{current_review_status}")
+    if recent_review is not None and recent_review.get("decision"):
+        context_parts.append(f"最近审阅动作：{recent_review.get('decision')}")
+    recent_editor_note = _normalize_form_text((recent_review or {}).get("editor_notes"))
+    if recent_editor_note:
+        context_parts.append(f"最近 editor note：{_excerpt(recent_editor_note, limit=40)}")
+    return {
+        "current_review_status": current_review_status,
+        "recent_review": recent_review,
+        "context_summary": " / ".join(context_parts) or None,
+    }
+
+
+def _keeper_prompt_scope_metadata(
+    prompt: dict[str, Any],
+    *,
+    local_context_summary: str | None = None,
+) -> dict[str, str]:
     prompt_id = str(prompt.get("prompt_id") or "prompt")
     prompt_label = _excerpt(prompt.get("prompt_text"), limit=48) or prompt_id
+    source_context_label = f"基于当前 prompt：{prompt_label}（{prompt_id}）。"
+    if local_context_summary:
+        source_context_label = f"基于当前 prompt：{prompt_label}（{prompt_id}）及最近处理上下文。"
     return {
         "source_object_kind": "prompt",
         "source_object_id": prompt_id,
@@ -807,13 +915,21 @@ def _keeper_prompt_scope_metadata(prompt: dict[str, Any]) -> dict[str, str]:
         "source_object_type_label": KEEPER_ASSISTANT_SOURCE_OBJECT_TYPE_LABELS["prompt"],
         "draft_kind": "prompt_note_draft",
         "suggested_target": "prompt_note",
-        "source_context_label": f"基于当前 prompt：{prompt_label}（{prompt_id}）。",
+        "source_context_label": source_context_label,
+        "local_context_summary": local_context_summary or "",
     }
 
 
-def _keeper_draft_scope_metadata(draft: dict[str, Any]) -> dict[str, str]:
+def _keeper_draft_scope_metadata(
+    draft: dict[str, Any],
+    *,
+    local_context_summary: str | None = None,
+) -> dict[str, str]:
     draft_id = str(draft.get("draft_id") or "draft")
     draft_label = _excerpt(draft.get("draft_text"), limit=48) or draft_id
+    source_context_label = f"基于当前待审草稿：{draft_label}（{draft_id}）。"
+    if local_context_summary:
+        source_context_label = f"基于当前待审草稿：{draft_label}（{draft_id}）及最近审阅上下文。"
     return {
         "source_object_kind": "draft",
         "source_object_id": draft_id,
@@ -821,7 +937,8 @@ def _keeper_draft_scope_metadata(draft: dict[str, Any]) -> dict[str, str]:
         "source_object_type_label": KEEPER_ASSISTANT_SOURCE_OBJECT_TYPE_LABELS["draft"],
         "draft_kind": "draft_review_note_draft",
         "suggested_target": "draft_review_editor_notes",
-        "source_context_label": f"基于当前待审草稿：{draft_label}（{draft_id}）。",
+        "source_context_label": source_context_label,
+        "local_context_summary": local_context_summary or "",
     }
 
 
@@ -832,7 +949,11 @@ def _build_keeper_prompt_object_assistant_context(
     prompt: dict[str, Any],
 ) -> dict[str, Any]:
     current_scene, beat_id, beat_title = _scene_and_beat(snapshot)
-    scope = _keeper_prompt_scope_metadata(prompt)
+    prompt_local_context = _build_prompt_local_context(snapshot, prompt)
+    scope = _keeper_prompt_scope_metadata(
+        prompt,
+        local_context_summary=_normalize_form_text(prompt_local_context.get("context_summary")),
+    )
     workflow = keeper_view.get("keeper_workflow") or {}
     return {
         "session": {
@@ -861,6 +982,13 @@ def _build_keeper_prompt_object_assistant_context(
             "aftermath_label": prompt.get("aftermath_label"),
             "duration_rounds": prompt.get("duration_rounds"),
         },
+        "prompt_local_context": {
+            "current_status": prompt_local_context.get("current_status"),
+            "current_category": prompt_local_context.get("current_category"),
+            "latest_note": prompt_local_context.get("latest_note"),
+            "recent_update": prompt_local_context.get("recent_update"),
+            "context_summary": prompt_local_context.get("context_summary"),
+        },
         "workflow_summary_lines": list((workflow.get("summary") or {}).get("summary_lines") or [])[:4],
         "recent_events": _event_excerpt_items(list(reversed(keeper_view.get("visible_events") or [])), limit=3),
     }
@@ -876,7 +1004,11 @@ def _build_keeper_draft_object_assistant_context(
     participants = _participant_map(
         [participant for participant in snapshot.get("participants") or [] if isinstance(participant, dict)]
     )
-    scope = _keeper_draft_scope_metadata(draft)
+    draft_local_context = _build_draft_local_context(snapshot, draft)
+    scope = _keeper_draft_scope_metadata(
+        draft,
+        local_context_summary=_normalize_form_text(draft_local_context.get("context_summary")),
+    )
     actor_id = str(draft.get("actor_id") or "")
     return {
         "session": {
@@ -905,6 +1037,11 @@ def _build_keeper_draft_object_assistant_context(
                 if actor_id
                 else None
             ),
+        },
+        "draft_local_context": {
+            "current_review_status": draft_local_context.get("current_review_status"),
+            "recent_review": draft_local_context.get("recent_review"),
+            "context_summary": draft_local_context.get("context_summary"),
         },
         "recent_events": _event_excerpt_items(list(reversed(keeper_view.get("visible_events") or [])), limit=3),
     }
@@ -3791,17 +3928,23 @@ def web_app_keeper_prompt_assistant(
         )
     runtime_assistance = service.get_keeper_runtime_assistance(keeper_view=keeper_view)
     san_aftermath_suggestions = service.get_keeper_san_aftermath_suggestions(session=session)
-    assistant_scope = _keeper_prompt_scope_metadata(prompt)
+    assistant_context = _build_keeper_prompt_object_assistant_context(
+        snapshot=snapshot,
+        keeper_view=keeper_view_snapshot,
+        prompt=prompt,
+    )
+    assistant_scope = _keeper_prompt_scope_metadata(
+        prompt,
+        local_context_summary=_normalize_form_text(
+            (assistant_context.get("prompt_local_context") or {}).get("context_summary")
+        ),
+    )
     assistant_result = _generate_local_llm_assistant(
         local_llm_service=local_llm_service,
         workspace_key="keeper_workspace",
         task_key="note_draft",
         task_label=KEEPER_ASSISTANT_TASKS["note_draft"],
-        context=_build_keeper_prompt_object_assistant_context(
-            snapshot=snapshot,
-            keeper_view=keeper_view_snapshot,
-            prompt=prompt,
-        ),
+        context=assistant_context,
     )
     return _render_keeper_workspace_page(
         session_id=session_id,
@@ -3859,17 +4002,23 @@ def web_app_keeper_draft_assistant(
         )
     runtime_assistance = service.get_keeper_runtime_assistance(keeper_view=keeper_view)
     san_aftermath_suggestions = service.get_keeper_san_aftermath_suggestions(session=session)
-    assistant_scope = _keeper_draft_scope_metadata(draft)
+    assistant_context = _build_keeper_draft_object_assistant_context(
+        snapshot=snapshot,
+        keeper_view=keeper_view_snapshot,
+        draft=draft,
+    )
+    assistant_scope = _keeper_draft_scope_metadata(
+        draft,
+        local_context_summary=_normalize_form_text(
+            (assistant_context.get("draft_local_context") or {}).get("context_summary")
+        ),
+    )
     assistant_result = _generate_local_llm_assistant(
         local_llm_service=local_llm_service,
         workspace_key="keeper_workspace",
         task_key="draft_review_note_draft",
         task_label=KEEPER_ASSISTANT_TASKS["draft_review_note_draft"],
-        context=_build_keeper_draft_object_assistant_context(
-            snapshot=snapshot,
-            keeper_view=keeper_view_snapshot,
-            draft=draft,
-        ),
+        context=assistant_context,
     )
     return _render_keeper_workspace_page(
         session_id=session_id,
