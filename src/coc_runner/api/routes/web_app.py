@@ -42,8 +42,10 @@ from coc_runner.domain.models import (
     InvestigatorSkillCheckRequest,
     KeeperWoundResolution,
     KeeperWoundResolutionRequest,
+    ReviewDraftRequest,
     SessionStatus,
     StartCombatContextRequest,
+    UpdateKeeperPromptRequest,
     UpdateSessionLifecycleRequest,
     ViewerRole,
 )
@@ -56,7 +58,17 @@ KEEPER_ASSISTANT_TASKS: dict[str, str] = {
     "situation_summary": "当前局势摘要",
     "next_steps": "下一步建议",
     "note_draft": "主持人备注草稿",
+    "draft_review_note_draft": "草稿审阅说明草稿",
 }
+KEEPER_ASSISTANT_TARGET_LABELS: dict[str, str] = {
+    "prompt_note": "Prompt 备注",
+    "draft_review_editor_notes": "草稿审阅说明",
+}
+KEEPER_ASSISTANT_TARGET_BY_TASK: dict[str, str] = {
+    "note_draft": "prompt_note",
+    "draft_review_note_draft": "draft_review_editor_notes",
+}
+KEEPER_ASSISTANT_DRAFT_SOURCE_ID = "keeper-assistant-draft-source"
 KNOWLEDGE_ASSISTANT_TASKS: dict[str, str] = {
     "source_summary": "资料摘要",
     "follow_up_questions": "可追问问题",
@@ -436,6 +448,60 @@ def _render_local_llm_assistant_output(
     """
 
 
+def _keeper_assistant_adoption(
+    result: LocalLLMAssistantResult | None,
+) -> dict[str, str] | None:
+    if result is None or result.status != "success" or result.assistant is None:
+        return None
+    draft_text = _normalize_form_text(result.assistant.draft_text)
+    if not draft_text:
+        return None
+    target = (
+        _normalize_form_text(result.assistant.suggested_target)
+        or KEEPER_ASSISTANT_TARGET_BY_TASK.get(result.task_key)
+    )
+    if target not in KEEPER_ASSISTANT_TARGET_LABELS:
+        return None
+    return {
+        "source_id": KEEPER_ASSISTANT_DRAFT_SOURCE_ID,
+        "draft_text": draft_text,
+        "target": target,
+        "target_label": KEEPER_ASSISTANT_TARGET_LABELS[target],
+    }
+
+
+def _render_assistant_draft_source(
+    assistant_adoption: dict[str, str] | None,
+) -> str:
+    if assistant_adoption is None:
+        return ""
+    return f"""
+      <textarea id="{escape(assistant_adoption['source_id'])}" class="assistant-draft-source" aria-hidden="true" tabindex="-1">{escape(assistant_adoption['draft_text'])}</textarea>
+      <p class="helper">当前 assistant 草稿建议带入：{escape(assistant_adoption['target_label'])}。带入按钮只会填入 textarea，不会自动提交。</p>
+    """
+
+
+def _render_assistant_adopt_button(
+    *,
+    assistant_adoption: dict[str, str] | None,
+    target_kind: str,
+    target_id: str,
+) -> str:
+    if assistant_adoption is None or assistant_adoption.get("target") != target_kind:
+        return ""
+    return f"""
+      <div class="adoption-toolbar">
+        <button
+          class="button-button ghost"
+          type="button"
+          data-adopt-source="{escape(assistant_adoption['source_id'])}"
+          data-adopt-target="{escape(target_id)}"
+        >带入 Assistant 草稿</button>
+      </div>
+      <p class="helper">只会带入到当前输入框，仍需 Keeper 人工编辑并手动提交。</p>
+    """
+
+
 def _render_local_llm_assistant_panel(
     *,
     title: str,
@@ -445,6 +511,7 @@ def _render_local_llm_assistant_panel(
     selected_task: str | None,
     result: LocalLLMAssistantResult | None,
     hidden_fields: dict[str, str] | None = None,
+    extra_output_html: str = "",
 ) -> str:
     task_key, _ = _assistant_task_selection(tasks, selected_task)
     options_html = "".join(
@@ -468,6 +535,7 @@ def _render_local_llm_assistant_panel(
         <p class="helper">输出只作为摘要、建议或草稿，不会直接修改 authoritative state。即使本地 LLM 不可用，主流程也照常可用。</p>
         <div class="card-list">
           {_render_local_llm_assistant_output(result)}
+          {extra_output_html}
         </div>
         <form method="post" action="{escape(action, quote=True)}" class="form-stack">
           {hidden_inputs}
@@ -1441,44 +1509,102 @@ def _render_session_overview_page(*, session_id: str, snapshot: dict[str, Any]) 
     )
 
 
-def _render_prompt_cards(prompts: list[dict[str, Any]], *, session_id: str) -> str:
+def _render_prompt_cards(
+    prompts: list[dict[str, Any]],
+    *,
+    session_id: str,
+    operator_id: str,
+    assistant_adoption: dict[str, str] | None = None,
+) -> str:
     if not prompts:
         return '<p class="empty">当前没有待处理提示。</p>'
-    return "".join(
-        f"""
-        <article class="list-card">
-          <div class="list-head">
-            <h3>{escape(str(prompt.get('prompt_text') or '未命名提示'))}</h3>
-            <span class="tag">{escape(str(prompt.get('status') or 'pending'))}</span>
-          </div>
-          <p>{escape(_excerpt(' / '.join(prompt.get('notes') or []), limit=120) or str(prompt.get('category') or 'kp_prompt'))}</p>
-          <div class="toolbar">
-            <a class="button-link ghost" href="/playtest/sessions/{escape(session_id)}/keeper#prompt-targets">去旧版提示处理区</a>
-          </div>
-        </article>
-        """
-        for prompt in prompts[:4]
-    )
+    cards: list[str] = []
+    for prompt in prompts[:4]:
+        prompt_id = str(prompt.get("prompt_id") or "prompt")
+        note_target_id = f"prompt-note-{prompt_id}"
+        current_notes = prompt.get("notes") or []
+        notes_html = "".join(f"<li>{escape(str(note))}</li>" for note in current_notes[:3])
+        cards.append(
+            f"""
+            <article class="list-card">
+              <div class="list-head">
+                <h3>{escape(str(prompt.get('prompt_text') or '未命名提示'))}</h3>
+                <span class="tag">{escape(str(prompt.get('status') or 'pending'))}</span>
+              </div>
+              <p>{escape(str(prompt.get('trigger_reason') or prompt.get('category') or 'kp_prompt'))}</p>
+              <div class="divider"></div>
+              <p class="meta-line">当前备注</p>
+              {f'<ul class="meta-list">{notes_html}</ul>' if notes_html else '<p class="empty">当前还没有 keeper 备注。</p>'}
+              <form method="post" action="/app/sessions/{escape(session_id)}/keeper/prompts/{escape(prompt_id)}/status">
+                <input type="hidden" name="operator_id" value="{escape(operator_id)}" />
+                <label>
+                  备注（可选）
+                  <textarea id="{escape(note_target_id)}" name="note" rows="2" placeholder="可选。顺手留一句处理说明。"></textarea>
+                </label>
+                {_render_assistant_adopt_button(
+                    assistant_adoption=assistant_adoption,
+                    target_kind='prompt_note',
+                    target_id=note_target_id,
+                )}
+                <div class="inline-form-grid">
+                  <button class="button-button ghost" type="submit" name="status" value="acknowledged">标记 acknowledged</button>
+                  <button class="button-button secondary" type="submit" name="status" value="completed">标记 completed</button>
+                  <button class="button-button danger" type="submit" name="status" value="dismissed">标记 dismissed</button>
+                </div>
+              </form>
+              <div class="toolbar">
+                <a class="button-link ghost" href="/playtest/sessions/{escape(session_id)}/keeper#prompt-targets">旧版提示处理区</a>
+              </div>
+            </article>
+            """
+        )
+    return "".join(cards)
 
 
-def _render_draft_cards(drafts: list[dict[str, Any]], *, session_id: str) -> str:
+def _render_draft_cards(
+    drafts: list[dict[str, Any]],
+    *,
+    session_id: str,
+    reviewer_id: str,
+    assistant_adoption: dict[str, str] | None = None,
+) -> str:
     if not drafts:
         return '<p class="empty">当前没有待审草稿。</p>'
-    return "".join(
-        f"""
-        <article class="list-card">
-          <div class="list-head">
-            <h3>{escape(_excerpt(draft.get('draft_text'), limit=56) or '未命名草稿')}</h3>
-            <span class="tag warn">{escape(str(draft.get('risk_level') or 'low'))}</span>
-          </div>
-          <p>{escape(_excerpt(draft.get('rationale_summary') or '待人工审核'))}</p>
-          <div class="toolbar">
-            <a class="button-link ghost" href="/playtest/sessions/{escape(session_id)}/keeper#draft-review-targets">去旧版草稿审阅区</a>
-          </div>
-        </article>
-        """
-        for draft in drafts[:4]
-    )
+    cards: list[str] = []
+    for draft in drafts[:4]:
+        draft_id = str(draft.get("draft_id") or "draft")
+        note_target_id = f"draft-review-note-{draft_id}"
+        cards.append(
+            f"""
+            <article class="list-card">
+              <div class="list-head">
+                <h3>{escape(_excerpt(draft.get('draft_text'), limit=56) or '未命名草稿')}</h3>
+                <span class="tag warn">{escape(str(draft.get('risk_level') or 'low'))}</span>
+              </div>
+              <p>{escape(_excerpt(draft.get('rationale_summary') or '待人工审核'))}</p>
+              <form method="post" action="/app/sessions/{escape(session_id)}/draft-actions/{escape(draft_id)}/review">
+                <input type="hidden" name="reviewer_id" value="{escape(reviewer_id)}" />
+                <label>
+                  editor_notes（可选）
+                  <textarea id="{escape(note_target_id)}" name="editor_notes" rows="2" placeholder="可选。顺手留一句审阅说明。"></textarea>
+                </label>
+                {_render_assistant_adopt_button(
+                    assistant_adoption=assistant_adoption,
+                    target_kind='draft_review_editor_notes',
+                    target_id=note_target_id,
+                )}
+                <div class="inline-form-grid">
+                  <button class="button-button secondary" type="submit" name="decision" value="approve">批准草稿</button>
+                  <button class="button-button danger" type="submit" name="decision" value="reject">驳回草稿</button>
+                </div>
+              </form>
+              <div class="toolbar">
+                <a class="button-link ghost" href="/playtest/sessions/{escape(session_id)}/keeper#draft-review-targets">旧版草稿审阅区</a>
+              </div>
+            </article>
+            """
+        )
+    return "".join(cards)
 
 
 def _render_wound_cards(
@@ -1619,6 +1745,25 @@ def _render_keeper_operation_result(action_result: dict[str, Any] | None) -> str
             f"死亡确认：{_bool_label(payload.get('death_confirmed'))}",
         ]
         return _render_feedback_panel(title="伤势后续已裁定", lines=lines)
+    if kind == "prompt_status":
+        lines = [
+            str(payload.get("message") or ""),
+            f"prompt_id：{((payload.get('prompt') or {}).get('prompt_id') or '—')}",
+            f"状态：{((payload.get('prompt') or {}).get('status') or '—')}",
+        ]
+        note = str(action_result.get("note") or "").strip()
+        if note:
+            lines.append(f"备注：{note}")
+        return _render_feedback_panel(title="Keeper Prompt 已更新", lines=lines)
+    if kind == "draft_review":
+        lines = [
+            str(payload.get("message") or ""),
+            f"grounding_degraded：{_bool_label(payload.get('grounding_degraded'))}",
+        ]
+        note = str(action_result.get("editor_notes") or "").strip()
+        if note:
+            lines.append(f"审阅说明：{note}")
+        return _render_feedback_panel(title="Draft Review 已提交", lines=lines)
     return ""
 
 
@@ -1743,6 +1888,8 @@ def _render_keeper_workspace_page(
     summary = workflow.get("summary") or {}
     progress_state = keeper_view.get("progress_state") or {}
     combat_context = snapshot.get("combat_context") or {}
+    operator_id = _keeper_operator_id(snapshot)
+    assistant_adoption = _keeper_assistant_adoption(assistant_result)
     current_scene, beat_id, beat_title = _scene_and_beat(snapshot)
     turn_order = combat_context.get("turn_order") or []
     next_actor = None
@@ -1857,7 +2004,12 @@ def _render_keeper_workspace_page(
                     <span class="tag">{escape(str(len(workflow.get('active_prompts') or [])))}</span>
                   </div>
                   <div class="card-list">
-                    {_render_prompt_cards(list(workflow.get('active_prompts') or []), session_id=session_id)}
+                    {_render_prompt_cards(
+                        list(workflow.get('active_prompts') or []),
+                        session_id=session_id,
+                        operator_id=operator_id,
+                        assistant_adoption=assistant_adoption,
+                    )}
                   </div>
                 </article>
                 <article class="list-card">
@@ -1866,7 +2018,12 @@ def _render_keeper_workspace_page(
                     <span class="tag warn">{escape(str(len(keeper_view.get('visible_draft_actions') or [])))}</span>
                   </div>
                   <div class="card-list">
-                    {_render_draft_cards(list(keeper_view.get('visible_draft_actions') or []), session_id=session_id)}
+                    {_render_draft_cards(
+                        list(keeper_view.get('visible_draft_actions') or []),
+                        session_id=session_id,
+                        reviewer_id=operator_id,
+                        assistant_adoption=assistant_adoption,
+                    )}
                   </div>
                 </article>
               </div>
@@ -1942,6 +2099,7 @@ def _render_keeper_workspace_page(
                 tasks=KEEPER_ASSISTANT_TASKS,
                 selected_task=selected_assistant_task,
                 result=assistant_result,
+                extra_output_html=_render_assistant_draft_source(assistant_adoption),
             )}
             <section class="surface">
               <div class="surface-header">
@@ -3294,6 +3452,88 @@ async def web_app_keeper_assistant(
         assistant_result=assistant_result,
         selected_assistant_task=selected_task,
     )
+
+
+@router.post("/sessions/{session_id}/keeper/prompts/{prompt_id}/status", response_class=HTMLResponse)
+async def web_app_keeper_prompt_status(
+    session_id: str,
+    prompt_id: str,
+    request: Request,
+    service: SessionService = Depends(get_session_service),
+    local_llm_service: LocalLLMService = Depends(get_local_llm_service),
+) -> HTMLResponse:
+    form = await _read_form_payload(request)
+    note = _normalize_form_text(form.get("note")) or None
+    try:
+        response = service.update_keeper_prompt_status(
+            session_id,
+            prompt_id,
+            UpdateKeeperPromptRequest(
+                operator_id=form.get("operator_id", ""),
+                status=form.get("status"),
+                add_notes=[note] if note else [],
+            ),
+        )
+        return _render_app_keeper_from_service(
+            service=service,
+            session_id=session_id,
+            local_llm_service=local_llm_service,
+            notice=response.message,
+            action_result={
+                "kind": "prompt_status",
+                "payload": response.model_dump(mode="json"),
+                "note": note,
+            },
+        )
+    except (ValidationError, LookupError, PermissionError, ConflictError, ValueError) as exc:
+        return _render_app_keeper_from_service(
+            service=service,
+            session_id=session_id,
+            local_llm_service=local_llm_service,
+            detail=extract_error_detail(exc),
+            status_code=_exception_status_code(exc),
+        )
+
+
+@router.post("/sessions/{session_id}/draft-actions/{draft_id}/review", response_class=HTMLResponse)
+async def web_app_keeper_draft_review(
+    session_id: str,
+    draft_id: str,
+    request: Request,
+    service: SessionService = Depends(get_session_service),
+    local_llm_service: LocalLLMService = Depends(get_local_llm_service),
+) -> HTMLResponse:
+    form = await _read_form_payload(request)
+    editor_notes = _normalize_form_text(form.get("editor_notes")) or None
+    try:
+        response = service.review_draft_action(
+            session_id,
+            draft_id,
+            ReviewDraftRequest(
+                reviewer_id=form.get("reviewer_id", ""),
+                decision=form.get("decision"),
+                editor_notes=editor_notes,
+            ),
+        )
+        return _render_app_keeper_from_service(
+            service=service,
+            session_id=session_id,
+            local_llm_service=local_llm_service,
+            notice=response.message,
+            action_result={
+                "kind": "draft_review",
+                "payload": response.model_dump(mode="json"),
+                "editor_notes": editor_notes,
+            },
+        )
+    except (ValidationError, LookupError, PermissionError, ConflictError, ValueError) as exc:
+        return _render_app_keeper_from_service(
+            service=service,
+            session_id=session_id,
+            local_llm_service=local_llm_service,
+            detail=extract_error_detail(exc),
+            status_code=_exception_status_code(exc),
+        )
 
 
 @router.get("/sessions/{session_id}/investigator/{viewer_id}", response_class=HTMLResponse)

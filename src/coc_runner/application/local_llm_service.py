@@ -31,6 +31,7 @@ class LocalLLMAssistantPayload(BaseModel):
     bullets: list[str] = Field(default_factory=list)
     suggested_questions: list[str] = Field(default_factory=list)
     draft_text: str | None = Field(default=None, max_length=2400)
+    suggested_target: str | None = Field(default=None, max_length=80)
     safety_notes: list[str] = Field(default_factory=list)
 
     @field_validator("bullets", "suggested_questions", "safety_notes", mode="before")
@@ -44,6 +45,14 @@ class LocalLLMAssistantPayload(BaseModel):
             if text:
                 normalized.append(text)
         return normalized[:5]
+
+    @field_validator("suggested_target", mode="before")
+    @classmethod
+    def _normalize_suggested_target(cls, value: Any) -> str | None:
+        if value is None:
+            return None
+        normalized = " ".join(str(value).split())
+        return normalized or None
 
 
 class LocalLLMAssistantResult(BaseModel):

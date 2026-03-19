@@ -487,6 +487,20 @@ legend {
   display: grid;
   gap: 14px;
 }
+.adoption-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 12px;
+}
+.assistant-draft-source {
+  position: absolute;
+  left: -9999px;
+  width: 1px;
+  height: 1px;
+  opacity: 0;
+  pointer-events: none;
+}
 .divider {
   height: 1px;
   margin: 8px 0 2px;
@@ -517,6 +531,30 @@ code,
 }
 """
 
+WEB_APP_SHELL_SCRIPT = """
+(() => {
+  document.addEventListener("click", (event) => {
+    const trigger = event.target instanceof Element
+      ? event.target.closest("[data-adopt-source][data-adopt-target]")
+      : null;
+    if (!(trigger instanceof HTMLButtonElement)) {
+      return;
+    }
+    const sourceId = trigger.getAttribute("data-adopt-source") || "";
+    const targetId = trigger.getAttribute("data-adopt-target") || "";
+    const source = document.getElementById(sourceId);
+    const target = document.getElementById(targetId);
+    if (!(source instanceof HTMLTextAreaElement) || !(target instanceof HTMLTextAreaElement)) {
+      return;
+    }
+    target.value = source.value;
+    target.focus();
+    target.setSelectionRange(target.value.length, target.value.length);
+    target.dispatchEvent(new Event("input", { bubbles: true }));
+  });
+})();
+"""
+
 
 def render_web_app_shell(
     *,
@@ -539,6 +577,7 @@ def render_web_app_shell(
           <aside class="sidebar">{sidebar_html}</aside>
           <main class="content">{body_html}</main>
         </div>
+        <script>{WEB_APP_SHELL_SCRIPT}</script>
       </body>
     </html>
     """

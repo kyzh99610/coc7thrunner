@@ -28,6 +28,10 @@ class _FakeLocalLLMService:
 
     def generate_assistant(self, request):
         self.requests.append(request)
+        suggested_target = {
+            "note_draft": "prompt_note",
+            "draft_review_note_draft": "draft_review_editor_notes",
+        }.get(request.task_key)
         return LocalLLMAssistantResult(
             status="success",
             workspace_key=request.workspace_key,
@@ -41,6 +45,7 @@ class _FakeLocalLLMService:
                 bullets=["关键点一", "关键点二"],
                 suggested_questions=["后续还要确认什么？"],
                 draft_text="这是一段可继续编辑的草稿。",
+                suggested_target=suggested_target,
                 safety_notes=["不会直接改写 authoritative state。"],
             ),
         )
@@ -190,6 +195,10 @@ def test_web_app_keeper_workspace_surfaces_pending_ops_and_legacy_handoffs(
     assert "只有进行中的会话才能开始或推进战斗顺序。" in html
     assert "KP：秦老板看到调查员翻出旧图纸时，应表现出短暂失态。" in html
     assert "KP 草稿：若调查员继续追问秦老板，应准备对话压力。" in html
+    assert f'action="/app/sessions/{session_id}/keeper/prompts/' in html
+    assert 'name="note"' in html
+    assert f'action="/app/sessions/{session_id}/draft-actions/' in html
+    assert 'name="editor_notes"' in html
     assert f'/playtest/sessions/{session_id}/keeper#prompt-targets"' in html
     assert f'/playtest/sessions/{session_id}/keeper#draft-review-targets"' in html
     assert f'/playtest/sessions/{session_id}/keeper#combat-flow"' in html
@@ -203,6 +212,7 @@ def test_web_app_keeper_assistant_uses_keeper_context_without_writing_state(
     _advance_keeper_dashboard_session(client, session_id)
     fake_service = _FakeLocalLLMService()
     client.app.state.local_llm_service = fake_service
+    before_snapshot = _get_snapshot(client, session_id)
 
     response = client.post(
         f"/app/sessions/{session_id}/keeper/assistant",
@@ -214,6 +224,10 @@ def test_web_app_keeper_assistant_uses_keeper_context_without_writing_state(
     assert "主持人备注草稿 结果" in html
     assert "这是非权威辅助输出。" in html
     assert "不会直接改写 authoritative state。" in html
+    assert 'id="keeper-assistant-draft-source"' in html
+    assert 'data-adopt-source="keeper-assistant-draft-source"' in html
+    assert 'data-adopt-target="prompt-note-' in html
+    assert '>带入 Assistant 草稿</button>' in html
     assert len(fake_service.requests) == 1
     request = fake_service.requests[0]
     assert request.workspace_key == "keeper_workspace"
@@ -225,6 +239,78 @@ def test_web_app_keeper_assistant_uses_keeper_context_without_writing_state(
     serialized_context = str(request.context)
     assert "private_notes" not in serialized_context
     assert "secret_state_refs" not in serialized_context
+    after_snapshot = _get_snapshot(client, session_id)
+    assert before_snapshot == after_snapshot
+
+
+def test_web_app_keeper_assistant_review_note_adoption_targets_editor_notes(
+    client: TestClient,
+) -> None:
+    session_id = _start_keeper_dashboard_session(client)
+    _advance_keeper_dashboard_session(client, session_id)
+    fake_service = _FakeLocalLLMService()
+    client.app.state.local_llm_service = fake_service
+    before_snapshot = _get_snapshot(client, session_id)
+
+    response = client.post(
+        f"/app/sessions/{session_id}/keeper/assistant",
+        data={"assistant_task": "draft_review_note_draft"},
+    )
+
+    assert response.status_code == 200
+    html = response.text
+    assert "草稿审阅说明草稿 结果" in html
+    assert 'data-adopt-source="keeper-assistant-draft-source"' in html
+    assert 'data-adopt-target="draft-review-note-' in html
+    assert 'type="button"' in html
+    after_snapshot = _get_snapshot(client, session_id)
+    assert before_snapshot == after_snapshot
+
+
+def test_web_app_keeper_prompt_submit_requires_manual_post_after_adoption_markup(
+    client: TestClient,
+) -> None:
+    session_id = _start_keeper_dashboard_session(client)
+    _advance_keeper_dashboard_session(client, session_id)
+    _, keeper_view, _, _ = client.app.state.session_service.get_keeper_workspace(session_id)
+    prompt_id = keeper_view.keeper_workflow.active_prompts[0].prompt_id
+
+    response = client.post(
+        f"/app/sessions/{session_id}/keeper/prompts/{prompt_id}/status",
+        data={
+            "operator_id": KEEPER_ID,
+            "status": "acknowledged",
+            "note": "先记入主持人备注，再观察调查员是否继续追问。",
+        },
+    )
+
+    assert response.status_code == 200
+    html = response.text
+    assert "Keeper Prompt 已更新" in html
+    assert "先记入主持人备注，再观察调查员是否继续追问。" in html
+
+
+def test_web_app_keeper_draft_review_submit_requires_manual_post_after_adoption_markup(
+    client: TestClient,
+) -> None:
+    session_id = _start_keeper_dashboard_session(client)
+    _advance_keeper_dashboard_session(client, session_id)
+    _, keeper_view, _, _ = client.app.state.session_service.get_keeper_workspace(session_id)
+    draft_id = keeper_view.visible_draft_actions[0].draft_id
+
+    response = client.post(
+        f"/app/sessions/{session_id}/draft-actions/{draft_id}/review",
+        data={
+            "reviewer_id": KEEPER_ID,
+            "decision": "approve",
+            "editor_notes": "采用这条草稿，但仍由 Keeper 手工确认后提交。",
+        },
+    )
+
+    assert response.status_code == 200
+    html = response.text
+    assert "Draft Review 已提交" in html
+    assert "采用这条草稿，但仍由 Keeper 手工确认后提交。" in html
 
 
 def test_web_app_investigator_workspace_preserves_secret_boundary_and_action_groups(
