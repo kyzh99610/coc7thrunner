@@ -835,8 +835,18 @@ def test_web_app_knowledge_assistant_uses_source_preview_without_session_private
     assert "当前对象：当前资料" in html
     assert "对象标识：assistant-source" in html
     assert "来源语境：基于当前资料：助手测试资料（assistant-source）的摘要与预览。" in html
-    assert "带入当前知识工作备注框" in html
+    assert "局部上下文：当前资料摘要、预览片段与已展示提取结果，不含未展示的 session 私密信息。" in html
+    assert "带入当前页工作备注框" in html
     assert 'data-adopt-target="knowledge-work-note-assistant-source"' in html
+    assert (
+        'data-adopt-status-text="已带入 追问问题草稿。来源：基于当前资料：助手测试资料（assistant-source）的摘要与预览。 当前仍需人工编辑并提交。"'
+        in html
+    )
+    assert (
+        'data-adopt-flow-status-text="该草稿来自当前资料页的 assistant 生成。已带入：当前页工作备注框。当前仍待人工编辑并提交。"'
+        in html
+    )
+    assert "当前尚未带入。若采纳，将带入当前页工作备注框，之后仍需人工编辑并提交。" in html
     assert "已有手工假说" in html
     after_source = client.app.state.knowledge_service.get_source("assistant-source").model_dump(
         mode="json"

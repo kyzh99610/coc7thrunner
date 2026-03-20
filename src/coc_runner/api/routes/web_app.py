@@ -98,7 +98,7 @@ KNOWLEDGE_ASSISTANT_TARGET_LABELS: dict[str, str] = {
     "knowledge_work_note": "知识工作备注",
 }
 KNOWLEDGE_ASSISTANT_TARGET_FIELD_LABELS: dict[str, str] = {
-    "knowledge_work_note": "当前知识工作备注框",
+    "knowledge_work_note": "当前页工作备注框",
 }
 KNOWLEDGE_ASSISTANT_TARGET_BY_TASK: dict[str, str] = {
     "source_summary": "knowledge_work_note",
@@ -606,6 +606,7 @@ def _render_assistant_adopt_button(
     target_kind: str,
     target_id: str,
     status_id: str,
+    status_text: str | None = None,
     flow_status_id: str | None = None,
     flow_status_text: str | None = None,
     source_object_kind: str,
@@ -620,7 +621,7 @@ def _render_assistant_adopt_button(
             return ""
     target_field_label = assistant_adoption["target_field_label"]
     button_label = f"带入{target_field_label}"
-    status_text = (
+    adopted_status_text = status_text or (
         f"已带入 {assistant_adoption['draft_kind_label']}。来源："
         f"{assistant_adoption['source_context_label']} 当前仍需 Keeper 人工编辑并提交。"
     )
@@ -632,7 +633,7 @@ def _render_assistant_adopt_button(
           data-adopt-source="{escape(assistant_adoption['source_id'])}"
           data-adopt-target="{escape(target_id)}"
           data-adopt-status="{escape(status_id)}"
-          data-adopt-status-text="{escape(status_text, quote=True)}"
+          data-adopt-status-text="{escape(adopted_status_text, quote=True)}"
           {f'data-adopt-flow-status="{escape(flow_status_id)}"' if flow_status_id else ''}
           {f'data-adopt-flow-status-text="{escape(flow_status_text or "", quote=True)}"' if flow_status_id else ''}
         >{escape(button_label)}</button>
@@ -682,6 +683,7 @@ def _knowledge_source_scope_metadata(source: dict[str, Any]) -> dict[str, str]:
         "source_object_label": source_label,
         "source_object_type_label": "当前资料",
         "source_context_label": f"基于当前资料：{source_label}（{source_id}）的摘要与预览。",
+        "local_context_summary": "当前资料摘要、预览片段与已展示提取结果，不含未展示的 session 私密信息。",
     }
 
 
@@ -3745,12 +3747,25 @@ def _render_knowledge_detail_page(
     extraction = source.get("character_sheet_extraction") or {}
     working_note_target_id = f"knowledge-work-note-{source_id}"
     working_note_status_id = f"knowledge-work-note-status-{source_id}"
+    working_note_flow_status_id = f"knowledge-work-note-flow-status-{source_id}"
     assistant_scope = assistant_scope or _knowledge_source_scope_metadata(source)
     assistant_adoption = _knowledge_assistant_adoption(
         assistant_result,
         source=source,
         assistant_scope=assistant_scope,
     )
+    adoption_matches_working_note = _assistant_targets_current_object(
+        assistant_adoption,
+        target_kind="knowledge_work_note",
+        source_object_kind="knowledge_source",
+        source_object_id=source_id,
+    )
+    working_note_adopted_status_text = ""
+    if assistant_adoption is not None and adoption_matches_working_note:
+        working_note_adopted_status_text = (
+            f"已带入 {assistant_adoption['draft_kind_label']}。来源："
+            f"{assistant_adoption['source_context_label']} 当前仍需人工编辑并提交。"
+        )
     body = (
         _page_head(
             eyebrow="Knowledge Detail",
@@ -3855,6 +3870,9 @@ def _render_knowledge_detail_page(
                       target_kind="knowledge_work_note",
                       target_id=working_note_target_id,
                       status_id=working_note_status_id,
+                      status_text=working_note_adopted_status_text or None,
+                      flow_status_id=working_note_flow_status_id,
+                      flow_status_text="该草稿来自当前资料页的 assistant 生成。已带入：当前页工作备注框。当前仍待人工编辑并提交。",
                       source_object_kind="knowledge_source",
                       source_object_id=source_id,
                   )}
@@ -3862,15 +3880,18 @@ def _render_knowledge_detail_page(
                       (
                           f'<p id="{escape(working_note_status_id)}" class="helper adoption-status">当前可采纳：'
                           f"{escape(assistant_adoption['draft_kind_label'])}。来源："
-                          f"{escape(assistant_adoption['source_context_label'])} 目标：当前知识工作备注框。"
+                          f"{escape(assistant_adoption['source_context_label'])} 目标：当前页工作备注框。"
                           ' 只会带入文本，不会自动提交。</p>'
                       )
-                      if _assistant_targets_current_object(
-                          assistant_adoption,
-                          target_kind="knowledge_work_note",
-                          source_object_kind="knowledge_source",
-                          source_object_id=source_id,
+                      if adoption_matches_working_note
+                      else ""
+                  }
+                  {
+                      (
+                          f'<p id="{escape(working_note_flow_status_id)}" class="helper assistant-flow-status">'
+                          '当前尚未带入。若采纳，将带入当前页工作备注框，之后仍需人工编辑并提交。</p>'
                       )
+                      if adoption_matches_working_note
                       else ""
                   }
                   <button class="button-button secondary" type="submit">确认当前页工作备注</button>
