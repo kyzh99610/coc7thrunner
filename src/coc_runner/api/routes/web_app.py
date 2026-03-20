@@ -117,6 +117,7 @@ KEEPER_NARRATIVE_DRAFT_KIND_BY_TASK: dict[str, str] = {
     "npc_pressure": "npc_pressure_note_draft",
 }
 KEEPER_NARRATIVE_SOURCE_ID = "keeper-narrative-draft-source"
+KEEPER_CONTEXT_PACK_ANCHOR_ID = "keeper-context-pack"
 KNOWLEDGE_ASSISTANT_TASKS: dict[str, str] = {
     "source_summary": "资料摘要",
     "follow_up_questions": "可追问问题",
@@ -1693,7 +1694,7 @@ def _render_keeper_context_pack_block(
     note_html = "".join(f"<li>{escape(str(line))}</li>" for line in recent_notes[:4])
     knowledge_html = "".join(f"<li>{escape(str(line))}</li>" for line in knowledge_highlights[:3])
     return f"""
-      <section class="surface">
+      <section id="{KEEPER_CONTEXT_PACK_ANCHOR_ID}" class="surface">
         <div class="surface-header">
           <div>
             <h2>{escape(title)}</h2>
@@ -1752,6 +1753,9 @@ def _render_context_pack_source_echo(
           <li>摘要范围：{escape(coverage_text)}。</li>
           <li>说明：这是 keeper-side 工作摘要输入，不是已执行结果，也不是 authoritative truth。</li>
         </ul>
+        <div class="toolbar">
+          <a class="button-link ghost" href="#{KEEPER_CONTEXT_PACK_ANCHOR_ID}">查看当前 Keeper Context Pack</a>
+        </div>
       </article>
     """
 

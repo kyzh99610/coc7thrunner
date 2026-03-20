@@ -226,6 +226,7 @@ def test_web_app_keeper_assistant_block_defaults_to_disabled_without_breaking_wo
     assert response.status_code == 200
     html = response.text
     assert "Keeper Context Pack" in html
+    assert 'id="keeper-context-pack"' in html
     assert "AI-KP Narrative Scaffolding" in html
     assert "Keeper Assistant" in html
     assert "Local LLM 未启用" in html
@@ -410,6 +411,8 @@ def test_web_app_keeper_narrative_scaffolding_generates_non_authoritative_draft(
     assert "本次 剧情支架建议基于当前 Keeper Context Pack。" in html
     assert "摘要范围：局势摘要、未解决事项、当前压力 / 线索方向、当前 narrative_work_note。" in html
     assert "这是 keeper-side 工作摘要输入，不是已执行结果，也不是 authoritative truth。" in html
+    assert 'href="#keeper-context-pack"' in html
+    assert "查看当前 Keeper Context Pack" in html
     assert "草稿类型：场景开场草稿" in html
     assert "推荐带入：剧情工作备注" in html
     assert "当前对象：当前会话" in html
@@ -1032,6 +1035,7 @@ def test_web_app_recap_page_joins_timeline_and_review_shell(
     html = response.text
     assert "Recap / Review" in html
     assert "Keeper Context Pack" in html
+    assert 'id="keeper-context-pack"' in html
     assert "当前局势摘要" in html
     assert "最近时间线" in html
     assert "Audit / Review" in html
@@ -1064,6 +1068,8 @@ def test_web_app_recap_assistant_generates_draft_without_mutating_state(
     assert "本次 recap 建议基于当前 Keeper Context Pack。" in html
     assert "摘要范围：局势摘要、未解决事项、当前压力 / 线索方向。" in html
     assert "这是 keeper-side 工作摘要输入，不是已执行结果，也不是 authoritative truth。" in html
+    assert 'href="#keeper-context-pack"' in html
+    assert "查看当前 Keeper Context Pack" in html
     after_snapshot = _get_snapshot(client, session_id)
     assert before_snapshot == after_snapshot
     assert len(fake_service.requests) == 1
