@@ -2714,6 +2714,7 @@ def _render_keeper_narrative_scaffolding(
     session_id: str,
     snapshot: dict[str, Any],
     narrative_note_value: str = "",
+    narrative_completion_notice: str | None = None,
     narrative_result: LocalLLMAssistantResult | None = None,
     narrative_scope: dict[str, str] | None = None,
     selected_narrative_task: str | None = None,
@@ -2798,6 +2799,13 @@ def _render_keeper_narrative_scaffolding(
           }
           <button class="button-button secondary" type="submit">确认当前剧情工作备注</button>
         </form>
+        {
+            (
+                f'<p class="helper assistant-completion-status">{escape(narrative_completion_notice)}</p>'
+            )
+            if narrative_completion_notice
+            else ""
+        }
       </section>
     """
 
@@ -2961,6 +2969,7 @@ def _render_keeper_workspace_page(
     detail: dict[str, Any] | str | None = None,
     action_result: dict[str, Any] | None = None,
     narrative_note_value: str = "",
+    narrative_completion_notice: str | None = None,
     narrative_result: LocalLLMAssistantResult | None = None,
     narrative_scope: dict[str, str] | None = None,
     selected_narrative_task: str | None = None,
@@ -3203,6 +3212,7 @@ def _render_keeper_workspace_page(
                 session_id=session_id,
                 snapshot=snapshot,
                 narrative_note_value=narrative_note_value,
+                narrative_completion_notice=narrative_completion_notice,
                 narrative_result=narrative_result,
                 narrative_scope=narrative_scope,
                 selected_narrative_task=selected_narrative_task,
@@ -4345,6 +4355,7 @@ def _render_app_keeper_from_service(
     detail: dict[str, Any] | str | None = None,
     action_result: dict[str, Any] | None = None,
     narrative_note_value: str = "",
+    narrative_completion_notice: str | None = None,
     narrative_result: LocalLLMAssistantResult | None = None,
     narrative_scope: dict[str, str] | None = None,
     selected_narrative_task: str | None = None,
@@ -4392,6 +4403,7 @@ def _render_app_keeper_from_service(
         detail=detail,
         action_result=action_result,
         narrative_note_value=narrative_note_value,
+        narrative_completion_notice=narrative_completion_notice,
         narrative_result=narrative_result,
         narrative_scope=narrative_scope,
         selected_narrative_task=selected_narrative_task,
@@ -4764,12 +4776,18 @@ async def web_app_keeper_narrative_note(
         if narrative_note_value
         else "当前剧情工作备注已清空；不会写入 session 主状态。"
     )
+    completion_notice = (
+        "当前剧情工作备注已人工提交，本轮剧情支架建议链已结束。"
+        if narrative_note_value
+        else "当前剧情工作备注已清空，当前页已恢复默认状态。"
+    )
     return _render_app_keeper_from_service(
         service=service,
         session_id=session_id,
         local_llm_service=local_llm_service,
         notice=notice,
         narrative_note_value=narrative_note_value,
+        narrative_completion_notice=completion_notice,
     )
 
 

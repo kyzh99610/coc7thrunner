@@ -449,11 +449,13 @@ def test_web_app_keeper_narrative_note_submit_stays_non_authoritative(
     html = response.text
     assert "当前剧情工作备注已人工确认" in html
     assert "不会写入 session 主状态" in html
+    assert "当前剧情工作备注已人工提交，本轮剧情支架建议链已结束。" in html
     assert "先把账房的潮气、旧账册和秦老板的视线压力一起摆出来。" in html
     assert 'name="narrative_note"' in html
     assert "当前可采纳：场景开场草稿" not in html
     assert "带入当前剧情工作备注框" not in html
     assert "当前尚未带入。若采纳，将带入当前剧情工作备注框，之后仍需 Keeper 人工编辑并提交。" not in html
+    assert "当前仍待 Keeper 人工编辑并提交。" not in html
     after_snapshot = _get_snapshot(client, session_id)
     assert before_snapshot == after_snapshot
 
