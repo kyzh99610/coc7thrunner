@@ -90,6 +90,33 @@ KEEPER_ASSISTANT_SOURCE_OBJECT_TYPE_LABELS: dict[str, str] = {
     "draft": "单条待审草稿",
 }
 KEEPER_ASSISTANT_DRAFT_SOURCE_ID = "keeper-assistant-draft-source"
+KEEPER_NARRATIVE_TASKS: dict[str, str] = {
+    "scene_framing": "下一幕开场建议",
+    "clue_beat": "线索 / 下一拍建议",
+    "npc_pressure": "NPC 反应 / 压力建议",
+}
+KEEPER_NARRATIVE_TARGET_LABELS: dict[str, str] = {
+    "narrative_work_note": "剧情工作备注",
+}
+KEEPER_NARRATIVE_TARGET_FIELD_LABELS: dict[str, str] = {
+    "narrative_work_note": "当前剧情工作备注框",
+}
+KEEPER_NARRATIVE_TARGET_BY_TASK: dict[str, str] = {
+    "scene_framing": "narrative_work_note",
+    "clue_beat": "narrative_work_note",
+    "npc_pressure": "narrative_work_note",
+}
+KEEPER_NARRATIVE_DRAFT_KIND_LABELS: dict[str, str] = {
+    "scene_framing_note_draft": "场景开场草稿",
+    "clue_beat_note_draft": "线索 / 下一拍草稿",
+    "npc_pressure_note_draft": "NPC 反应 / 压力草稿",
+}
+KEEPER_NARRATIVE_DRAFT_KIND_BY_TASK: dict[str, str] = {
+    "scene_framing": "scene_framing_note_draft",
+    "clue_beat": "clue_beat_note_draft",
+    "npc_pressure": "npc_pressure_note_draft",
+}
+KEEPER_NARRATIVE_SOURCE_ID = "keeper-narrative-draft-source"
 KNOWLEDGE_ASSISTANT_TASKS: dict[str, str] = {
     "source_summary": "资料摘要",
     "follow_up_questions": "可追问问题",
@@ -674,6 +701,100 @@ def _build_keeper_completion_notices(
     return prompt_notices, draft_notices
 
 
+def _keeper_narrative_scope_metadata(
+    *,
+    session_id: str,
+    snapshot: dict[str, Any],
+) -> dict[str, str]:
+    scenario_title = _excerpt((snapshot.get("scenario") or {}).get("title"), limit=48) or session_id
+    current_scene, beat_id, beat_title = _scene_and_beat(snapshot)
+    beat_label = str(beat_title or beat_id or "未命名节点")
+    return {
+        "source_object_kind": "keeper_session",
+        "source_object_id": session_id,
+        "source_object_label": scenario_title,
+        "source_object_type_label": "当前会话",
+        "source_context_label": f"基于当前 keeper workspace：{current_scene} / {beat_label}。",
+        "local_context_summary": "当前场景/beat、未完成目标、活跃 prompts、近期事件、战斗摘要与最多 4 条运行时提示。",
+    }
+
+
+def _keeper_narrative_assistant_fallback_text(
+    result: LocalLLMAssistantResult,
+) -> str | None:
+    assistant = result.assistant
+    if assistant is None:
+        return None
+    lines: list[str] = []
+    summary = _normalize_form_text(assistant.summary)
+    if summary:
+        lines.append(summary)
+    bullets = [item for item in assistant.bullets if item][:4]
+    if bullets:
+        lines.extend(f"- {item}" for item in bullets)
+    questions = [item for item in assistant.suggested_questions if item][:2]
+    if questions:
+        lines.append("可继续追问：")
+        lines.extend(f"- {item}" for item in questions)
+    return "\n".join(lines).strip() or None
+
+
+def _keeper_narrative_assistant_adoption(
+    result: LocalLLMAssistantResult | None,
+    *,
+    assistant_scope: dict[str, str] | None = None,
+) -> dict[str, str] | None:
+    if result is None or result.status != "success" or result.assistant is None:
+        return None
+    draft_text = _normalize_form_text(result.assistant.draft_text) or _keeper_narrative_assistant_fallback_text(
+        result
+    )
+    if not draft_text:
+        return None
+    target = (
+        _normalize_form_text((assistant_scope or {}).get("suggested_target"))
+        or _normalize_form_text(result.assistant.suggested_target)
+        or KEEPER_NARRATIVE_TARGET_BY_TASK.get(result.task_key)
+        or "narrative_work_note"
+    )
+    if target not in KEEPER_NARRATIVE_TARGET_LABELS:
+        return None
+    draft_kind = (
+        _normalize_form_text((assistant_scope or {}).get("draft_kind"))
+        or _normalize_form_text(result.assistant.draft_kind)
+        or KEEPER_NARRATIVE_DRAFT_KIND_BY_TASK.get(result.task_key)
+    )
+    if draft_kind not in KEEPER_NARRATIVE_DRAFT_KIND_LABELS:
+        return None
+    source_context_label = (
+        _normalize_form_text((assistant_scope or {}).get("source_context_label"))
+        or _normalize_form_text(result.assistant.source_context_label)
+        or "基于当前 keeper workspace 的场景与待处理上下文。"
+    )
+    adoption = {
+        "source_id": KEEPER_NARRATIVE_SOURCE_ID,
+        "draft_text": draft_text,
+        "target": target,
+        "target_label": KEEPER_NARRATIVE_TARGET_LABELS[target],
+        "target_field_label": KEEPER_NARRATIVE_TARGET_FIELD_LABELS[target],
+        "draft_kind": draft_kind,
+        "draft_kind_label": KEEPER_NARRATIVE_DRAFT_KIND_LABELS[draft_kind],
+        "source_context_label": source_context_label,
+    }
+    if assistant_scope:
+        for key in (
+            "source_object_kind",
+            "source_object_id",
+            "source_object_label",
+            "source_object_type_label",
+            "local_context_summary",
+        ):
+            value = _normalize_form_text(assistant_scope.get(key))
+            if value:
+                adoption[key] = value
+    return adoption
+
+
 def _knowledge_source_scope_metadata(source: dict[str, Any]) -> dict[str, str]:
     source_id = str(source.get("source_id") or "source")
     source_label = _excerpt(source.get("source_title_zh"), limit=48) or source_id
@@ -927,6 +1048,79 @@ def _build_keeper_assistant_context(
             for prompt_id, items in list(san_aftermath_suggestions.items())[:4]
         ],
         "recent_events": _event_excerpt_items(list(reversed(keeper_view.get("visible_events") or [])), limit=5),
+    }
+
+
+def _build_keeper_narrative_context(
+    *,
+    snapshot: dict[str, Any],
+    keeper_view: dict[str, Any],
+    runtime_assistance: dict[str, Any],
+) -> dict[str, Any]:
+    workflow = keeper_view.get("keeper_workflow") or {}
+    current_scene, beat_id, beat_title = _scene_and_beat(snapshot)
+    return {
+        "session": {
+            "session_id": snapshot.get("session_id"),
+            "scenario_title": (snapshot.get("scenario") or {}).get("title"),
+            "status": snapshot.get("status"),
+            "current_scene": current_scene,
+            "current_beat": beat_id,
+            "current_beat_title": beat_title,
+        },
+        "workflow_summary": [
+            str(item)
+            for item in list((workflow.get("summary") or {}).get("summary_lines") or [])[:4]
+        ],
+        "unresolved_objectives": [
+            {
+                "objective_id": item.get("objective_id"),
+                "title": item.get("title"),
+                "status": item.get("status"),
+            }
+            for item in list(workflow.get("unresolved_objectives") or [])[:3]
+        ],
+        "active_prompts": [
+            {
+                "prompt_id": item.get("prompt_id"),
+                "category": item.get("category"),
+                "status": item.get("status"),
+                "prompt_text": _excerpt(item.get("prompt_text"), limit=120),
+                "trigger_reason": _excerpt(item.get("trigger_reason"), limit=100),
+            }
+            for item in list(workflow.get("active_prompts") or [])[:3]
+        ],
+        "recent_events": _event_excerpt_items(
+            list(reversed(keeper_view.get("visible_events") or [])),
+            limit=4,
+        ),
+        "combat": {
+            "current_actor_id": (snapshot.get("combat_context") or {}).get("current_actor_id"),
+            "round_number": (snapshot.get("combat_context") or {}).get("round_number"),
+            "turn_order_count": len((snapshot.get("combat_context") or {}).get("turn_order") or []),
+        },
+        "runtime_hints": {
+            "rule_hints": [
+                {
+                    "title": item.get("title") or item.get("title_zh") or item.get("topic_key"),
+                    "summary": _excerpt(
+                        item.get("summary") or item.get("content") or item.get("text"),
+                        limit=120,
+                    ),
+                }
+                for item in list(runtime_assistance.get("rule_hints") or [])[:2]
+            ],
+            "knowledge_hints": [
+                {
+                    "title": item.get("title") or item.get("title_zh") or item.get("topic_key"),
+                    "summary": _excerpt(
+                        item.get("summary") or item.get("content") or item.get("text"),
+                        limit=120,
+                    ),
+                }
+                for item in list(runtime_assistance.get("knowledge_hints") or [])[:2]
+            ],
+        },
     }
 
 
@@ -2515,6 +2709,99 @@ def _render_runtime_assistance(runtime_assistance: dict[str, Any], *, session_id
     """
 
 
+def _render_keeper_narrative_scaffolding(
+    *,
+    session_id: str,
+    snapshot: dict[str, Any],
+    narrative_note_value: str = "",
+    narrative_result: LocalLLMAssistantResult | None = None,
+    narrative_scope: dict[str, str] | None = None,
+    selected_narrative_task: str | None = None,
+) -> str:
+    narrative_note_target_id = f"narrative-work-note-{session_id}"
+    narrative_note_status_id = f"narrative-work-note-status-{session_id}"
+    narrative_note_flow_status_id = f"narrative-work-note-flow-status-{session_id}"
+    narrative_scope = narrative_scope or _keeper_narrative_scope_metadata(
+        session_id=session_id,
+        snapshot=snapshot,
+    )
+    narrative_adoption = _keeper_narrative_assistant_adoption(
+        narrative_result,
+        assistant_scope=narrative_scope,
+    )
+    adoption_matches_target = _assistant_targets_current_object(
+        narrative_adoption,
+        target_kind="narrative_work_note",
+        source_object_kind="keeper_session",
+        source_object_id=session_id,
+    )
+    adopted_status_text = ""
+    if narrative_adoption is not None and adoption_matches_target:
+        adopted_status_text = (
+            f"已带入 {narrative_adoption['draft_kind_label']}。来源："
+            f"{narrative_adoption['source_context_label']} 当前仍需 Keeper 人工编辑并提交。"
+        )
+    return f"""
+      {_render_local_llm_assistant_panel(
+          title="AI-KP Narrative Scaffolding",
+          description="可选的本地 LLM 剧情支架块，只基于 keeper 可见摘要生成下一幕开场、线索/下一拍或 NPC 反应建议。",
+          action=f"/app/sessions/{quote(session_id)}/keeper/narrative-assistant",
+          tasks=KEEPER_NARRATIVE_TASKS,
+          selected_task=selected_narrative_task,
+          result=narrative_result,
+          hidden_fields={"narrative_note": narrative_note_value},
+          extra_output_html=_render_assistant_draft_source(
+              assistant_scope=narrative_scope,
+              assistant_adoption=narrative_adoption,
+          ),
+      )}
+      <section class="surface">
+        <div class="surface-header">
+          <div>
+            <h2>当前剧情工作备注</h2>
+            <p>只用于 keeper 当前页组织 scene framing / beat / NPC 反应思路，不会写入 session truth。</p>
+          </div>
+        </div>
+        <form method="post" action="/app/sessions/{escape(session_id)}/keeper/narrative-note" class="form-stack">
+          <label>
+            剧情工作备注 / 场景支架
+            <textarea id="{escape(narrative_note_target_id)}" name="narrative_note" rows="8" placeholder="可把 narrative scaffolding 建议先整理在这里，再人工确认。">{escape(narrative_note_value)}</textarea>
+          </label>
+          {_render_assistant_adopt_button(
+              assistant_adoption=narrative_adoption,
+              target_kind="narrative_work_note",
+              target_id=narrative_note_target_id,
+              status_id=narrative_note_status_id,
+              status_text=adopted_status_text or None,
+              flow_status_id=narrative_note_flow_status_id,
+              flow_status_text="该草稿来自当前 keeper narrative scaffolding。已带入：当前剧情工作备注框。当前仍待 Keeper 人工编辑并提交。",
+              source_object_kind="keeper_session",
+              source_object_id=session_id,
+          )}
+          {
+              (
+                  f'<p id="{escape(narrative_note_status_id)}" class="helper adoption-status">当前可采纳：'
+                  f"{escape(narrative_adoption['draft_kind_label'])}。来源："
+                  f"{escape(narrative_adoption['source_context_label'])} 目标：当前剧情工作备注框。"
+                  ' 只会带入文本，不会自动提交。</p>'
+              )
+              if adoption_matches_target
+              else ""
+          }
+          {
+              (
+                  f'<p id="{escape(narrative_note_flow_status_id)}" class="helper assistant-flow-status">'
+                  '当前尚未带入。若采纳，将带入当前剧情工作备注框，之后仍需 Keeper 人工编辑并提交。</p>'
+              )
+              if adoption_matches_target
+              else ""
+          }
+          <button class="button-button secondary" type="submit">确认当前剧情工作备注</button>
+        </form>
+      </section>
+    """
+
+
 def _render_keeper_operation_result(action_result: dict[str, Any] | None) -> str:
     if not action_result:
         return ""
@@ -2673,6 +2960,10 @@ def _render_keeper_workspace_page(
     notice: str | None = None,
     detail: dict[str, Any] | str | None = None,
     action_result: dict[str, Any] | None = None,
+    narrative_note_value: str = "",
+    narrative_result: LocalLLMAssistantResult | None = None,
+    narrative_scope: dict[str, str] | None = None,
+    selected_narrative_task: str | None = None,
     assistant_result: LocalLLMAssistantResult | None = None,
     assistant_scope: dict[str, str] | None = None,
     selected_assistant_task: str | None = None,
@@ -2908,6 +3199,14 @@ def _render_keeper_workspace_page(
             </section>
           </div>
           <div class="card-list">
+            {_render_keeper_narrative_scaffolding(
+                session_id=session_id,
+                snapshot=snapshot,
+                narrative_note_value=narrative_note_value,
+                narrative_result=narrative_result,
+                narrative_scope=narrative_scope,
+                selected_narrative_task=selected_narrative_task,
+            )}
             {_render_local_llm_assistant_panel(
                 title="Keeper Assistant",
                 description="可选的本地 LLM 辅助块，只基于当前 keeper 工作区摘要生成非权威建议或草稿。",
@@ -2915,6 +3214,7 @@ def _render_keeper_workspace_page(
                 tasks=KEEPER_ASSISTANT_TASKS,
                 selected_task=selected_assistant_task,
                 result=assistant_result,
+                hidden_fields={"narrative_note": narrative_note_value},
                 extra_output_html=_render_assistant_draft_source(
                     assistant_scope=assistant_scope,
                     assistant_adoption=assistant_adoption,
@@ -4044,6 +4344,10 @@ def _render_app_keeper_from_service(
     notice: str | None = None,
     detail: dict[str, Any] | str | None = None,
     action_result: dict[str, Any] | None = None,
+    narrative_note_value: str = "",
+    narrative_result: LocalLLMAssistantResult | None = None,
+    narrative_scope: dict[str, str] | None = None,
+    selected_narrative_task: str | None = None,
     assistant_result: LocalLLMAssistantResult | None = None,
     assistant_scope: dict[str, str] | None = None,
     selected_assistant_task: str | None = None,
@@ -4070,6 +4374,12 @@ def _render_app_keeper_from_service(
             tasks=KEEPER_ASSISTANT_TASKS,
             selected_task=selected_assistant_task,
         )
+    if narrative_result is None and local_llm_service is not None and not local_llm_service.enabled:
+        narrative_result = _disabled_assistant_result(
+            workspace_key="keeper_narrative_scaffolding",
+            tasks=KEEPER_NARRATIVE_TASKS,
+            selected_task=selected_narrative_task,
+        )
     response = _render_keeper_workspace_page(
         session_id=session_id,
         snapshot=session.model_dump(mode="json"),
@@ -4081,6 +4391,10 @@ def _render_app_keeper_from_service(
         notice=notice,
         detail=detail,
         action_result=action_result,
+        narrative_note_value=narrative_note_value,
+        narrative_result=narrative_result,
+        narrative_scope=narrative_scope,
+        selected_narrative_task=selected_narrative_task,
         assistant_result=assistant_result,
         assistant_scope=assistant_scope,
         selected_assistant_task=selected_assistant_task,
@@ -4327,6 +4641,7 @@ async def web_app_keeper_assistant(
     local_llm_service: LocalLLMService = Depends(get_local_llm_service),
 ) -> HTMLResponse:
     form = await _read_form_payload(request)
+    narrative_note_value = _normalize_form_text(form.get("narrative_note")) or ""
     selected_task, task_label = _assistant_task_selection(
         KEEPER_ASSISTANT_TASKS,
         _normalize_form_text(form.get("assistant_task")),
@@ -4368,8 +4683,93 @@ async def web_app_keeper_assistant(
         warnings=[warning.model_dump(mode="json") for warning in warnings],
         runtime_assistance=runtime_assistance,
         san_aftermath_suggestions=san_aftermath_suggestions,
+        narrative_note_value=narrative_note_value,
         assistant_result=assistant_result,
         selected_assistant_task=selected_task,
+    )
+
+
+@router.post("/sessions/{session_id}/keeper/narrative-assistant", response_class=HTMLResponse)
+async def web_app_keeper_narrative_assistant(
+    session_id: str,
+    request: Request,
+    service: SessionService = Depends(get_session_service),
+    local_llm_service: LocalLLMService = Depends(get_local_llm_service),
+) -> HTMLResponse:
+    form = await _read_form_payload(request)
+    narrative_note_value = _normalize_form_text(form.get("narrative_note")) or ""
+    selected_task, task_label = _assistant_task_selection(
+        KEEPER_NARRATIVE_TASKS,
+        _normalize_form_text(form.get("assistant_task")),
+    )
+    try:
+        session, keeper_view, checkpoints, warnings = service.get_keeper_workspace(session_id)
+    except LookupError as exc:
+        body = _detail_block(extract_error_detail(exc)) + _page_head(
+            eyebrow="Keeper Workspace",
+            title="Keeper 工作区不可用",
+            summary="当前无法加载 keeper workspace。",
+            actions=[("返回 Sessions", "/app/sessions", "ghost")],
+        )
+        return render_web_app_shell(
+            title=f"Session {session_id} Keeper Missing",
+            sidebar_html=_render_sidebar(active_section="keeper"),
+            body_html=body,
+            status_code=status.HTTP_404_NOT_FOUND,
+        )
+    runtime_assistance = service.get_keeper_runtime_assistance(keeper_view=keeper_view)
+    san_aftermath_suggestions = service.get_keeper_san_aftermath_suggestions(session=session)
+    snapshot = session.model_dump(mode="json")
+    narrative_scope = _keeper_narrative_scope_metadata(
+        session_id=session_id,
+        snapshot=snapshot,
+    )
+    narrative_result = _generate_local_llm_assistant(
+        local_llm_service=local_llm_service,
+        workspace_key="keeper_narrative_scaffolding",
+        task_key=selected_task,
+        task_label=task_label,
+        context=_build_keeper_narrative_context(
+            snapshot=snapshot,
+            keeper_view=keeper_view.model_dump(mode="json"),
+            runtime_assistance=runtime_assistance,
+        ),
+    )
+    return _render_keeper_workspace_page(
+        session_id=session_id,
+        snapshot=snapshot,
+        keeper_view=keeper_view.model_dump(mode="json"),
+        checkpoints=[checkpoint.model_dump(mode="json") for checkpoint in checkpoints],
+        warnings=[warning.model_dump(mode="json") for warning in warnings],
+        runtime_assistance=runtime_assistance,
+        san_aftermath_suggestions=san_aftermath_suggestions,
+        narrative_note_value=narrative_note_value,
+        narrative_result=narrative_result,
+        narrative_scope=narrative_scope,
+        selected_narrative_task=selected_task,
+    )
+
+
+@router.post("/sessions/{session_id}/keeper/narrative-note", response_class=HTMLResponse)
+async def web_app_keeper_narrative_note(
+    session_id: str,
+    request: Request,
+    service: SessionService = Depends(get_session_service),
+    local_llm_service: LocalLLMService = Depends(get_local_llm_service),
+) -> HTMLResponse:
+    form = await _read_form_payload(request)
+    narrative_note_value = _normalize_form_text(form.get("narrative_note")) or ""
+    notice = (
+        "当前剧情工作备注已人工确认；仅保留在当前返回页，不会写入 session 主状态。"
+        if narrative_note_value
+        else "当前剧情工作备注已清空；不会写入 session 主状态。"
+    )
+    return _render_app_keeper_from_service(
+        service=service,
+        session_id=session_id,
+        local_llm_service=local_llm_service,
+        notice=notice,
+        narrative_note_value=narrative_note_value,
     )
 
 

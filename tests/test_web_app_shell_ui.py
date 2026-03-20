@@ -39,18 +39,27 @@ class _FakeLocalLLMService:
             "draft_review_note_draft": "draft_review_note_draft",
             "source_summary": "knowledge_summary_note_draft",
             "follow_up_questions": "knowledge_follow_up_note_draft",
+            "scene_framing": "scene_framing_note_draft",
+            "clue_beat": "clue_beat_note_draft",
+            "npc_pressure": "npc_pressure_note_draft",
         }.get(request.task_key)
         suggested_target = {
             "note_draft": "prompt_note",
             "draft_review_note_draft": "draft_review_editor_notes",
             "source_summary": "knowledge_work_note",
             "follow_up_questions": "knowledge_work_note",
+            "scene_framing": "narrative_work_note",
+            "clue_beat": "narrative_work_note",
+            "npc_pressure": "narrative_work_note",
         }.get(request.task_key)
         source_context_label = {
             "note_draft": "基于当前 keeper workspace 摘要与待处理 prompts。",
             "draft_review_note_draft": "基于当前 keeper workspace 摘要与待审草稿概览。",
             "source_summary": "基于当前资料摘要与预览。",
             "follow_up_questions": "基于当前资料摘要与预览。",
+            "scene_framing": "基于当前 keeper workspace：旅店账房 / 核对账房记录。",
+            "clue_beat": "基于当前 keeper workspace：旅店账房 / 核对账房记录。",
+            "npc_pressure": "基于当前 keeper workspace：旅店账房 / 核对账房记录。",
         }.get(request.task_key)
         if object_kind == "prompt" and object_id and object_label:
             source_context_label = f"基于当前 prompt：{object_label}（{object_id}）。"
@@ -78,7 +87,19 @@ class _FakeLocalLLMService:
                     else (
                         "- 地下储物间和登记簿之间还有什么缺口？\n- 这条线索是否能指向失踪住客？"
                         if request.task_key == "follow_up_questions"
-                        else "这是一段可继续编辑的草稿。"
+                        else (
+                            "开场可先把账房里的旧账册、潮气和老板的目光压力压出来。"
+                            if request.task_key == "scene_framing"
+                            else (
+                                "建议下一拍让缺页编号通过账册边角或店员反应被看见。"
+                                if request.task_key == "clue_beat"
+                                else (
+                                    "秦老板会先压低声音否认，再用催促离店制造时间压力。"
+                                    if request.task_key == "npc_pressure"
+                                    else "这是一段可继续编辑的草稿。"
+                                )
+                            )
+                        )
                     )
                 ),
                 draft_kind=draft_kind,
@@ -204,9 +225,12 @@ def test_web_app_keeper_assistant_block_defaults_to_disabled_without_breaking_wo
 
     assert response.status_code == 200
     html = response.text
+    assert "AI-KP Narrative Scaffolding" in html
     assert "Keeper Assistant" in html
     assert "Local LLM 未启用" in html
     assert "不会直接修改 authoritative state" in html
+    assert 'action="/app/sessions/' in html
+    assert 'name="narrative_note"' in html
 
 
 def test_web_app_keeper_workspace_surfaces_pending_ops_and_legacy_handoffs(
@@ -356,6 +380,80 @@ def test_web_app_keeper_assistant_review_note_adoption_targets_editor_notes(
     assert 'type="button"' in html
     assert 'data-adopt-status="draft-review-status-' in html
     assert 'data-adopt-status-text="已带入 草稿审阅说明草稿。来源：基于当前 keeper workspace 摘要与待审草稿概览。 当前仍需 Keeper 人工编辑并提交。"' in html
+    after_snapshot = _get_snapshot(client, session_id)
+    assert before_snapshot == after_snapshot
+
+
+def test_web_app_keeper_narrative_scaffolding_generates_non_authoritative_draft(
+    client: TestClient,
+) -> None:
+    session_id = _start_keeper_dashboard_session(client)
+    _advance_keeper_dashboard_session(client, session_id)
+    fake_service = _FakeLocalLLMService()
+    client.app.state.local_llm_service = fake_service
+    before_snapshot = _get_snapshot(client, session_id)
+
+    response = client.post(
+        f"/app/sessions/{session_id}/keeper/narrative-assistant",
+        data={"assistant_task": "scene_framing", "narrative_note": "已有剧情草稿"},
+    )
+
+    assert response.status_code == 200
+    html = response.text
+    assert "AI-KP Narrative Scaffolding" in html
+    assert "下一幕开场建议 结果" in html
+    assert "这是非权威辅助输出。" in html
+    assert "草稿类型：场景开场草稿" in html
+    assert "推荐带入：剧情工作备注" in html
+    assert "当前对象：当前会话" in html
+    assert f"对象标识：{session_id}" in html
+    assert "来源语境：基于当前 keeper workspace：旅店账房 / 核对账房记录。" in html
+    assert "局部上下文：当前场景/beat、未完成目标、活跃 prompts、近期事件、战斗摘要与最多 4 条运行时提示。" in html
+    assert '>带入当前剧情工作备注框</button>' in html
+    assert f'data-adopt-target="narrative-work-note-{session_id}"' in html
+    assert 'data-adopt-status-text="已带入 场景开场草稿。来源：基于当前 keeper workspace：旅店账房 / 核对账房记录。 当前仍需 Keeper 人工编辑并提交。"' in html
+    assert 'data-adopt-flow-status-text="该草稿来自当前 keeper narrative scaffolding。已带入：当前剧情工作备注框。当前仍待 Keeper 人工编辑并提交。"' in html
+    assert "当前尚未带入。若采纳，将带入当前剧情工作备注框，之后仍需 Keeper 人工编辑并提交。" in html
+    assert "已有剧情草稿" in html
+    assert len(fake_service.requests) == 1
+    request = fake_service.requests[0]
+    assert request.workspace_key == "keeper_narrative_scaffolding"
+    assert request.task_key == "scene_framing"
+    assert request.context["session"]["current_scene"] == "旅店账房"
+    assert request.context["active_prompts"]
+    assert "runtime_hints" in request.context
+    assert "knowledge_hints" in request.context["runtime_hints"]
+    serialized_context = str(request.context)
+    assert "private_notes" not in serialized_context
+    assert "secret_state_refs" not in serialized_context
+    assert "participants" not in serialized_context
+    after_snapshot = _get_snapshot(client, session_id)
+    assert before_snapshot == after_snapshot
+
+
+def test_web_app_keeper_narrative_note_submit_stays_non_authoritative(
+    client: TestClient,
+) -> None:
+    session_id = _start_keeper_dashboard_session(client)
+    _advance_keeper_dashboard_session(client, session_id)
+    fake_service = _FakeLocalLLMService()
+    client.app.state.local_llm_service = fake_service
+    before_snapshot = _get_snapshot(client, session_id)
+
+    response = client.post(
+        f"/app/sessions/{session_id}/keeper/narrative-note",
+        data={"narrative_note": "先把账房的潮气、旧账册和秦老板的视线压力一起摆出来。"},
+    )
+
+    assert response.status_code == 200
+    html = response.text
+    assert "当前剧情工作备注已人工确认" in html
+    assert "不会写入 session 主状态" in html
+    assert "先把账房的潮气、旧账册和秦老板的视线压力一起摆出来。" in html
+    assert 'name="narrative_note"' in html
+    assert "当前可采纳：场景开场草稿" not in html
+    assert "带入当前剧情工作备注框" not in html
+    assert "当前尚未带入。若采纳，将带入当前剧情工作备注框，之后仍需 Keeper 人工编辑并提交。" not in html
     after_snapshot = _get_snapshot(client, session_id)
     assert before_snapshot == after_snapshot
 

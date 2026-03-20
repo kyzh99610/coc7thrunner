@@ -18,7 +18,12 @@ NON_AUTHORITATIVE_DISCLAIMER = (
 
 
 class LocalLLMAssistantRequest(BaseModel):
-    workspace_key: Literal["keeper_workspace", "knowledge_detail", "session_recap"]
+    workspace_key: Literal[
+        "keeper_workspace",
+        "keeper_narrative_scaffolding",
+        "knowledge_detail",
+        "session_recap",
+    ]
     task_key: str = Field(min_length=1, max_length=80)
     task_label: str = Field(min_length=1, max_length=120)
     context: dict[str, Any]
@@ -221,6 +226,7 @@ class LocalLLMService:
         workspace_template = _load_prompt_template(
             {
                 "keeper_workspace": "keeper_assistant_user_prompt.txt",
+                "keeper_narrative_scaffolding": "keeper_narrative_scaffolding_user_prompt.txt",
                 "knowledge_detail": "knowledge_assistant_user_prompt.txt",
                 "session_recap": "recap_assistant_user_prompt.txt",
             }[request.workspace_key]

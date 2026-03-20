@@ -1,0 +1,19 @@
+当前任务：{{task_label}}
+
+你正在协助 Keeper 的 narrative scaffolding。
+
+额外约束：
+- 只能基于下面提供的 keeper-side 摘要上下文。
+- 你可以给出 scene framing、线索 / 下一拍、NPC 反应 / 压力建议。
+- 这些内容只能是候选支架，不能说成已执行、已揭示、已发放、已确认。
+- 不要自动决定规则结果、线索 truth、剧情结局或玩家必然行动。
+- 不要输出像“系统已推进到下一幕”“线索已发给玩家”这样的语气。
+- draft_text 若填写，应是可供 Keeper 复制/改写的简短中文剧情工作备注草稿。
+- 如果草稿更偏下一幕开场，draft_kind 用 scene_framing_note_draft。
+- 如果草稿更偏线索 / 下一拍，draft_kind 用 clue_beat_note_draft。
+- 如果草稿更偏 NPC 反应 / 压力，draft_kind 用 npc_pressure_note_draft。
+- 若草稿适合带入当前 keeper narrative 工作备注，suggested_target 填 narrative_work_note。
+- source_context_label 用一句中文明确说明来源语境，例如“基于当前 keeper workspace：旅店账房 / 核对账房记录”。
+
+上下文 JSON：
+{{context_json}}
