@@ -342,6 +342,7 @@ def test_web_app_experimental_ai_demo_run_keeps_kp_and_investigator_inputs_isola
     assert "AI Investigator 行动提案" in html
     assert "AI Investigator 输入来源" in html
     assert "本次 AI investigator 实验输出只基于所选调查员的可见状态摘要。" in html
+    assert "本轮 continuity 来源" not in html
     assert "不含 keeper-only 信息" in html
     assert "experimental / non-authoritative" in html
     assert "为下一轮补充上一轮实际结果 / Keeper 采纳情况" in html
@@ -413,6 +414,12 @@ def test_web_app_experimental_ai_demo_next_turn_uses_page_local_continuity_bridg
     html = second_response.text
     assert "已生成第 2 轮 isolated experimental AI demo 输出" in html
     assert "页内 continuity bridge" in html
+    assert html.count("本轮 continuity 来源") == 2
+    assert "本轮已参考上一轮 continuity bridge。" in html
+    assert "已纳入 keeper-side continuity note。" in html
+    assert "已纳入公开可见 continuity note。" in html
+    assert "本轮已参考上一轮公开 continuity bridge。" in html
+    assert "输入只含当前页公开可见 continuity 摘要，不含 keeper-side continuity。" in html
     assert 'name="current_turn_index" value="2"' in html
     assert len(fake_service.requests) == 4
     kp_request = fake_service.requests[2]
@@ -432,6 +439,7 @@ def test_web_app_experimental_ai_demo_next_turn_uses_page_local_continuity_bridg
     assert "compressed_context" not in serialized_investigator_context
     assert "private_notes" not in serialized_investigator_context
     assert "secret_state_refs" not in serialized_investigator_context
+    assert "Keeper 实际采纳了老板先否认" not in html
     after_snapshot = _get_snapshot(client, session_id)
     assert before_snapshot == after_snapshot
 

@@ -2115,6 +2115,45 @@ def _render_experimental_demo_source_echo(
     """
 
 
+def _render_experimental_kp_continuity_source_echo(
+    *,
+    result: LocalLLMAssistantResult | None,
+    turn_bridge: dict[str, Any] | None,
+) -> str:
+    if turn_bridge is None:
+        return ""
+    lines = ["本轮已参考上一轮 continuity bridge。"]
+    if _normalize_form_text(turn_bridge.get("keeper_adoption_and_outcome_note")):
+        lines.append("已纳入 keeper-side continuity note。")
+    if _normalize_form_text(turn_bridge.get("public_outcome_note")):
+        lines.append("已纳入公开可见 continuity note。")
+    lines.append("说明：这些 continuity 只在当前实验页临时生效，不是已写入状态。")
+    return _render_experimental_demo_source_echo(
+        result=result,
+        title="本轮 continuity 来源",
+        lines=lines,
+    )
+
+
+def _render_experimental_investigator_continuity_source_echo(
+    *,
+    result: LocalLLMAssistantResult | None,
+    turn_bridge: dict[str, Any] | None,
+) -> str:
+    if turn_bridge is None:
+        return ""
+    lines = [
+        "本轮已参考上一轮公开 continuity bridge。",
+        "输入只含当前页公开可见 continuity 摘要，不含 keeper-side continuity。",
+        "说明：这是当前页临时实验上下文，不是已写入状态。",
+    ]
+    return _render_experimental_demo_source_echo(
+        result=result,
+        title="本轮 continuity 来源",
+        lines=lines,
+    )
+
+
 def _render_experimental_investigator_input_block(
     *,
     investigator_view: dict[str, Any] | None,
@@ -5025,6 +5064,8 @@ def _render_experimental_ai_demo_page(
     kp_result: LocalLLMAssistantResult | None,
     investigator_result: LocalLLMAssistantResult | None,
     current_turn_index: int = 0,
+    kp_turn_bridge: dict[str, Any] | None = None,
+    investigator_turn_bridge: dict[str, Any] | None = None,
     notice: str | None = None,
     detail: dict[str, Any] | str | None = None,
 ) -> HTMLResponse:
@@ -5099,27 +5140,39 @@ def _render_experimental_ai_demo_page(
                 title="AI KP Demo Output",
                 summary="候选的 scene framing / pressure / next beat / NPC reaction 草稿，仅供 Keeper 比较。",
                 result=kp_result,
-                source_echo_html=_render_experimental_demo_source_echo(
-                    result=kp_result,
-                    title="AI KP 输入来源",
-                    lines=[
-                        "本次 AI KP 实验输出仅基于 keeper-side Compressed Context 与最多 3 条近期事件摘要。",
-                        "说明：这是 experimental / non-authoritative narration draft，不会自动推进 session。",
-                    ],
+                source_echo_html=(
+                    _render_experimental_demo_source_echo(
+                        result=kp_result,
+                        title="AI KP 输入来源",
+                        lines=[
+                            "本次 AI KP 实验输出仅基于 keeper-side Compressed Context 与最多 3 条近期事件摘要。",
+                            "说明：这是 experimental / non-authoritative narration draft，不会自动推进 session。",
+                        ],
+                    )
+                    + _render_experimental_kp_continuity_source_echo(
+                        result=kp_result,
+                        turn_bridge=kp_turn_bridge,
+                    )
                 ),
             )}
             {_render_experimental_ai_demo_output_block(
                 title="AI Investigator Demo Output",
                 summary="候选的调查员行动提案、行动理由与可继续追问方向，仅供观察 AI investigator reasoning loop。",
                 result=investigator_result,
-                source_echo_html=_render_experimental_demo_source_echo(
-                    result=investigator_result,
-                    title="AI Investigator 输入来源",
-                    lines=[
-                        "本次 AI investigator 实验输出只基于所选调查员的可见状态摘要。",
-                        "输入范围：可见场景、可见线索、最近事件、角色状态与战斗摘要，不含 keeper-only 信息。",
-                        "说明：这是 experimental / non-authoritative action proposal，不会自动执行。",
-                    ],
+                source_echo_html=(
+                    _render_experimental_demo_source_echo(
+                        result=investigator_result,
+                        title="AI Investigator 输入来源",
+                        lines=[
+                            "本次 AI investigator 实验输出只基于所选调查员的可见状态摘要。",
+                            "输入范围：可见场景、可见线索、最近事件、角色状态与战斗摘要，不含 keeper-only 信息。",
+                            "说明：这是 experimental / non-authoritative action proposal，不会自动执行。",
+                        ],
+                    )
+                    + _render_experimental_investigator_continuity_source_echo(
+                        result=investigator_result,
+                        turn_bridge=investigator_turn_bridge,
+                    )
                 ),
             )}
             {_render_experimental_ai_demo_turn_loop_form(
@@ -5341,6 +5394,8 @@ def _render_app_experimental_ai_demo_from_service(
     kp_result: LocalLLMAssistantResult | None = None,
     investigator_result: LocalLLMAssistantResult | None = None,
     current_turn_index: int = 0,
+    kp_turn_bridge: dict[str, Any] | None = None,
+    investigator_turn_bridge: dict[str, Any] | None = None,
     notice: str | None = None,
     detail: dict[str, Any] | str | None = None,
     status_code: int = status.HTTP_200_OK,
@@ -5414,6 +5469,8 @@ def _render_app_experimental_ai_demo_from_service(
         kp_result=kp_result,
         investigator_result=investigator_result,
         current_turn_index=current_turn_index,
+        kp_turn_bridge=kp_turn_bridge,
+        investigator_turn_bridge=investigator_turn_bridge,
         notice=notice,
         detail=detail,
     )
@@ -5695,6 +5752,8 @@ async def web_app_experimental_ai_demo_run(
         kp_result=kp_result,
         investigator_result=investigator_result,
         current_turn_index=next_turn_index,
+        kp_turn_bridge=kp_turn_bridge,
+        investigator_turn_bridge=investigator_turn_bridge,
         notice=continuation_notice,
     )
 
