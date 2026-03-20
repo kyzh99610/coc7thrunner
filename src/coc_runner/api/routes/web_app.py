@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 from html import escape
-from typing import Any
+from typing import Any, Mapping
 from urllib.parse import quote, urlencode
 
 from fastapi import APIRouter, Depends, Request, status
@@ -1691,9 +1691,10 @@ def _build_experimental_ai_kp_demo_context(
     snapshot: dict[str, Any],
     context_pack: dict[str, Any],
     compressed_context: dict[str, Any],
+    turn_bridge: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     current_scene, beat_id, beat_title = _scene_and_beat(snapshot)
-    return {
+    context = {
         "session": {
             "session_id": snapshot.get("session_id"),
             "scenario_title": (snapshot.get("scenario") or {}).get("title"),
@@ -1710,12 +1711,16 @@ def _build_experimental_ai_kp_demo_context(
             "auto_advance_allowed": False,
         },
     }
+    if turn_bridge:
+        context["turn_bridge"] = turn_bridge
+    return context
 
 
 def _build_experimental_ai_investigator_demo_context(
     *,
     viewer_id: str,
     view: dict[str, Any],
+    turn_bridge: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     participants = [
         participant
@@ -1747,7 +1752,7 @@ def _build_experimental_ai_investigator_demo_context(
         for clue in ((view.get("scenario") or {}).get("clues") or [])
         if isinstance(clue, dict)
     ]
-    return {
+    context = {
         "viewer": {
             "actor_id": viewer_id,
             "display_name": participant.get("display_name"),
@@ -1789,6 +1794,101 @@ def _build_experimental_ai_investigator_demo_context(
             "keeper_only_fields_included": False,
         },
     }
+    if turn_bridge:
+        context["turn_bridge"] = turn_bridge
+    return context
+
+
+def _assistant_result_turn_bridge_payload(
+    result: LocalLLMAssistantResult | None,
+) -> dict[str, str] | None:
+    if result is None or result.status != "success" or result.assistant is None:
+        return None
+    assistant = result.assistant
+    payload = {
+        "title": _normalize_form_text(assistant.title) or _normalize_form_text(result.task_label) or "",
+        "summary": _normalize_form_text(assistant.summary) or "",
+        "draft_excerpt": _excerpt(
+            _normalize_form_text(assistant.draft_text),
+            limit=180,
+        )
+        or "",
+    }
+    if not any(payload.values()):
+        return None
+    return payload
+
+
+def _turn_bridge_payload_from_form(
+    form: Mapping[str, Any],
+    *,
+    prefix: str,
+) -> dict[str, str] | None:
+    payload = {
+        "title": _normalize_form_text(form.get(f"{prefix}_title")) or "",
+        "summary": _normalize_form_text(form.get(f"{prefix}_summary")) or "",
+        "draft_excerpt": _normalize_form_text(form.get(f"{prefix}_draft_excerpt")) or "",
+    }
+    if not any(payload.values()):
+        return None
+    return payload
+
+
+def _parse_turn_index(raw_value: Any) -> int:
+    try:
+        value = int(str(raw_value or "0"))
+    except (TypeError, ValueError):
+        return 0
+    return max(value, 0)
+
+
+def _build_experimental_ai_kp_turn_bridge(
+    *,
+    previous_turn_index: int,
+    prior_kp_payload: dict[str, str] | None,
+    prior_investigator_payload: dict[str, str] | None,
+    keeper_turn_note: str,
+    visible_turn_note: str,
+) -> dict[str, Any] | None:
+    bridge: dict[str, Any] = {
+        "mode": "page_local_temporary_turn_bridge",
+        "non_authoritative": True,
+    }
+    if previous_turn_index > 0:
+        bridge["previous_turn_index"] = previous_turn_index
+    if prior_kp_payload:
+        bridge["previous_ai_kp"] = prior_kp_payload
+    if prior_investigator_payload:
+        bridge["previous_ai_investigator"] = prior_investigator_payload
+    if keeper_turn_note:
+        bridge["keeper_adoption_and_outcome_note"] = keeper_turn_note
+    if visible_turn_note:
+        bridge["public_outcome_note"] = visible_turn_note
+    if len(bridge) <= 2:
+        return None
+    return bridge
+
+
+def _build_experimental_ai_investigator_turn_bridge(
+    *,
+    previous_turn_index: int,
+    prior_investigator_payload: dict[str, str] | None,
+    visible_turn_note: str,
+) -> dict[str, Any] | None:
+    bridge: dict[str, Any] = {
+        "mode": "page_local_temporary_visible_turn_bridge",
+        "visible_only": True,
+        "non_authoritative": True,
+    }
+    if previous_turn_index > 0:
+        bridge["previous_turn_index"] = previous_turn_index
+    if prior_investigator_payload:
+        bridge["previous_ai_investigator"] = prior_investigator_payload
+    if visible_turn_note:
+        bridge["public_outcome_note"] = visible_turn_note
+    if len(bridge) <= 3:
+        return None
+    return bridge
 
 
 def _build_keeper_context_pack_payload(
@@ -2092,6 +2192,65 @@ def _render_experimental_ai_demo_output_block(
           {_render_local_llm_assistant_output(result)}
           {source_echo_html}
         </div>
+      </section>
+    """
+
+
+def _render_experimental_ai_demo_turn_loop_form(
+    *,
+    session_id: str,
+    selected_investigator_id: str,
+    current_turn_index: int,
+    kp_payload: dict[str, str] | None,
+    investigator_payload: dict[str, str] | None,
+    keeper_turn_note_value: str = "",
+    visible_turn_note_value: str = "",
+) -> str:
+    if (
+        current_turn_index <= 0
+        or not selected_investigator_id
+        or kp_payload is None
+        or investigator_payload is None
+    ):
+        return ""
+    prior_kp_summary = _normalize_form_text(kp_payload.get("summary")) or "上一轮 AI KP 摘要暂缺。"
+    prior_investigator_summary = (
+        _normalize_form_text(investigator_payload.get("summary"))
+        or "上一轮 AI investigator 摘要暂缺。"
+    )
+    return f"""
+      <section class="surface">
+        <div class="surface-header">
+          <div>
+            <h2>为下一轮补充上一轮实际结果 / Keeper 采纳情况</h2>
+            <p>只在当前实验页内生效。你可以补充上一轮实际发生了什么、采纳了哪些建议，以及公开可见的结果变化，再人工触发下一轮。</p>
+          </div>
+          <span class="tag warn">page-local only</span>
+        </div>
+        <ul class="meta-list">
+          <li>上一轮 AI KP 摘要：{escape(prior_kp_summary)}</li>
+          <li>上一轮 AI investigator 摘要：{escape(prior_investigator_summary)}</li>
+          <li>说明：这些补充只作为当前页临时 continuity bridge，不会写入 authoritative state。</li>
+        </ul>
+        <form method="post" action="/app/sessions/{escape(session_id)}/experimental-ai-demo/run" class="form-stack">
+          <input type="hidden" name="investigator_id" value="{escape(selected_investigator_id)}">
+          <input type="hidden" name="current_turn_index" value="{current_turn_index}">
+          <input type="hidden" name="previous_kp_title" value="{escape(kp_payload.get('title') or '')}">
+          <input type="hidden" name="previous_kp_summary" value="{escape(kp_payload.get('summary') or '')}">
+          <input type="hidden" name="previous_kp_draft_excerpt" value="{escape(kp_payload.get('draft_excerpt') or '')}">
+          <input type="hidden" name="previous_investigator_title" value="{escape(investigator_payload.get('title') or '')}">
+          <input type="hidden" name="previous_investigator_summary" value="{escape(investigator_payload.get('summary') or '')}">
+          <input type="hidden" name="previous_investigator_draft_excerpt" value="{escape(investigator_payload.get('draft_excerpt') or '')}">
+          <label>
+            上一轮实际结果 / Keeper 采纳情况（仅 AI KP 可见）
+            <textarea name="keeper_turn_outcome_note" rows="4" placeholder="例如：实际让秦老板先否认，再露出对 204 房登记的回避；当前压力从缺页账册转到二楼动静。">{escape(keeper_turn_note_value)}</textarea>
+          </label>
+          <label>
+            上一轮公开可见结果摘要（供 AI Investigator 下一轮使用）
+            <textarea name="visible_turn_outcome_note" rows="3" placeholder="例如：老板回避了 204 房登记，调查员注意到账册缺页和二楼脚步声。">{escape(visible_turn_note_value)}</textarea>
+          </label>
+          <button class="button-button secondary" type="submit">生成下一轮实验回合</button>
+        </form>
       </section>
     """
 
@@ -4865,9 +5024,17 @@ def _render_experimental_ai_demo_page(
     selected_investigator_view: dict[str, Any] | None,
     kp_result: LocalLLMAssistantResult | None,
     investigator_result: LocalLLMAssistantResult | None,
+    current_turn_index: int = 0,
     notice: str | None = None,
     detail: dict[str, Any] | str | None = None,
 ) -> HTMLResponse:
+    initial_run_button_label = (
+        "重新基于当前主状态运行单轮实验"
+        if current_turn_index > 0
+        else "运行第 1 轮实验回合"
+    )
+    kp_turn_payload = _assistant_result_turn_bridge_payload(kp_result)
+    investigator_turn_payload = _assistant_result_turn_bridge_payload(investigator_result)
     options_html = "".join(
         f'<option value="{escape(str(item.get("actor_id") or ""))}"{" selected" if str(item.get("actor_id") or "") == (selected_investigator_id or "") else ""}>'
         f'{escape(str(item.get("display_name") or item.get("actor_id") or "调查员"))}'
@@ -4898,7 +5065,7 @@ def _render_experimental_ai_demo_page(
           <div class="surface-header">
             <div>
               <h2>运行最小实验回合</h2>
-              <p>同一次人工触发中，同时生成 AI KP 剧情支架候选建议与 AI investigator 行动提案；两侧输入严格隔离。</p>
+              <p>同一次人工触发中，同时生成 AI KP 剧情支架候选建议与 AI investigator 行动提案；两侧输入严格隔离。当前实验回合：{escape(str(current_turn_index or "尚未运行"))}</p>
             </div>
             <span class="tag warn">isolated harness</span>
           </div>
@@ -4909,7 +5076,7 @@ def _render_experimental_ai_demo_page(
                   Investigator 视角
                   <select name="investigator_id">{options_html}</select>
                 </label>
-                <button class="button-button secondary" type="submit">运行最小实验回合</button>
+                <button class="button-button secondary" type="submit">{initial_run_button_label}</button>
               </form>
               '''
               if options_html
@@ -4954,6 +5121,13 @@ def _render_experimental_ai_demo_page(
                         "说明：这是 experimental / non-authoritative action proposal，不会自动执行。",
                     ],
                 ),
+            )}
+            {_render_experimental_ai_demo_turn_loop_form(
+                session_id=session_id,
+                selected_investigator_id=selected_investigator_id or "",
+                current_turn_index=current_turn_index,
+                kp_payload=kp_turn_payload,
+                investigator_payload=investigator_turn_payload,
             )}
           </div>
         </section>
@@ -5166,6 +5340,7 @@ def _render_app_experimental_ai_demo_from_service(
     selected_investigator_id: str | None = None,
     kp_result: LocalLLMAssistantResult | None = None,
     investigator_result: LocalLLMAssistantResult | None = None,
+    current_turn_index: int = 0,
     notice: str | None = None,
     detail: dict[str, Any] | str | None = None,
     status_code: int = status.HTTP_200_OK,
@@ -5238,6 +5413,7 @@ def _render_app_experimental_ai_demo_from_service(
         selected_investigator_view=selected_investigator_view,
         kp_result=kp_result,
         investigator_result=investigator_result,
+        current_turn_index=current_turn_index,
         notice=notice,
         detail=detail,
     )
@@ -5405,6 +5581,14 @@ async def web_app_experimental_ai_demo_run(
 ) -> HTMLResponse:
     form = await _read_form_payload(request)
     selected_investigator_id = _normalize_form_text(form.get("investigator_id"))
+    previous_turn_index = _parse_turn_index(form.get("current_turn_index"))
+    previous_kp_payload = _turn_bridge_payload_from_form(form, prefix="previous_kp")
+    previous_investigator_payload = _turn_bridge_payload_from_form(
+        form,
+        prefix="previous_investigator",
+    )
+    keeper_turn_outcome_note = _normalize_form_text(form.get("keeper_turn_outcome_note")) or ""
+    visible_turn_outcome_note = _normalize_form_text(form.get("visible_turn_outcome_note")) or ""
     try:
         session, keeper_view, _, _ = service.get_keeper_workspace(session_id)
     except LookupError as exc:
@@ -5460,6 +5644,19 @@ async def web_app_experimental_ai_demo_run(
         service=service,
         context_pack=context_pack,
     )
+    kp_turn_bridge = _build_experimental_ai_kp_turn_bridge(
+        previous_turn_index=previous_turn_index,
+        prior_kp_payload=previous_kp_payload,
+        prior_investigator_payload=previous_investigator_payload,
+        keeper_turn_note=keeper_turn_outcome_note,
+        visible_turn_note=visible_turn_outcome_note,
+    )
+    investigator_turn_bridge = _build_experimental_ai_investigator_turn_bridge(
+        previous_turn_index=previous_turn_index,
+        prior_investigator_payload=previous_investigator_payload,
+        visible_turn_note=visible_turn_outcome_note,
+    )
+    next_turn_index = previous_turn_index + 1
     kp_result = _generate_local_llm_assistant(
         local_llm_service=local_llm_service,
         workspace_key="experimental_ai_kp_demo",
@@ -5469,6 +5666,7 @@ async def web_app_experimental_ai_demo_run(
             snapshot=snapshot,
             context_pack=context_pack,
             compressed_context=compressed_context,
+            turn_bridge=kp_turn_bridge,
         ),
     )
     investigator_result = _generate_local_llm_assistant(
@@ -5479,7 +5677,13 @@ async def web_app_experimental_ai_demo_run(
         context=_build_experimental_ai_investigator_demo_context(
             viewer_id=resolved_investigator_id,
             view=investigator_view,
+            turn_bridge=investigator_turn_bridge,
         ),
+    )
+    continuation_notice = (
+        f"已生成第 {next_turn_index} 轮 isolated experimental AI demo 输出；本轮已参考上一轮页内 continuity bridge，仍不会自动写入主状态。"
+        if kp_turn_bridge or investigator_turn_bridge
+        else f"已生成第 {next_turn_index} 轮 isolated experimental AI demo 输出；仅供观察 narrative loop，不会自动写入主状态。"
     )
     return _render_experimental_ai_demo_page(
         session_id=session_id,
@@ -5490,7 +5694,8 @@ async def web_app_experimental_ai_demo_run(
         selected_investigator_view=investigator_view,
         kp_result=kp_result,
         investigator_result=investigator_result,
-        notice="已生成一轮 isolated experimental AI demo 输出；仅供观察 narrative loop，不会自动写入主状态。",
+        current_turn_index=next_turn_index,
+        notice=continuation_notice,
     )
 
 

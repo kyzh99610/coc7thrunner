@@ -4,6 +4,7 @@
 
 额外约束：
 - 只能基于下面提供的 investigator visible summary。
+- 如果上下文里出现 turn_bridge，它只代表当前实验页临时、公开可见的 continuity bridge；绝不能把它扩写成 keeper-only 信息。
 - 绝不能假设任何 keeper-only、secret-only 或未展示给该调查员的信息。
 - 输出只能是候选行动提案、行动理由、可继续追问的问题。
 - 不要自动推进剧情，不要把行动写成已执行结果。

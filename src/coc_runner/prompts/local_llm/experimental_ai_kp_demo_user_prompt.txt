@@ -4,6 +4,7 @@
 
 额外约束：
 - 只能基于下面提供的 keeper-side compressed context 与允许的补充摘要。
+- 如果上下文里出现 turn_bridge，它只代表当前实验页临时 continuity bridge，不是 authoritative truth，也不是已执行历史。
 - 输出必须是实验性的 scene framing / pressure / next beat / NPC 反应候选建议。
 - 不要把任何内容写成已执行、已揭示、已推进、已确认。
 - 不要自动决定规则结果、线索 truth、剧情结局或玩家必然行动。

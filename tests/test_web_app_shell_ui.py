@@ -284,6 +284,8 @@ def test_web_app_experimental_ai_demo_page_loads_without_breaking_keeper_shell_w
     assert "Local LLM 未启用" in html
     assert "不会自动写入主状态" in html
     assert 'action="/app/sessions/' in html
+    assert 'name="keeper_turn_outcome_note"' not in html
+    assert 'name="visible_turn_outcome_note"' not in html
 
 
 def test_keeper_compressed_context_builder_stays_short_and_secret_safe(
@@ -331,7 +333,7 @@ def test_web_app_experimental_ai_demo_run_keeps_kp_and_investigator_inputs_isola
     assert response.status_code == 200
     html = response.text
     assert "AI KP + AI Investigator Demo Harness" in html
-    assert "已生成一轮 isolated experimental AI demo 输出" in html
+    assert "已生成第 1 轮 isolated experimental AI demo 输出" in html
     assert "AI KP Demo Output" in html
     assert "AI KP 剧情支架提案" in html
     assert "AI KP 输入来源" in html
@@ -342,6 +344,10 @@ def test_web_app_experimental_ai_demo_run_keeps_kp_and_investigator_inputs_isola
     assert "本次 AI investigator 实验输出只基于所选调查员的可见状态摘要。" in html
     assert "不含 keeper-only 信息" in html
     assert "experimental / non-authoritative" in html
+    assert "为下一轮补充上一轮实际结果 / Keeper 采纳情况" in html
+    assert 'name="keeper_turn_outcome_note"' in html
+    assert 'name="visible_turn_outcome_note"' in html
+    assert 'name="current_turn_index" value="1"' in html
     assert len(fake_service.requests) == 2
     kp_request = fake_service.requests[0]
     investigator_request = fake_service.requests[1]
@@ -367,6 +373,65 @@ def test_web_app_experimental_ai_demo_run_keeps_kp_and_investigator_inputs_isola
     assert "keeper_workflow" not in serialized_investigator_context
     assert "private_notes" not in html
     assert "secret_state_refs" not in html
+    after_snapshot = _get_snapshot(client, session_id)
+    assert before_snapshot == after_snapshot
+
+
+def test_web_app_experimental_ai_demo_next_turn_uses_page_local_continuity_bridge_without_secret_leak(
+    client: TestClient,
+) -> None:
+    session_id = _start_keeper_dashboard_session(client)
+    _advance_keeper_dashboard_session(client, session_id)
+    fake_service = _FakeLocalLLMService()
+    client.app.state.local_llm_service = fake_service
+    before_snapshot = _get_snapshot(client, session_id)
+
+    first_response = client.post(
+        f"/app/sessions/{session_id}/experimental-ai-demo/run",
+        data={"investigator_id": "investigator-1"},
+    )
+
+    assert first_response.status_code == 200
+
+    second_response = client.post(
+        f"/app/sessions/{session_id}/experimental-ai-demo/run",
+        data={
+            "investigator_id": "investigator-1",
+            "current_turn_index": "1",
+            "previous_kp_title": "AI KP 剧情支架提案",
+            "previous_kp_summary": "这是 experimental / non-authoritative 的 AI KP 候选叙事输出。",
+            "previous_kp_draft_excerpt": "KP 可先用潮气、旧账册和老板的短暂失态开场。",
+            "previous_investigator_title": "AI Investigator 行动提案",
+            "previous_investigator_summary": "这是 experimental / non-authoritative 的调查员行动提案。",
+            "previous_investigator_draft_excerpt": "调查员会先盯住账册缺页和住客编号。",
+            "keeper_turn_outcome_note": "Keeper 实际采纳了老板先否认、再对 204 房登记表现回避，并把压力推进到二楼脚步声。",
+            "visible_turn_outcome_note": "老板回避 204 房登记，调查员注意到账册缺页和二楼脚步声。",
+        },
+    )
+
+    assert second_response.status_code == 200
+    html = second_response.text
+    assert "已生成第 2 轮 isolated experimental AI demo 输出" in html
+    assert "页内 continuity bridge" in html
+    assert 'name="current_turn_index" value="2"' in html
+    assert len(fake_service.requests) == 4
+    kp_request = fake_service.requests[2]
+    investigator_request = fake_service.requests[3]
+    assert kp_request.workspace_key == "experimental_ai_kp_demo"
+    assert investigator_request.workspace_key == "experimental_ai_investigator_demo"
+    assert kp_request.context["turn_bridge"]["previous_turn_index"] == 1
+    assert kp_request.context["turn_bridge"]["keeper_adoption_and_outcome_note"].startswith("Keeper 实际采纳了")
+    assert kp_request.context["turn_bridge"]["public_outcome_note"].startswith("老板回避 204 房登记")
+    assert kp_request.context["turn_bridge"]["previous_ai_kp"]["title"] == "AI KP 剧情支架提案"
+    assert kp_request.context["turn_bridge"]["previous_ai_investigator"]["title"] == "AI Investigator 行动提案"
+    assert investigator_request.context["turn_bridge"]["previous_turn_index"] == 1
+    assert investigator_request.context["turn_bridge"]["public_outcome_note"].startswith("老板回避 204 房登记")
+    serialized_investigator_context = str(investigator_request.context)
+    assert "keeper_adoption_and_outcome_note" not in serialized_investigator_context
+    assert "Keeper 实际采纳了" not in serialized_investigator_context
+    assert "compressed_context" not in serialized_investigator_context
+    assert "private_notes" not in serialized_investigator_context
+    assert "secret_state_refs" not in serialized_investigator_context
     after_snapshot = _get_snapshot(client, session_id)
     assert before_snapshot == after_snapshot
 
