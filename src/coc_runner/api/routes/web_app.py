@@ -1842,6 +1842,34 @@ def _render_context_pack_source_echo(
     """
 
 
+def _render_compressed_context_source_echo(
+    *,
+    result: LocalLLMAssistantResult | None,
+    compressed_context: dict[str, Any] | None,
+    suggestion_label: str,
+) -> str:
+    if (
+        result is None
+        or result.status != "success"
+        or result.assistant is None
+        or compressed_context is None
+    ):
+        return ""
+    return f"""
+      <article class="assistant-source-echo">
+        <div class="list-head">
+          <h3>当前压缩输入来源</h3>
+          <span class="tag">compressed</span>
+        </div>
+        <ul class="meta-list">
+          <li>本次 {escape(suggestion_label)}优先参考当前 Compressed Context。</li>
+          <li>压缩范围：当前局势、当前压力 / 未解决事项、当前最该推进方向。</li>
+          <li>说明：这是 keeper-side 工作压缩摘要输入，不是已执行结果，也不是 authoritative truth。</li>
+        </ul>
+      </article>
+    """
+
+
 def _generate_local_llm_assistant(
     *,
     local_llm_service: LocalLLMService,
@@ -2910,6 +2938,7 @@ def _render_keeper_narrative_scaffolding(
     session_id: str,
     snapshot: dict[str, Any],
     context_pack: dict[str, Any] | None = None,
+    compressed_context: dict[str, Any] | None = None,
     narrative_note_value: str = "",
     narrative_completion_notice: str | None = None,
     narrative_result: LocalLLMAssistantResult | None = None,
@@ -2949,7 +2978,12 @@ def _render_keeper_narrative_scaffolding(
           result=narrative_result,
           hidden_fields={"narrative_note": narrative_note_value},
           extra_output_html=(
-              _render_context_pack_source_echo(
+              _render_compressed_context_source_echo(
+                  result=narrative_result,
+                  compressed_context=compressed_context,
+                  suggestion_label="剧情支架建议",
+              )
+              + _render_context_pack_source_echo(
                   result=narrative_result,
                   context_pack=context_pack,
                   suggestion_label="剧情支架建议",
@@ -3012,8 +3046,6 @@ def _render_keeper_narrative_scaffolding(
         }
       </section>
     """
-
-
 def _render_keeper_operation_result(action_result: dict[str, Any] | None) -> str:
     if not action_result:
         return ""
@@ -3428,6 +3460,7 @@ def _render_keeper_workspace_page(
                 session_id=session_id,
                 snapshot=snapshot,
                 context_pack=context_pack,
+                compressed_context=compressed_context,
                 narrative_note_value=narrative_note_value,
                 narrative_completion_notice=narrative_completion_notice,
                 narrative_result=narrative_result,
@@ -4554,10 +4587,17 @@ def _render_recap_page(
                 tasks=RECAP_ASSISTANT_TASKS,
                 selected_task=selected_assistant_task,
                 result=assistant_result,
-                extra_output_html=_render_context_pack_source_echo(
-                    result=assistant_result,
-                    context_pack=context_pack,
-                    suggestion_label="recap 建议",
+                extra_output_html=(
+                    _render_compressed_context_source_echo(
+                        result=assistant_result,
+                        compressed_context=compressed_context,
+                        suggestion_label="recap 建议",
+                    )
+                    + _render_context_pack_source_echo(
+                        result=assistant_result,
+                        context_pack=context_pack,
+                        suggestion_label="recap 建议",
+                    )
                 ),
             )}
             <section class="surface">

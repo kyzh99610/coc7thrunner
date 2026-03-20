@@ -437,6 +437,10 @@ def test_web_app_keeper_narrative_scaffolding_generates_non_authoritative_draft(
     assert "AI-KP Narrative Scaffolding" in html
     assert "下一幕开场建议 结果" in html
     assert "这是非权威辅助输出。" in html
+    assert "当前压缩输入来源" in html
+    assert "本次 剧情支架建议优先参考当前 Compressed Context。" in html
+    assert "压缩范围：当前局势、当前压力 / 未解决事项、当前最该推进方向。" in html
+    assert "这是 keeper-side 工作压缩摘要输入，不是已执行结果，也不是 authoritative truth。" in html
     assert "当前输入来源" in html
     assert "本次 剧情支架建议基于当前 Keeper Context Pack。" in html
     assert "摘要范围：局势摘要、未解决事项、当前压力 / 线索方向、当前 narrative_work_note。" in html
@@ -1105,6 +1109,10 @@ def test_web_app_recap_assistant_generates_draft_without_mutating_state(
     assert "Recap Assistant" in html
     assert "本局 recap 草稿 结果" in html
     assert "这是非权威辅助输出。" in html
+    assert "当前压缩输入来源" in html
+    assert "本次 recap 建议优先参考当前 Compressed Context。" in html
+    assert "压缩范围：当前局势、当前压力 / 未解决事项、当前最该推进方向。" in html
+    assert "这是 keeper-side 工作压缩摘要输入，不是已执行结果，也不是 authoritative truth。" in html
     assert "当前输入来源" in html
     assert "本次 recap 建议基于当前 Keeper Context Pack。" in html
     assert "摘要范围：局势摘要、未解决事项、当前压力 / 线索方向。" in html
