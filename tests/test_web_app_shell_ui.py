@@ -25,6 +25,7 @@ from tests.test_playtest_session_index_ui import _start_grouped_snapshot_session
 class _FakeLocalLLMService:
     def __init__(self) -> None:
         self.requests = []
+        self.enabled = True
 
     def generate_assistant(self, request):
         self.requests.append(request)
@@ -32,22 +33,33 @@ class _FakeLocalLLMService:
         object_kind = source_object.get("object_kind")
         object_id = source_object.get("object_id")
         object_label = source_object.get("object_label")
+        knowledge_source = request.context.get("source") or {}
         draft_kind = {
             "note_draft": "prompt_note_draft",
             "draft_review_note_draft": "draft_review_note_draft",
+            "source_summary": "knowledge_summary_note_draft",
+            "follow_up_questions": "knowledge_follow_up_note_draft",
         }.get(request.task_key)
         suggested_target = {
             "note_draft": "prompt_note",
             "draft_review_note_draft": "draft_review_editor_notes",
+            "source_summary": "knowledge_work_note",
+            "follow_up_questions": "knowledge_work_note",
         }.get(request.task_key)
         source_context_label = {
             "note_draft": "基于当前 keeper workspace 摘要与待处理 prompts。",
             "draft_review_note_draft": "基于当前 keeper workspace 摘要与待审草稿概览。",
+            "source_summary": "基于当前资料摘要与预览。",
+            "follow_up_questions": "基于当前资料摘要与预览。",
         }.get(request.task_key)
         if object_kind == "prompt" and object_id and object_label:
             source_context_label = f"基于当前 prompt：{object_label}（{object_id}）。"
         if object_kind == "draft" and object_id and object_label:
             source_context_label = f"基于当前待审草稿：{object_label}（{object_id}）。"
+        if request.workspace_key == "knowledge_detail":
+            source_id = knowledge_source.get("source_id") or "source"
+            source_label = knowledge_source.get("source_title_zh") or source_id
+            source_context_label = f"基于当前资料：{source_label}（{source_id}）的摘要与预览。"
         return LocalLLMAssistantResult(
             status="success",
             workspace_key=request.workspace_key,
@@ -60,7 +72,15 @@ class _FakeLocalLLMService:
                 summary="这是非权威辅助输出。",
                 bullets=["关键点一", "关键点二"],
                 suggested_questions=["后续还要确认什么？"],
-                draft_text="这是一段可继续编辑的草稿。",
+                draft_text=(
+                    "可先把当前资料的关键点整理成工作备注。"
+                    if request.task_key == "source_summary"
+                    else (
+                        "- 地下储物间和登记簿之间还有什么缺口？\n- 这条线索是否能指向失踪住客？"
+                        if request.task_key == "follow_up_questions"
+                        else "这是一段可继续编辑的草稿。"
+                    )
+                ),
                 draft_kind=draft_kind,
                 suggested_target=suggested_target,
                 source_context_label=source_context_label,
@@ -772,6 +792,10 @@ def test_web_app_knowledge_workspace_and_detail_keep_session_backlink(
     assert "资料摘要" in detail_html
     assert "内容预览" in detail_html
     assert "侦查检定用于发现地板缝里的隐藏纸条。" in detail_html
+    assert "Knowledge Assistant" in detail_html
+    assert "Local LLM 未启用" in detail_html
+    assert 'action="/app/knowledge/guesthouse-rules/working-note"' in detail_html
+    assert 'name="working_note"' in detail_html
     assert f'href="/app/knowledge?session_id={session_id}"' in detail_html
     assert 'href="/playtest/knowledge/guesthouse-rules"' in detail_html
 
@@ -788,16 +812,36 @@ def test_web_app_knowledge_assistant_uses_source_preview_without_session_private
     )
     fake_service = _FakeLocalLLMService()
     client.app.state.local_llm_service = fake_service
+    before_source = client.app.state.knowledge_service.get_source("assistant-source").model_dump(
+        mode="json"
+    )
 
     response = client.post(
         "/app/knowledge/assistant-source/assistant",
-        data={"assistant_task": "follow_up_questions", "session_id": session_id},
+        data={
+            "assistant_task": "follow_up_questions",
+            "session_id": session_id,
+            "working_note": "已有手工假说",
+        },
     )
 
     assert response.status_code == 200
     html = response.text
     assert "可追问问题 结果" in html
     assert "这是非权威辅助输出。" in html
+    assert "当前可采纳草稿" in html
+    assert "草稿类型：追问问题草稿" in html
+    assert "推荐带入：知识工作备注" in html
+    assert "当前对象：当前资料" in html
+    assert "对象标识：assistant-source" in html
+    assert "来源语境：基于当前资料：助手测试资料（assistant-source）的摘要与预览。" in html
+    assert "带入当前知识工作备注框" in html
+    assert 'data-adopt-target="knowledge-work-note-assistant-source"' in html
+    assert "已有手工假说" in html
+    after_source = client.app.state.knowledge_service.get_source("assistant-source").model_dump(
+        mode="json"
+    )
+    assert before_source == after_source
     assert len(fake_service.requests) == 1
     request = fake_service.requests[0]
     assert request.workspace_key == "knowledge_detail"
@@ -808,6 +852,42 @@ def test_web_app_knowledge_assistant_uses_source_preview_without_session_private
     assert "participants" not in serialized_context
     assert "private_notes" not in serialized_context
     assert "session_id':" not in serialized_context
+
+
+def test_web_app_knowledge_working_note_submit_stays_non_authoritative(
+    client: TestClient,
+) -> None:
+    _register_text_source(
+        client,
+        source_id="note-source",
+        source_title_zh="工作备注资料",
+        content="旧账册里反复出现 204 房、地窖和搬运时间的对应关系。",
+    )
+    fake_service = _FakeLocalLLMService()
+    client.app.state.local_llm_service = fake_service
+    before_source = client.app.state.knowledge_service.get_source("note-source").model_dump(
+        mode="json"
+    )
+
+    response = client.post(
+        "/app/knowledge/note-source/working-note",
+        data={
+            "working_note": "假说：204 房的住客登记和地窖搬运时间存在对应关系。",
+        },
+    )
+
+    assert response.status_code == 200
+    html = response.text
+    assert "当前页工作备注已人工确认" in html
+    assert "不会写入 knowledge 主状态" in html
+    assert "假说：204 房的住客登记和地窖搬运时间存在对应关系。" in html
+    assert 'name="working_note"' in html
+    assert "当前可采纳草稿" not in html
+    assert "带入当前知识工作备注框" not in html
+    after_source = client.app.state.knowledge_service.get_source("note-source").model_dump(
+        mode="json"
+    )
+    assert before_source == after_source
 
 
 def test_web_app_recap_page_joins_timeline_and_review_shell(

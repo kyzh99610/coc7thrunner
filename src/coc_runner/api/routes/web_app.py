@@ -94,6 +94,25 @@ KNOWLEDGE_ASSISTANT_TASKS: dict[str, str] = {
     "source_summary": "资料摘要",
     "follow_up_questions": "可追问问题",
 }
+KNOWLEDGE_ASSISTANT_TARGET_LABELS: dict[str, str] = {
+    "knowledge_work_note": "知识工作备注",
+}
+KNOWLEDGE_ASSISTANT_TARGET_FIELD_LABELS: dict[str, str] = {
+    "knowledge_work_note": "当前知识工作备注框",
+}
+KNOWLEDGE_ASSISTANT_TARGET_BY_TASK: dict[str, str] = {
+    "source_summary": "knowledge_work_note",
+    "follow_up_questions": "knowledge_work_note",
+}
+KNOWLEDGE_ASSISTANT_DRAFT_KIND_LABELS: dict[str, str] = {
+    "knowledge_summary_note_draft": "资料摘要草稿",
+    "knowledge_follow_up_note_draft": "追问问题草稿",
+}
+KNOWLEDGE_ASSISTANT_DRAFT_KIND_BY_TASK: dict[str, str] = {
+    "source_summary": "knowledge_summary_note_draft",
+    "follow_up_questions": "knowledge_follow_up_note_draft",
+}
+KNOWLEDGE_ASSISTANT_SOURCE_ID = "knowledge-assistant-draft-source"
 RECAP_ASSISTANT_TASKS: dict[str, str] = {
     "recap_draft": "本局 recap 草稿",
     "open_loops": "待办与悬而未决事项",
@@ -564,7 +583,7 @@ def _render_assistant_draft_source(
           <li>草稿类型：{escape(assistant_adoption['draft_kind_label'])}</li>
           <li>推荐带入：{escape(assistant_adoption['target_label'])}</li>
           {source_line}
-          <li>当前用途：供 Keeper 审阅后带入目标表单，再人工编辑并提交。</li>
+          <li>当前用途：供人工审阅后带入目标表单，再人工编辑并提交。</li>
         """
     return f"""
       {hidden_source}
@@ -652,6 +671,95 @@ def _build_keeper_completion_notices(
     if kind == "draft_review" and target_id:
         draft_notices[target_id] = "当前草稿审阅已人工提交，对象卡已恢复默认状态，不再显示上一轮待提交提示。"
     return prompt_notices, draft_notices
+
+
+def _knowledge_source_scope_metadata(source: dict[str, Any]) -> dict[str, str]:
+    source_id = str(source.get("source_id") or "source")
+    source_label = _excerpt(source.get("source_title_zh"), limit=48) or source_id
+    return {
+        "source_object_kind": "knowledge_source",
+        "source_object_id": source_id,
+        "source_object_label": source_label,
+        "source_object_type_label": "当前资料",
+        "source_context_label": f"基于当前资料：{source_label}（{source_id}）的摘要与预览。",
+    }
+
+
+def _knowledge_assistant_fallback_text(result: LocalLLMAssistantResult) -> str | None:
+    assistant = result.assistant
+    if assistant is None:
+        return None
+    if result.task_key == "follow_up_questions":
+        questions = [item for item in assistant.suggested_questions if item][:4]
+        if questions:
+            return "\n".join(f"- {question}" for question in questions)
+    lines: list[str] = []
+    summary = _normalize_form_text(assistant.summary)
+    if summary:
+        lines.append(summary)
+    bullets = [item for item in assistant.bullets if item][:4]
+    if bullets:
+        lines.extend(f"- {bullet}" for bullet in bullets)
+    questions = [item for item in assistant.suggested_questions if item][:3]
+    if questions and result.task_key != "follow_up_questions":
+        lines.append("可继续追问：")
+        lines.extend(f"- {question}" for question in questions)
+    return "\n".join(lines).strip() or None
+
+
+def _knowledge_assistant_adoption(
+    result: LocalLLMAssistantResult | None,
+    *,
+    source: dict[str, Any],
+    assistant_scope: dict[str, str] | None = None,
+) -> dict[str, str] | None:
+    if result is None or result.status != "success" or result.assistant is None:
+        return None
+    draft_text = _normalize_form_text(result.assistant.draft_text) or _knowledge_assistant_fallback_text(
+        result
+    )
+    if not draft_text:
+        return None
+    target = (
+        _normalize_form_text(result.assistant.suggested_target)
+        or KNOWLEDGE_ASSISTANT_TARGET_BY_TASK.get(result.task_key)
+        or "knowledge_work_note"
+    )
+    if target not in KNOWLEDGE_ASSISTANT_TARGET_LABELS:
+        return None
+    draft_kind = (
+        _normalize_form_text(result.assistant.draft_kind)
+        or KNOWLEDGE_ASSISTANT_DRAFT_KIND_BY_TASK.get(result.task_key)
+        or "knowledge_summary_note_draft"
+    )
+    if draft_kind not in KNOWLEDGE_ASSISTANT_DRAFT_KIND_LABELS:
+        return None
+    scope = assistant_scope or _knowledge_source_scope_metadata(source)
+    source_context_label = (
+        _normalize_form_text(result.assistant.source_context_label)
+        or _normalize_form_text(scope.get("source_context_label"))
+        or "基于当前资料摘要与预览。"
+    )
+    adoption = {
+        "source_id": KNOWLEDGE_ASSISTANT_SOURCE_ID,
+        "draft_text": draft_text,
+        "target": target,
+        "target_label": KNOWLEDGE_ASSISTANT_TARGET_LABELS[target],
+        "target_field_label": KNOWLEDGE_ASSISTANT_TARGET_FIELD_LABELS[target],
+        "draft_kind": draft_kind,
+        "draft_kind_label": KNOWLEDGE_ASSISTANT_DRAFT_KIND_LABELS[draft_kind],
+        "source_context_label": source_context_label,
+    }
+    for key in (
+        "source_object_kind",
+        "source_object_id",
+        "source_object_label",
+        "source_object_type_label",
+    ):
+        value = _normalize_form_text(scope.get(key))
+        if value:
+            adoption[key] = value
+    return adoption
 
 
 def _render_local_llm_assistant_panel(
@@ -3606,7 +3714,11 @@ def _render_knowledge_detail_page(
     source: dict[str, Any],
     preview_chunks: list[dict[str, Any]],
     session_id: str | None = None,
+    notice: str | None = None,
+    detail: dict[str, Any] | str | None = None,
+    working_note_value: str = "",
     assistant_result: LocalLLMAssistantResult | None = None,
+    assistant_scope: dict[str, str] | None = None,
     selected_assistant_task: str | None = None,
 ) -> HTMLResponse:
     summary = _excerpt(
@@ -3631,6 +3743,14 @@ def _render_knowledge_detail_page(
         for chunk in preview_chunks
     )
     extraction = source.get("character_sheet_extraction") or {}
+    working_note_target_id = f"knowledge-work-note-{source_id}"
+    working_note_status_id = f"knowledge-work-note-status-{source_id}"
+    assistant_scope = assistant_scope or _knowledge_source_scope_metadata(source)
+    assistant_adoption = _knowledge_assistant_adoption(
+        assistant_result,
+        source=source,
+        assistant_scope=assistant_scope,
+    )
     body = (
         _page_head(
             eyebrow="Knowledge Detail",
@@ -3642,6 +3762,8 @@ def _render_knowledge_detail_page(
                 ("继续去创建 Session", "/playtest/sessions/create", "secondary"),
             ],
         )
+        + _notice_block(notice)
+        + _detail_block(detail)
         + f"""
         <section class="content-grid">
           <div class="card-list">
@@ -3705,8 +3827,55 @@ def _render_knowledge_detail_page(
                   tasks=KNOWLEDGE_ASSISTANT_TASKS,
                   selected_task=selected_assistant_task,
                   result=assistant_result,
-                  hidden_fields={"session_id": session_id or ""},
+                  hidden_fields={
+                      "session_id": session_id or "",
+                      "working_note": working_note_value,
+                  },
+                  extra_output_html=_render_assistant_draft_source(
+                      assistant_scope=assistant_scope,
+                      assistant_adoption=assistant_adoption,
+                  ),
               )}
+              <div class="divider"></div>
+              <section class="surface">
+                <div class="surface-header">
+                  <div>
+                    <h2>当前页工作备注</h2>
+                    <p>只用于当前知识页的人手整理，不会写回资料内容或 metadata。</p>
+                  </div>
+                </div>
+                <form method="post" action="/app/knowledge/{quote(source_id)}/working-note" class="form-stack">
+                  <input type="hidden" name="session_id" value="{escape(session_id or "", quote=True)}" />
+                  <label>
+                    工作备注 / 假说
+                    <textarea id="{escape(working_note_target_id)}" name="working_note" rows="8" placeholder="可把 assistant 摘要、关键点或追问先整理在这里，再人工确认。">{escape(working_note_value)}</textarea>
+                  </label>
+                  {_render_assistant_adopt_button(
+                      assistant_adoption=assistant_adoption,
+                      target_kind="knowledge_work_note",
+                      target_id=working_note_target_id,
+                      status_id=working_note_status_id,
+                      source_object_kind="knowledge_source",
+                      source_object_id=source_id,
+                  )}
+                  {
+                      (
+                          f'<p id="{escape(working_note_status_id)}" class="helper adoption-status">当前可采纳：'
+                          f"{escape(assistant_adoption['draft_kind_label'])}。来源："
+                          f"{escape(assistant_adoption['source_context_label'])} 目标：当前知识工作备注框。"
+                          ' 只会带入文本，不会自动提交。</p>'
+                      )
+                      if _assistant_targets_current_object(
+                          assistant_adoption,
+                          target_kind="knowledge_work_note",
+                          source_object_kind="knowledge_source",
+                          source_object_id=source_id,
+                      )
+                      else ""
+                  }
+                  <button class="button-button secondary" type="submit">确认当前页工作备注</button>
+                </form>
+              </section>
               <div class="divider"></div>
               <div class="toolbar">
                 <a class="button-link ghost" href="/playtest/knowledge/{escape(source_id)}">补文本 / ingest</a>
@@ -3897,7 +4066,11 @@ def _render_app_knowledge_detail_from_service(
     source_id: str,
     local_llm_service: LocalLLMService | None = None,
     session_id: str | None = None,
+    notice: str | None = None,
+    detail: dict[str, Any] | str | None = None,
+    working_note_value: str = "",
     assistant_result: LocalLLMAssistantResult | None = None,
+    assistant_scope: dict[str, str] | None = None,
     selected_assistant_task: str | None = None,
     status_code: int = status.HTTP_200_OK,
 ) -> HTMLResponse:
@@ -3928,7 +4101,11 @@ def _render_app_knowledge_detail_from_service(
         source=source.model_dump(mode="json"),
         preview_chunks=[chunk.model_dump(mode="json") for chunk in preview_chunks],
         session_id=session_id,
+        notice=notice,
+        detail=detail,
+        working_note_value=working_note_value,
         assistant_result=assistant_result,
+        assistant_scope=assistant_scope,
         selected_assistant_task=selected_assistant_task,
     )
     response.status_code = status_code
@@ -4839,6 +5016,7 @@ async def web_app_knowledge_assistant(
 ) -> HTMLResponse:
     form = await _read_form_payload(request)
     session_id = _normalize_form_text(form.get("session_id"))
+    working_note_value = _normalize_form_text(form.get("working_note")) or ""
     selected_task, task_label = _assistant_task_selection(
         KNOWLEDGE_ASSISTANT_TASKS,
         _normalize_form_text(form.get("assistant_task")),
@@ -4874,8 +5052,35 @@ async def web_app_knowledge_assistant(
         source=source.model_dump(mode="json"),
         preview_chunks=[chunk.model_dump(mode="json") for chunk in preview_chunks],
         session_id=session_id,
+        working_note_value=working_note_value,
         assistant_result=assistant_result,
+        assistant_scope=_knowledge_source_scope_metadata(source.model_dump(mode="json")),
         selected_assistant_task=selected_task,
+    )
+
+
+@router.post("/knowledge/{source_id}/working-note", response_class=HTMLResponse)
+async def web_app_knowledge_working_note(
+    source_id: str,
+    request: Request,
+    knowledge_service: KnowledgeService = Depends(get_knowledge_service),
+    local_llm_service: LocalLLMService = Depends(get_local_llm_service),
+) -> HTMLResponse:
+    form = await _read_form_payload(request)
+    session_id = _normalize_form_text(form.get("session_id"))
+    working_note_value = _normalize_form_text(form.get("working_note")) or ""
+    notice = (
+        "当前页工作备注已人工确认；仅保留在当前返回页，不会写入 knowledge 主状态。"
+        if working_note_value
+        else "当前页工作备注已清空；不会写入 knowledge 主状态。"
+    )
+    return _render_app_knowledge_detail_from_service(
+        knowledge_service=knowledge_service,
+        source_id=source_id,
+        local_llm_service=local_llm_service,
+        session_id=session_id,
+        notice=notice,
+        working_note_value=working_note_value,
     )
 
 

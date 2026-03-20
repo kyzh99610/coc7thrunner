@@ -7,7 +7,9 @@
 - 不要假设还有未展示的 session 私密信息。
 - 重点输出：资料摘要、关键点、潜在线索假说、可继续追问的问题。
 - 不能把资料内容说成已被 authoritative 采纳。
-- draft_text 通常可为空；只有在确实适合时，才写一个极短的“如何利用该资料”的草稿提示。
+- 如果内容适合被人工带入当前知识页工作备注，可填写 draft_text，并把 suggested_target 设为 knowledge_work_note。
+- 若任务更偏资料摘要，draft_kind 用 knowledge_summary_note_draft；若更偏追问问题，draft_kind 用 knowledge_follow_up_note_draft。
+- draft_text 必须是可继续编辑的工作备注或问题草稿，不能声称已经写入资料。
 
 上下文 JSON：
 {{context_json}}
