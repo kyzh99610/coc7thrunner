@@ -146,6 +146,12 @@ RECAP_ASSISTANT_TASKS: dict[str, str] = {
     "recap_draft": "本局 recap 草稿",
     "open_loops": "待办与悬而未决事项",
 }
+EXPERIMENTAL_AI_KP_DEMO_TASKS: dict[str, str] = {
+    "demo_loop": "AI KP 剧情支架提案",
+}
+EXPERIMENTAL_AI_INVESTIGATOR_DEMO_TASKS: dict[str, str] = {
+    "demo_loop": "AI Investigator 行动提案",
+}
 
 
 def _status_label(status_value: Any) -> str:
@@ -1666,6 +1672,125 @@ def _build_recap_assistant_context(
     return context
 
 
+def _demo_investigator_candidates(
+    participants: list[dict[str, Any]],
+    *,
+    keeper_id: str | None = None,
+) -> list[dict[str, Any]]:
+    return [
+        participant
+        for participant in participants
+        if isinstance(participant, dict)
+        and participant.get("actor_id") != keeper_id
+        and participant.get("kind") in {"human", "ai"}
+    ]
+
+
+def _build_experimental_ai_kp_demo_context(
+    *,
+    snapshot: dict[str, Any],
+    context_pack: dict[str, Any],
+    compressed_context: dict[str, Any],
+) -> dict[str, Any]:
+    current_scene, beat_id, beat_title = _scene_and_beat(snapshot)
+    return {
+        "session": {
+            "session_id": snapshot.get("session_id"),
+            "scenario_title": (snapshot.get("scenario") or {}).get("title"),
+            "status": snapshot.get("status"),
+            "current_scene": current_scene,
+            "current_beat": beat_id,
+            "current_beat_title": beat_title,
+        },
+        "compressed_context": compressed_context,
+        "recent_event_lines": list(context_pack.get("recent_event_lines") or [])[:3],
+        "guardrail": {
+            "mode": "experimental_demo",
+            "non_authoritative": True,
+            "auto_advance_allowed": False,
+        },
+    }
+
+
+def _build_experimental_ai_investigator_demo_context(
+    *,
+    viewer_id: str,
+    view: dict[str, Any],
+) -> dict[str, Any]:
+    participants = [
+        participant
+        for participant in view.get("participants") or []
+        if isinstance(participant, dict)
+    ]
+    participant = _participant_map(participants).get(viewer_id) or {}
+    own_state = (
+        view.get("own_character_state")
+        if isinstance(view.get("own_character_state"), dict)
+        else {}
+    )
+    current_scene = view.get("current_scene") or {}
+    combat_context = view.get("combat_context") or {}
+    status_flags = [
+        label
+        for flag, label in [
+            ("heavy_wound_active", "重伤"),
+            ("is_unconscious", "昏迷"),
+            ("is_dying", "濒死"),
+            ("is_stable", "已稳定"),
+            ("rescue_window_open", "短时可救"),
+            ("death_confirmed", "已死亡"),
+        ]
+        if own_state.get(flag)
+    ]
+    visible_clues = [
+        clue
+        for clue in ((view.get("scenario") or {}).get("clues") or [])
+        if isinstance(clue, dict)
+    ]
+    return {
+        "viewer": {
+            "actor_id": viewer_id,
+            "display_name": participant.get("display_name"),
+            "kind": participant.get("kind"),
+            "occupation": (participant.get("character") or {}).get("occupation"),
+        },
+        "session": {
+            "session_id": view.get("session_id"),
+            "scenario_title": (view.get("scenario") or {}).get("title"),
+            "status": view.get("session_status") or view.get("status"),
+            "current_scene": current_scene.get("title"),
+            "current_scene_summary": _excerpt(current_scene.get("summary"), limit=140),
+        },
+        "visible_clues": [
+            {
+                "title": clue.get("title"),
+                "summary": _excerpt(clue.get("text"), limit=120),
+            }
+            for clue in visible_clues[:3]
+        ],
+        "recent_events": _event_excerpt_items(
+            list(reversed(view.get("visible_events") or [])),
+            limit=4,
+        ),
+        "own_state": {
+            "current_hit_points": own_state.get("current_hit_points"),
+            "current_magic_points": own_state.get("current_magic_points"),
+            "current_sanity": own_state.get("current_sanity"),
+            "status_flags": status_flags,
+        },
+        "combat": {
+            "current_actor_id": combat_context.get("current_actor_id"),
+            "round_number": combat_context.get("round_number"),
+            "turn_order_count": len(combat_context.get("turn_order") or []),
+        },
+        "guardrail": {
+            "mode": "experimental_demo",
+            "non_authoritative": True,
+            "keeper_only_fields_included": False,
+        },
+    }
+
+
 def _build_keeper_context_pack_payload(
     *,
     service: SessionService,
@@ -1867,6 +1992,107 @@ def _render_compressed_context_source_echo(
           <li>说明：这是 keeper-side 工作压缩摘要输入，不是已执行结果，也不是 authoritative truth。</li>
         </ul>
       </article>
+    """
+
+
+def _render_experimental_demo_source_echo(
+    *,
+    result: LocalLLMAssistantResult | None,
+    title: str,
+    lines: list[str],
+) -> str:
+    if result is None or result.status != "success" or result.assistant is None:
+        return ""
+    line_html = "".join(f"<li>{escape(line)}</li>" for line in lines if line)
+    return f"""
+      <article class="assistant-source-echo">
+        <div class="list-head">
+          <h3>{escape(title)}</h3>
+          <span class="tag">experimental</span>
+        </div>
+        <ul class="meta-list">{line_html}</ul>
+      </article>
+    """
+
+
+def _render_experimental_investigator_input_block(
+    *,
+    investigator_view: dict[str, Any] | None,
+) -> str:
+    if investigator_view is None:
+        return """
+          <section class="surface">
+            <div class="surface-header">
+              <div>
+                <h2>AI Investigator 输入摘要</h2>
+                <p>当前没有可用于实验 harness 的调查员视角。</p>
+              </div>
+              <span class="tag warn">visible-only</span>
+            </div>
+            <p class="empty">请选择一个可用调查员后再运行实验回合。</p>
+          </section>
+        """
+    viewer = investigator_view.get("viewer") or {}
+    session = investigator_view.get("session") or {}
+    own_state = investigator_view.get("own_state") or {}
+    clues = list(investigator_view.get("visible_clues") or [])
+    events = list(investigator_view.get("recent_events") or [])
+    combat = investigator_view.get("combat") or {}
+    flags = " / ".join(str(item) for item in own_state.get("status_flags") or []) or "无额外状态"
+    clue_html = "".join(
+        f"<li>{escape(str(item.get('title') or '线索'))}：{escape(str(item.get('summary') or ''))}</li>"
+        for item in clues[:2]
+    )
+    event_html = "".join(
+        f"<li>{escape(str(item.get('event_type') or 'event'))}：{escape(str(item.get('text') or ''))}</li>"
+        for item in events[:2]
+    )
+    return f"""
+      <section class="surface">
+        <div class="surface-header">
+          <div>
+            <h2>AI Investigator 输入摘要</h2>
+            <p>只取该调查员可见场景、线索、事件、角色状态与战斗摘要，不含 keeper-only 信息。</p>
+          </div>
+          <span class="tag">visible-only</span>
+        </div>
+        <ul class="meta-list">
+          <li>调查员：{escape(str(viewer.get('display_name') or viewer.get('actor_id') or '未知调查员'))}</li>
+          <li>当前场景：{escape(str(session.get('current_scene') or '未知场景'))}</li>
+          <li>角色状态：HP {escape(str(own_state.get('current_hit_points') or '—'))} / SAN {escape(str(own_state.get('current_sanity') or '—'))}</li>
+          <li>当前 flags：{escape(flags)}</li>
+          <li>战斗摘要：当前行动者 {escape(str(combat.get('current_actor_id') or '无'))} / 回合 {escape(str(combat.get('round_number') or '—'))}</li>
+        </ul>
+        <p class="meta-line">可见线索</p>
+        {f'<ul class="meta-list">{clue_html}</ul>' if clue_html else '<p class="empty">当前没有可见线索摘要。</p>'}
+        <p class="meta-line">最近可见事件</p>
+        {f'<ul class="meta-list">{event_html}</ul>' if event_html else '<p class="empty">当前没有最近可见事件摘要。</p>'}
+      </section>
+    """
+
+
+def _render_experimental_ai_demo_output_block(
+    *,
+    title: str,
+    summary: str,
+    result: LocalLLMAssistantResult | None,
+    source_echo_html: str = "",
+) -> str:
+    return f"""
+      <section class="surface">
+        <div class="surface-header">
+          <div>
+            <h2>{escape(title)}</h2>
+            <p>{escape(summary)}</p>
+          </div>
+          <span class="tag warn">experimental</span>
+        </div>
+        <p class="helper">这是 isolated experimental demo 输出，只用于观察 AI KP / AI investigator 的最小叙事 loop，不会自动写入主状态。</p>
+        <div class="card-list">
+          {_render_local_llm_assistant_output(result)}
+          {source_echo_html}
+        </div>
+      </section>
     """
 
 
@@ -3270,6 +3496,7 @@ def _render_keeper_workspace_page(
             actions=[
                 ("Session Overview", f"/app/sessions/{session_id}", "ghost"),
                 ("Knowledge", f"/app/knowledge?{urlencode({'session_id': session_id})}", "secondary"),
+                ("Experimental AI Demo", f"/app/sessions/{session_id}/experimental-ai-demo", "ghost"),
                 ("Legacy Keeper Detail", f"/playtest/sessions/{session_id}/keeper", ""),
             ],
         )
@@ -4628,6 +4855,117 @@ def _render_recap_page(
     )
 
 
+def _render_experimental_ai_demo_page(
+    *,
+    session_id: str,
+    snapshot: dict[str, Any],
+    compressed_context: dict[str, Any],
+    investigator_candidates: list[dict[str, Any]],
+    selected_investigator_id: str | None,
+    selected_investigator_view: dict[str, Any] | None,
+    kp_result: LocalLLMAssistantResult | None,
+    investigator_result: LocalLLMAssistantResult | None,
+    notice: str | None = None,
+    detail: dict[str, Any] | str | None = None,
+) -> HTMLResponse:
+    options_html = "".join(
+        f'<option value="{escape(str(item.get("actor_id") or ""))}"{" selected" if str(item.get("actor_id") or "") == (selected_investigator_id or "") else ""}>'
+        f'{escape(str(item.get("display_name") or item.get("actor_id") or "调查员"))}'
+        f'（{escape(str(item.get("kind") or "unknown"))}）</option>'
+        for item in investigator_candidates
+    )
+    body = (
+        _page_head(
+            eyebrow="Experimental AI Demo",
+            title="AI KP + AI Investigator Demo Harness",
+            summary="隔离实验页：同时运行 keeper-side AI KP 与 investigator-side AI proposal，验证现有 compressed context / visible state 底座是否能组成最小 narrative demo loop。不是主产品工作流。",
+            actions=[
+                ("Keeper Workspace", f"/app/sessions/{session_id}/keeper", "secondary"),
+                ("Session Overview", f"/app/sessions/{session_id}", "ghost"),
+                ("Recap / Review", f"/app/sessions/{session_id}/recap", "ghost"),
+            ],
+        )
+        + """
+        <section class="notice-panel">
+          <h2>Experimental / Non-authoritative</h2>
+          <p>这不是 full AI GM，也不会自动推进剧情、裁定规则或写入 authoritative session state。所有输出都只是实验性 narration draft / action proposal。</p>
+        </section>
+        """
+        + _notice_block(notice)
+        + _detail_block(detail)
+        + f"""
+        <section class="surface">
+          <div class="surface-header">
+            <div>
+              <h2>运行最小实验回合</h2>
+              <p>同一次人工触发中，同时生成 AI KP 剧情支架候选建议与 AI investigator 行动提案；两侧输入严格隔离。</p>
+            </div>
+            <span class="tag warn">isolated harness</span>
+          </div>
+          {
+              f'''
+              <form method="post" action="/app/sessions/{escape(session_id)}/experimental-ai-demo/run" class="form-stack">
+                <label>
+                  Investigator 视角
+                  <select name="investigator_id">{options_html}</select>
+                </label>
+                <button class="button-button secondary" type="submit">运行最小实验回合</button>
+              </form>
+              '''
+              if options_html
+              else '<p class="empty">当前没有可用于实验 harness 的 investigator 视角。</p>'
+          }
+        </section>
+        <section class="content-grid">
+          <div class="card-list">
+            {_render_keeper_compressed_context_block(
+                compressed_context=compressed_context,
+                title="AI KP 输入：Compressed Context",
+                summary="AI KP 只吃 keeper-side compact recap / compressed context，不直接读取主状态全量 dump。",
+            )}
+            {_render_experimental_investigator_input_block(
+                investigator_view=selected_investigator_view,
+            )}
+          </div>
+          <div class="card-list">
+            {_render_experimental_ai_demo_output_block(
+                title="AI KP Demo Output",
+                summary="候选的 scene framing / pressure / next beat / NPC reaction 草稿，仅供 Keeper 比较。",
+                result=kp_result,
+                source_echo_html=_render_experimental_demo_source_echo(
+                    result=kp_result,
+                    title="AI KP 输入来源",
+                    lines=[
+                        "本次 AI KP 实验输出仅基于 keeper-side Compressed Context 与最多 3 条近期事件摘要。",
+                        "说明：这是 experimental / non-authoritative narration draft，不会自动推进 session。",
+                    ],
+                ),
+            )}
+            {_render_experimental_ai_demo_output_block(
+                title="AI Investigator Demo Output",
+                summary="候选的调查员行动提案、行动理由与可继续追问方向，仅供观察 AI investigator reasoning loop。",
+                result=investigator_result,
+                source_echo_html=_render_experimental_demo_source_echo(
+                    result=investigator_result,
+                    title="AI Investigator 输入来源",
+                    lines=[
+                        "本次 AI investigator 实验输出只基于所选调查员的可见状态摘要。",
+                        "输入范围：可见场景、可见线索、最近事件、角色状态与战斗摘要，不含 keeper-only 信息。",
+                        "说明：这是 experimental / non-authoritative action proposal，不会自动执行。",
+                    ],
+                ),
+            )}
+          </div>
+        </section>
+        """
+    )
+    return render_web_app_shell(
+        title=f"Session {session_id} Experimental AI Demo",
+        sidebar_html=_render_sidebar(active_section="keeper", session_snapshot=snapshot),
+        body_html=body,
+    )
+
+
 def _render_app_keeper_from_service(
     *,
     service: SessionService,
@@ -4820,6 +5158,93 @@ def _render_app_recap_from_service(
     return response
 
 
+def _render_app_experimental_ai_demo_from_service(
+    *,
+    service: SessionService,
+    session_id: str,
+    local_llm_service: LocalLLMService | None = None,
+    selected_investigator_id: str | None = None,
+    kp_result: LocalLLMAssistantResult | None = None,
+    investigator_result: LocalLLMAssistantResult | None = None,
+    notice: str | None = None,
+    detail: dict[str, Any] | str | None = None,
+    status_code: int = status.HTTP_200_OK,
+) -> HTMLResponse:
+    try:
+        session, keeper_view, _, _ = service.get_keeper_workspace(session_id)
+    except LookupError as exc:
+        body = _detail_block(extract_error_detail(exc)) + _page_head(
+            eyebrow="Experimental AI Demo",
+            title="Experimental AI Demo 不可用",
+            summary="当前无法加载实验 harness 所需的 keeper workspace。",
+            actions=[("返回 Sessions", "/app/sessions", "ghost")],
+        )
+        return render_web_app_shell(
+            title=f"Session {session_id} Experimental AI Demo Missing",
+            sidebar_html=_render_sidebar(active_section="keeper"),
+            body_html=body,
+            status_code=status.HTTP_404_NOT_FOUND,
+        )
+    snapshot = session.model_dump(mode="json")
+    participants = [
+        participant
+        for participant in snapshot.get("participants") or []
+        if isinstance(participant, dict)
+    ]
+    candidates = _demo_investigator_candidates(
+        participants,
+        keeper_id=snapshot.get("keeper_id"),
+    )
+    resolved_investigator_id = selected_investigator_id
+    if not resolved_investigator_id and candidates:
+        resolved_investigator_id = str(candidates[0].get("actor_id") or "")
+    selected_investigator_view: dict[str, Any] | None = None
+    if resolved_investigator_id:
+        try:
+            selected_investigator_view = service.get_session_view(
+                session_id,
+                viewer_id=resolved_investigator_id,
+                viewer_role=ViewerRole.INVESTIGATOR,
+            ).model_dump(mode="json")
+        except LookupError:
+            detail = detail or f"当前无法定位 investigator 视角 {resolved_investigator_id}。"
+            status_code = status.HTTP_404_NOT_FOUND
+    context_pack = service.build_keeper_context_pack_from_workspace(
+        session=session,
+        keeper_view=keeper_view,
+    ).model_dump(mode="json")
+    compressed_context = _build_keeper_compressed_context_payload(
+        service=service,
+        context_pack=context_pack,
+    )
+    if kp_result is None and local_llm_service is not None and not local_llm_service.enabled:
+        kp_result = _disabled_assistant_result(
+            workspace_key="experimental_ai_kp_demo",
+            tasks=EXPERIMENTAL_AI_KP_DEMO_TASKS,
+            selected_task="demo_loop",
+        )
+    if investigator_result is None and local_llm_service is not None and not local_llm_service.enabled:
+        investigator_result = _disabled_assistant_result(
+            workspace_key="experimental_ai_investigator_demo",
+            tasks=EXPERIMENTAL_AI_INVESTIGATOR_DEMO_TASKS,
+            selected_task="demo_loop",
+        )
+    response = _render_experimental_ai_demo_page(
+        session_id=session_id,
+        snapshot=snapshot,
+        compressed_context=compressed_context,
+        investigator_candidates=candidates,
+        selected_investigator_id=resolved_investigator_id,
+        selected_investigator_view=selected_investigator_view,
+        kp_result=kp_result,
+        investigator_result=investigator_result,
+        notice=notice,
+        detail=detail,
+    )
+    response.status_code = status_code
+    return response
+
+
 def _render_app_investigator_from_service(
     *,
     service: SessionService,
@@ -4953,6 +5378,119 @@ def web_app_keeper_workspace(
         service=service,
         session_id=session_id,
         local_llm_service=local_llm_service,
+    )
+
+
+@router.get("/sessions/{session_id}/experimental-ai-demo", response_class=HTMLResponse)
+def web_app_experimental_ai_demo(
+    session_id: str,
+    investigator_id: str | None = None,
+    service: SessionService = Depends(get_session_service),
+    local_llm_service: LocalLLMService = Depends(get_local_llm_service),
+) -> HTMLResponse:
+    return _render_app_experimental_ai_demo_from_service(
+        service=service,
+        session_id=session_id,
+        local_llm_service=local_llm_service,
+        selected_investigator_id=_normalize_form_text(investigator_id),
+    )
+
+
+@router.post("/sessions/{session_id}/experimental-ai-demo/run", response_class=HTMLResponse)
+async def web_app_experimental_ai_demo_run(
+    session_id: str,
+    request: Request,
+    service: SessionService = Depends(get_session_service),
+    local_llm_service: LocalLLMService = Depends(get_local_llm_service),
+) -> HTMLResponse:
+    form = await _read_form_payload(request)
+    selected_investigator_id = _normalize_form_text(form.get("investigator_id"))
+    try:
+        session, keeper_view, _, _ = service.get_keeper_workspace(session_id)
+    except LookupError as exc:
+        body = _detail_block(extract_error_detail(exc)) + _page_head(
+            eyebrow="Experimental AI Demo",
+            title="Experimental AI Demo 不可用",
+            summary="当前无法加载实验 harness 所需的 keeper workspace。",
+            actions=[("返回 Sessions", "/app/sessions", "ghost")],
+        )
+        return render_web_app_shell(
+            title=f"Session {session_id} Experimental AI Demo Missing",
+            sidebar_html=_render_sidebar(active_section="keeper"),
+            body_html=body,
+            status_code=status.HTTP_404_NOT_FOUND,
+        )
+    snapshot = session.model_dump(mode="json")
+    participants = [
+        participant
+        for participant in snapshot.get("participants") or []
+        if isinstance(participant, dict)
+    ]
+    candidates = _demo_investigator_candidates(
+        participants,
+        keeper_id=snapshot.get("keeper_id"),
+    )
+    candidate_ids = {
+        str(item.get("actor_id") or "")
+        for item in candidates
+        if str(item.get("actor_id") or "")
+    }
+    resolved_investigator_id = selected_investigator_id
+    if not resolved_investigator_id and candidates:
+        resolved_investigator_id = str(candidates[0].get("actor_id") or "")
+    if not resolved_investigator_id or resolved_investigator_id not in candidate_ids:
+        return _render_app_experimental_ai_demo_from_service(
+            service=service,
+            session_id=session_id,
+            local_llm_service=local_llm_service,
+            selected_investigator_id=resolved_investigator_id,
+            detail="当前无法建立可用的 investigator visible summary；请先选择一个有效调查员视角。",
+            status_code=status.HTTP_404_NOT_FOUND,
+        )
+    investigator_view = service.get_session_view(
+        session_id,
+        viewer_id=resolved_investigator_id,
+        viewer_role=ViewerRole.INVESTIGATOR,
+    ).model_dump(mode="json")
+    context_pack = service.build_keeper_context_pack_from_workspace(
+        session=session,
+        keeper_view=keeper_view,
+    ).model_dump(mode="json")
+    compressed_context = _build_keeper_compressed_context_payload(
+        service=service,
+        context_pack=context_pack,
+    )
+    kp_result = _generate_local_llm_assistant(
+        local_llm_service=local_llm_service,
+        workspace_key="experimental_ai_kp_demo",
+        task_key="demo_loop",
+        task_label=EXPERIMENTAL_AI_KP_DEMO_TASKS["demo_loop"],
+        context=_build_experimental_ai_kp_demo_context(
+            snapshot=snapshot,
+            context_pack=context_pack,
+            compressed_context=compressed_context,
+        ),
+    )
+    investigator_result = _generate_local_llm_assistant(
+        local_llm_service=local_llm_service,
+        workspace_key="experimental_ai_investigator_demo",
+        task_key="demo_loop",
+        task_label=EXPERIMENTAL_AI_INVESTIGATOR_DEMO_TASKS["demo_loop"],
+        context=_build_experimental_ai_investigator_demo_context(
+            viewer_id=resolved_investigator_id,
+            view=investigator_view,
+        ),
+    )
+    return _render_experimental_ai_demo_page(
+        session_id=session_id,
+        snapshot=snapshot,
+        compressed_context=compressed_context,
+        investigator_candidates=candidates,
+        selected_investigator_id=resolved_investigator_id,
+        selected_investigator_view=investigator_view,
+        kp_result=kp_result,
+        investigator_result=investigator_result,
+        notice="已生成一轮 isolated experimental AI demo 输出；仅供观察 narrative loop，不会自动写入主状态。",
     )
 
 

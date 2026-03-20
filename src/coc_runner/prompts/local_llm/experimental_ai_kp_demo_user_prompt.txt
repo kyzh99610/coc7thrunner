@@ -1,0 +1,19 @@
+当前任务：{{task_label}}
+
+你正在运行一个 isolated experimental AI KP demo harness。
+
+额外约束：
+- 只能基于下面提供的 keeper-side compressed context 与允许的补充摘要。
+- 输出必须是实验性的 scene framing / pressure / next beat / NPC 反应候选建议。
+- 不要把任何内容写成已执行、已揭示、已推进、已确认。
+- 不要自动决定规则结果、线索 truth、剧情结局或玩家必然行动。
+- 不要把 compressed context 或其他摘要写成新的 truth source。
+- summary 应简短说明当前这轮 AI KP 候选建议的方向。
+- bullets 应给出 2-4 条可供 Keeper 比较的剧情支架要点。
+- draft_text 若填写，应是一段可供 Keeper 继续改写的短中文 narration / scene framing 草稿。
+- suggested_questions 可用于提示人类 Keeper 下一步还要确认什么。
+- source_context_label 用一句中文说明来源，例如“基于当前 keeper-side compressed context 与近期事件摘要”。
+- safety_notes 应再次强调这是 experimental / non-authoritative demo，不会自动推进 session。
+
+上下文 JSON：
+{{context_json}}

@@ -69,6 +69,52 @@ class _FakeLocalLLMService:
             source_id = knowledge_source.get("source_id") or "source"
             source_label = knowledge_source.get("source_title_zh") or source_id
             source_context_label = f"基于当前资料：{source_label}（{source_id}）的摘要与预览。"
+        if request.workspace_key == "experimental_ai_kp_demo":
+            source_context_label = "基于当前 keeper-side compressed context 与近期事件摘要。"
+        if request.workspace_key == "experimental_ai_investigator_demo":
+            viewer = request.context.get("viewer") or {}
+            viewer_label = viewer.get("display_name") or viewer.get("actor_id") or "调查员"
+            source_context_label = f"基于 {viewer_label} 的可见状态摘要。"
+        title = f"{request.task_label} 结果"
+        summary = "这是非权威辅助输出。"
+        draft_text = (
+            "可先把当前资料的关键点整理成工作备注。"
+            if request.task_key == "source_summary"
+            else (
+                "- 地下储物间和登记簿之间还有什么缺口？\n- 这条线索是否能指向失踪住客？"
+                if request.task_key == "follow_up_questions"
+                else (
+                    "开场可先把账房里的旧账册、潮气和老板的目光压力压出来。"
+                    if request.task_key == "scene_framing"
+                    else (
+                        "建议下一拍让缺页编号通过账册边角或店员反应被看见。"
+                        if request.task_key == "clue_beat"
+                        else (
+                            "秦老板会先压低声音否认，再用催促离店制造时间压力。"
+                            if request.task_key == "npc_pressure"
+                            else "这是一段可继续编辑的草稿。"
+                        )
+                    )
+                )
+            )
+        )
+        bullets = ["关键点一", "关键点二"]
+        suggested_questions = ["后续还要确认什么？"]
+        safety_notes = ["不会直接改写 authoritative state。"]
+        if request.workspace_key == "experimental_ai_kp_demo":
+            title = "AI KP 剧情支架提案"
+            summary = "这是 experimental / non-authoritative 的 AI KP 候选叙事输出。"
+            bullets = ["先立起账房压迫感。", "让秦老板的反应制造下一拍压力。"]
+            suggested_questions = ["是否先让调查员听见二楼动静？"]
+            draft_text = "KP 可先用潮气、旧账册和老板的短暂失态开场，再把压力推向缺页登记。"
+            safety_notes = ["不会自动推进剧情。", "不会写入 authoritative session state。"]
+        if request.workspace_key == "experimental_ai_investigator_demo":
+            title = "AI Investigator 行动提案"
+            summary = "这是 experimental / non-authoritative 的调查员行动提案。"
+            bullets = ["先确认账册缺页编号。", "再试探老板是否回避 204 房记录。"]
+            suggested_questions = ["204 房登记是否和地窖搬运时间有关？"]
+            draft_text = "调查员会先盯住账册缺页和住客编号，再顺势追问老板为何回避 204 房。"
+            safety_notes = ["只基于可见信息。", "不会自动执行检定或推进状态。"]
         return LocalLLMAssistantResult(
             status="success",
             workspace_key=request.workspace_key,
@@ -77,35 +123,15 @@ class _FakeLocalLLMService:
             provider_name="stub-local",
             model="stub-model",
             assistant=LocalLLMAssistantPayload(
-                title=f"{request.task_label} 结果",
-                summary="这是非权威辅助输出。",
-                bullets=["关键点一", "关键点二"],
-                suggested_questions=["后续还要确认什么？"],
-                draft_text=(
-                    "可先把当前资料的关键点整理成工作备注。"
-                    if request.task_key == "source_summary"
-                    else (
-                        "- 地下储物间和登记簿之间还有什么缺口？\n- 这条线索是否能指向失踪住客？"
-                        if request.task_key == "follow_up_questions"
-                        else (
-                            "开场可先把账房里的旧账册、潮气和老板的目光压力压出来。"
-                            if request.task_key == "scene_framing"
-                            else (
-                                "建议下一拍让缺页编号通过账册边角或店员反应被看见。"
-                                if request.task_key == "clue_beat"
-                                else (
-                                    "秦老板会先压低声音否认，再用催促离店制造时间压力。"
-                                    if request.task_key == "npc_pressure"
-                                    else "这是一段可继续编辑的草稿。"
-                                )
-                            )
-                        )
-                    )
-                ),
+                title=title,
+                summary=summary,
+                bullets=bullets,
+                suggested_questions=suggested_questions,
+                draft_text=draft_text,
                 draft_kind=draft_kind,
                 suggested_target=suggested_target,
                 source_context_label=source_context_label,
-                safety_notes=["不会直接改写 authoritative state。"],
+                safety_notes=safety_notes,
             ),
         )
 
@@ -231,10 +257,33 @@ def test_web_app_keeper_assistant_block_defaults_to_disabled_without_breaking_wo
     assert 'id="keeper-context-pack"' in html
     assert "AI-KP Narrative Scaffolding" in html
     assert "Keeper Assistant" in html
+    assert f'href="/app/sessions/{session_id}/experimental-ai-demo"' in html
     assert "Local LLM 未启用" in html
     assert "不会直接修改 authoritative state" in html
     assert 'action="/app/sessions/' in html
     assert 'name="narrative_note"' in html
+
+
+def test_web_app_experimental_ai_demo_page_loads_without_breaking_keeper_shell_when_llm_disabled(
+    client: TestClient,
+) -> None:
+    session_id = _start_keeper_dashboard_session(client)
+    _advance_keeper_dashboard_session(client, session_id)
+
+    response = client.get(f"/app/sessions/{session_id}/experimental-ai-demo")
+
+    assert response.status_code == 200
+    html = response.text
+    assert "AI KP + AI Investigator Demo Harness" in html
+    assert "Experimental / Non-authoritative" in html
+    assert "运行最小实验回合" in html
+    assert "AI KP 输入：Compressed Context" in html
+    assert "AI Investigator 输入摘要" in html
+    assert "AI KP Demo Output" in html
+    assert "AI Investigator Demo Output" in html
+    assert "Local LLM 未启用" in html
+    assert "不会自动写入主状态" in html
+    assert 'action="/app/sessions/' in html
 
 
 def test_keeper_compressed_context_builder_stays_short_and_secret_safe(
@@ -263,6 +312,63 @@ def test_keeper_compressed_context_builder_stays_short_and_secret_safe(
     assert "private_notes" not in serialized_compressed
     assert "secret_state_refs" not in serialized_compressed
     assert "participants" not in serialized_compressed
+
+
+def test_web_app_experimental_ai_demo_run_keeps_kp_and_investigator_inputs_isolated(
+    client: TestClient,
+) -> None:
+    session_id = _start_keeper_dashboard_session(client)
+    _advance_keeper_dashboard_session(client, session_id)
+    fake_service = _FakeLocalLLMService()
+    client.app.state.local_llm_service = fake_service
+    before_snapshot = _get_snapshot(client, session_id)
+
+    response = client.post(
+        f"/app/sessions/{session_id}/experimental-ai-demo/run",
+        data={"investigator_id": "investigator-1"},
+    )
+
+    assert response.status_code == 200
+    html = response.text
+    assert "AI KP + AI Investigator Demo Harness" in html
+    assert "已生成一轮 isolated experimental AI demo 输出" in html
+    assert "AI KP Demo Output" in html
+    assert "AI KP 剧情支架提案" in html
+    assert "AI KP 输入来源" in html
+    assert "本次 AI KP 实验输出仅基于 keeper-side Compressed Context 与最多 3 条近期事件摘要。" in html
+    assert "AI Investigator Demo Output" in html
+    assert "AI Investigator 行动提案" in html
+    assert "AI Investigator 输入来源" in html
+    assert "本次 AI investigator 实验输出只基于所选调查员的可见状态摘要。" in html
+    assert "不含 keeper-only 信息" in html
+    assert "experimental / non-authoritative" in html
+    assert len(fake_service.requests) == 2
+    kp_request = fake_service.requests[0]
+    investigator_request = fake_service.requests[1]
+    assert kp_request.workspace_key == "experimental_ai_kp_demo"
+    assert kp_request.task_key == "demo_loop"
+    assert "compressed_context" in kp_request.context
+    assert "recent_event_lines" in kp_request.context
+    assert "private_notes" not in str(kp_request.context)
+    assert "secret_state_refs" not in str(kp_request.context)
+    assert "participants" not in str(kp_request.context)
+    assert investigator_request.workspace_key == "experimental_ai_investigator_demo"
+    assert investigator_request.task_key == "demo_loop"
+    assert investigator_request.context["viewer"]["actor_id"] == "investigator-1"
+    assert investigator_request.context["session"]["current_scene"] == "旅店账房"
+    assert investigator_request.context["visible_clues"]
+    assert investigator_request.context["recent_events"]
+    assert "compressed_context" not in investigator_request.context
+    assert "context_pack" not in investigator_request.context
+    serialized_investigator_context = str(investigator_request.context)
+    assert "private_notes" not in serialized_investigator_context
+    assert "secret_state_refs" not in serialized_investigator_context
+    assert "own_private_state" not in serialized_investigator_context
+    assert "keeper_workflow" not in serialized_investigator_context
+    assert "private_notes" not in html
+    assert "secret_state_refs" not in html
+    after_snapshot = _get_snapshot(client, session_id)
+    assert before_snapshot == after_snapshot
 
 
 def test_web_app_keeper_workspace_surfaces_pending_ops_and_legacy_handoffs(

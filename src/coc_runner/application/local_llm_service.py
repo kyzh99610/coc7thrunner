@@ -23,6 +23,8 @@ class LocalLLMAssistantRequest(BaseModel):
         "keeper_narrative_scaffolding",
         "knowledge_detail",
         "session_recap",
+        "experimental_ai_kp_demo",
+        "experimental_ai_investigator_demo",
     ]
     task_key: str = Field(min_length=1, max_length=80)
     task_label: str = Field(min_length=1, max_length=120)
@@ -229,6 +231,8 @@ class LocalLLMService:
                 "keeper_narrative_scaffolding": "keeper_narrative_scaffolding_user_prompt.txt",
                 "knowledge_detail": "knowledge_assistant_user_prompt.txt",
                 "session_recap": "recap_assistant_user_prompt.txt",
+                "experimental_ai_kp_demo": "experimental_ai_kp_demo_user_prompt.txt",
+                "experimental_ai_investigator_demo": "experimental_ai_investigator_demo_user_prompt.txt",
             }[request.workspace_key]
         )
         context_json = json.dumps(
