@@ -950,6 +950,7 @@ def _build_keeper_assistant_context(
     keeper_view: dict[str, Any],
     runtime_assistance: dict[str, Any],
     san_aftermath_suggestions: dict[str, list[dict[str, Any]]],
+    context_pack: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     participants = [
         participant
@@ -989,7 +990,7 @@ def _build_keeper_assistant_context(
                     "flags": flags,
                 }
             )
-    return {
+    context = {
         "session": {
             "session_id": snapshot.get("session_id"),
             "scenario_title": (snapshot.get("scenario") or {}).get("title"),
@@ -1049,6 +1050,9 @@ def _build_keeper_assistant_context(
         ],
         "recent_events": _event_excerpt_items(list(reversed(keeper_view.get("visible_events") or [])), limit=5),
     }
+    if context_pack:
+        context["context_pack"] = context_pack
+    return context
 
 
 def _build_keeper_narrative_context(
@@ -1056,10 +1060,11 @@ def _build_keeper_narrative_context(
     snapshot: dict[str, Any],
     keeper_view: dict[str, Any],
     runtime_assistance: dict[str, Any],
+    context_pack: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     workflow = keeper_view.get("keeper_workflow") or {}
     current_scene, beat_id, beat_title = _scene_and_beat(snapshot)
-    return {
+    context = {
         "session": {
             "session_id": snapshot.get("session_id"),
             "scenario_title": (snapshot.get("scenario") or {}).get("title"),
@@ -1122,6 +1127,9 @@ def _build_keeper_narrative_context(
             ],
         },
     }
+    if context_pack:
+        context["context_pack"] = context_pack
+    return context
 
 
 def _latest_audit_entry(
@@ -1620,9 +1628,10 @@ def _build_knowledge_assistant_context(
 def _build_recap_assistant_context(
     *,
     snapshot: dict[str, Any],
+    context_pack: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     current_scene, beat_id, beat_title = _scene_and_beat(snapshot)
-    return {
+    context = {
         "session": {
             "session_id": snapshot.get("session_id"),
             "scenario_title": (snapshot.get("scenario") or {}).get("title"),
@@ -1644,6 +1653,80 @@ def _build_recap_assistant_context(
         "reviewed_action_count": len(snapshot.get("reviewed_actions") or []),
         "authoritative_action_count": len(snapshot.get("authoritative_actions") or []),
     }
+    if context_pack:
+        context["context_pack"] = context_pack
+    return context
+
+
+def _build_keeper_context_pack_payload(
+    *,
+    service: SessionService,
+    session: Any,
+    keeper_view: Any,
+    runtime_assistance: dict[str, Any],
+    narrative_note_value: str = "",
+) -> dict[str, Any]:
+    return service.build_keeper_context_pack_from_workspace(
+        session=session,
+        keeper_view=keeper_view,
+        narrative_work_note=narrative_note_value,
+        runtime_assistance=runtime_assistance,
+    ).model_dump(mode="json")
+
+
+def _render_keeper_context_pack_block(
+    *,
+    context_pack: dict[str, Any],
+    title: str = "Keeper Context Pack",
+    summary: str = "当前 keeper-side 的局势压缩层，可复用给 narrative scaffolding、recap assistant 和后续 experimental AI demo；不是 authoritative truth。",
+) -> str:
+    identity = context_pack.get("identity") or {}
+    combat = context_pack.get("combat") or {}
+    summary_lines = list(context_pack.get("summary_lines") or [])
+    open_threads = list(context_pack.get("open_threads") or [])
+    recent_notes = list(context_pack.get("recent_keeper_notes") or [])
+    knowledge_highlights = list(context_pack.get("knowledge_highlights") or [])
+    narrative_work_note = _normalize_form_text(context_pack.get("narrative_work_note"))
+    disclaimer = _normalize_form_text(context_pack.get("disclaimer")) or "这是非权威的当前工作摘要。"
+    summary_html = "".join(f"<li>{escape(str(line))}</li>" for line in summary_lines[:4])
+    thread_html = "".join(f"<li>{escape(str(line))}</li>" for line in open_threads[:4])
+    note_html = "".join(f"<li>{escape(str(line))}</li>" for line in recent_notes[:4])
+    knowledge_html = "".join(f"<li>{escape(str(line))}</li>" for line in knowledge_highlights[:3])
+    return f"""
+      <section class="surface">
+        <div class="surface-header">
+          <div>
+            <h2>{escape(title)}</h2>
+            <p>{escape(summary)}</p>
+          </div>
+          <span class="tag">Context Pack</span>
+        </div>
+        <p class="helper">{escape(disclaimer)}</p>
+        <ul class="meta-list">
+          <li>session_id：<code>{escape(str(identity.get('session_id') or ''))}</code></li>
+          <li>状态：{escape(_status_label(identity.get('status')))}</li>
+          <li>当前场景：{escape(str(identity.get('current_scene') or '未知场景'))}</li>
+          <li>当前 beat：<span class="mono">{escape(str(identity.get('current_beat') or '无'))}</span></li>
+          <li>战斗摘要：{escape(str(combat.get('summary_line') or '当前没有战斗顺序或紧急伤势 follow-up。'))}</li>
+        </ul>
+        <div class="divider"></div>
+        <p class="meta-line">当前局势摘要</p>
+        {f'<ul class="meta-list">{summary_html}</ul>' if summary_html else '<p class="empty">当前还没有可压缩的局势摘要。</p>'}
+        <p class="meta-line">未解决事项 / 当前压力</p>
+        {f'<ul class="meta-list">{thread_html}</ul>' if thread_html else '<p class="empty">当前没有额外 open threads。</p>'}
+        <p class="meta-line">最近 Keeper 备注</p>
+        {f'<ul class="meta-list">{note_html}</ul>' if note_html else '<p class="empty">当前还没有最近 keeper 备注。</p>'}
+        <p class="meta-line">资料方向 / Knowledge Hints</p>
+        {f'<ul class="meta-list">{knowledge_html}</ul>' if knowledge_html else '<p class="empty">当前没有额外资料方向摘要。</p>'}
+        {
+            (
+                f'<p class="meta-line">当前 narrative_work_note：{escape(_excerpt(narrative_work_note, limit=180) or "")}</p>'
+            )
+            if narrative_work_note
+            else '<p class="meta-line">当前 narrative_work_note：未填写。</p>'
+        }
+      </section>
+    """
 
 
 def _generate_local_llm_assistant(
@@ -2968,6 +3051,7 @@ def _render_keeper_workspace_page(
     notice: str | None = None,
     detail: dict[str, Any] | str | None = None,
     action_result: dict[str, Any] | None = None,
+    context_pack: dict[str, Any] | None = None,
     narrative_note_value: str = "",
     narrative_completion_notice: str | None = None,
     narrative_result: LocalLLMAssistantResult | None = None,
@@ -3208,6 +3292,11 @@ def _render_keeper_workspace_page(
             </section>
           </div>
           <div class="card-list">
+            {
+                _render_keeper_context_pack_block(context_pack=context_pack)
+                if context_pack is not None
+                else ""
+            }
             {_render_keeper_narrative_scaffolding(
                 session_id=session_id,
                 snapshot=snapshot,
@@ -4237,6 +4326,7 @@ def _render_recap_page(
     *,
     session_id: str,
     snapshot: dict[str, Any],
+    context_pack: dict[str, Any] | None = None,
     assistant_result: LocalLLMAssistantResult | None = None,
     selected_assistant_task: str | None = None,
 ) -> HTMLResponse:
@@ -4310,6 +4400,15 @@ def _render_recap_page(
             </section>
           </div>
           <div class="card-list">
+            {
+                _render_keeper_context_pack_block(
+                    context_pack=context_pack,
+                    title="Keeper Context Pack",
+                    summary="把 keeper-side 当前局势压缩层固定挂在 recap 页，便于 closeout 回看与后续 AI 输入复用。",
+                )
+                if context_pack is not None
+                else ""
+            }
             {_render_local_llm_assistant_panel(
                 title="Recap Assistant",
                 description="可选的本地 LLM 辅助块，只基于回顾页当前上下文生成 recap 草稿或待办摘要。",
@@ -4354,6 +4453,7 @@ def _render_app_keeper_from_service(
     notice: str | None = None,
     detail: dict[str, Any] | str | None = None,
     action_result: dict[str, Any] | None = None,
+    context_pack: dict[str, Any] | None = None,
     narrative_note_value: str = "",
     narrative_completion_notice: str | None = None,
     narrative_result: LocalLLMAssistantResult | None = None,
@@ -4391,17 +4491,27 @@ def _render_app_keeper_from_service(
             tasks=KEEPER_NARRATIVE_TASKS,
             selected_task=selected_narrative_task,
         )
+    runtime_assistance = service.get_keeper_runtime_assistance(keeper_view=keeper_view)
+    if context_pack is None:
+        context_pack = _build_keeper_context_pack_payload(
+            service=service,
+            session=session,
+            keeper_view=keeper_view,
+            runtime_assistance=runtime_assistance,
+            narrative_note_value=narrative_note_value,
+        )
     response = _render_keeper_workspace_page(
         session_id=session_id,
         snapshot=session.model_dump(mode="json"),
         keeper_view=keeper_view.model_dump(mode="json"),
         checkpoints=[checkpoint.model_dump(mode="json") for checkpoint in checkpoints],
         warnings=[warning.model_dump(mode="json") for warning in warnings],
-        runtime_assistance=service.get_keeper_runtime_assistance(keeper_view=keeper_view),
+        runtime_assistance=runtime_assistance,
         san_aftermath_suggestions=service.get_keeper_san_aftermath_suggestions(session=session),
         notice=notice,
         detail=detail,
         action_result=action_result,
+        context_pack=context_pack,
         narrative_note_value=narrative_note_value,
         narrative_completion_notice=narrative_completion_notice,
         narrative_result=narrative_result,
@@ -4479,7 +4589,7 @@ def _render_app_recap_from_service(
     status_code: int = status.HTTP_200_OK,
 ) -> HTMLResponse:
     try:
-        snapshot = service.snapshot_session(session_id)
+        session, keeper_view, _, _ = service.get_keeper_workspace(session_id)
     except LookupError as exc:
         body = _detail_block(extract_error_detail(exc)) + _page_head(
             eyebrow="Recap / Review",
@@ -4493,6 +4603,11 @@ def _render_app_recap_from_service(
             body_html=body,
             status_code=status.HTTP_404_NOT_FOUND,
         )
+    snapshot = session.model_dump(mode="json")
+    context_pack = service.build_keeper_context_pack_from_workspace(
+        session=session,
+        keeper_view=keeper_view,
+    ).model_dump(mode="json")
     if assistant_result is None and local_llm_service is not None and not local_llm_service.enabled:
         assistant_result = _disabled_assistant_result(
             workspace_key="session_recap",
@@ -4502,6 +4617,7 @@ def _render_app_recap_from_service(
     response = _render_recap_page(
         session_id=session_id,
         snapshot=snapshot,
+        context_pack=context_pack,
         assistant_result=assistant_result,
         selected_assistant_task=selected_assistant_task,
     )
@@ -4675,6 +4791,13 @@ async def web_app_keeper_assistant(
         )
     runtime_assistance = service.get_keeper_runtime_assistance(keeper_view=keeper_view)
     san_aftermath_suggestions = service.get_keeper_san_aftermath_suggestions(session=session)
+    context_pack = _build_keeper_context_pack_payload(
+        service=service,
+        session=session,
+        keeper_view=keeper_view,
+        runtime_assistance=runtime_assistance,
+        narrative_note_value=narrative_note_value,
+    )
     assistant_result = _generate_local_llm_assistant(
         local_llm_service=local_llm_service,
         workspace_key="keeper_workspace",
@@ -4685,6 +4808,7 @@ async def web_app_keeper_assistant(
             keeper_view=keeper_view.model_dump(mode="json"),
             runtime_assistance=runtime_assistance,
             san_aftermath_suggestions=san_aftermath_suggestions,
+            context_pack=context_pack,
         ),
     )
     return _render_keeper_workspace_page(
@@ -4695,6 +4819,7 @@ async def web_app_keeper_assistant(
         warnings=[warning.model_dump(mode="json") for warning in warnings],
         runtime_assistance=runtime_assistance,
         san_aftermath_suggestions=san_aftermath_suggestions,
+        context_pack=context_pack,
         narrative_note_value=narrative_note_value,
         assistant_result=assistant_result,
         selected_assistant_task=selected_task,
@@ -4732,6 +4857,13 @@ async def web_app_keeper_narrative_assistant(
     runtime_assistance = service.get_keeper_runtime_assistance(keeper_view=keeper_view)
     san_aftermath_suggestions = service.get_keeper_san_aftermath_suggestions(session=session)
     snapshot = session.model_dump(mode="json")
+    context_pack = _build_keeper_context_pack_payload(
+        service=service,
+        session=session,
+        keeper_view=keeper_view,
+        runtime_assistance=runtime_assistance,
+        narrative_note_value=narrative_note_value,
+    )
     narrative_scope = _keeper_narrative_scope_metadata(
         session_id=session_id,
         snapshot=snapshot,
@@ -4745,6 +4877,7 @@ async def web_app_keeper_narrative_assistant(
             snapshot=snapshot,
             keeper_view=keeper_view.model_dump(mode="json"),
             runtime_assistance=runtime_assistance,
+            context_pack=context_pack,
         ),
     )
     return _render_keeper_workspace_page(
@@ -4755,6 +4888,7 @@ async def web_app_keeper_narrative_assistant(
         warnings=[warning.model_dump(mode="json") for warning in warnings],
         runtime_assistance=runtime_assistance,
         san_aftermath_suggestions=san_aftermath_suggestions,
+        context_pack=context_pack,
         narrative_note_value=narrative_note_value,
         narrative_result=narrative_result,
         narrative_scope=narrative_scope,
@@ -4833,6 +4967,12 @@ def web_app_keeper_prompt_assistant(
         )
     runtime_assistance = service.get_keeper_runtime_assistance(keeper_view=keeper_view)
     san_aftermath_suggestions = service.get_keeper_san_aftermath_suggestions(session=session)
+    context_pack = _build_keeper_context_pack_payload(
+        service=service,
+        session=session,
+        keeper_view=keeper_view,
+        runtime_assistance=runtime_assistance,
+    )
     assistant_context = _build_keeper_prompt_object_assistant_context(
         snapshot=snapshot,
         keeper_view=keeper_view_snapshot,
@@ -4859,6 +4999,7 @@ def web_app_keeper_prompt_assistant(
         warnings=[warning.model_dump(mode="json") for warning in warnings],
         runtime_assistance=runtime_assistance,
         san_aftermath_suggestions=san_aftermath_suggestions,
+        context_pack=context_pack,
         assistant_result=assistant_result,
         assistant_scope=assistant_scope,
         selected_assistant_task="note_draft",
@@ -4907,6 +5048,12 @@ def web_app_keeper_draft_assistant(
         )
     runtime_assistance = service.get_keeper_runtime_assistance(keeper_view=keeper_view)
     san_aftermath_suggestions = service.get_keeper_san_aftermath_suggestions(session=session)
+    context_pack = _build_keeper_context_pack_payload(
+        service=service,
+        session=session,
+        keeper_view=keeper_view,
+        runtime_assistance=runtime_assistance,
+    )
     assistant_context = _build_keeper_draft_object_assistant_context(
         snapshot=snapshot,
         keeper_view=keeper_view_snapshot,
@@ -4933,6 +5080,7 @@ def web_app_keeper_draft_assistant(
         warnings=[warning.model_dump(mode="json") for warning in warnings],
         runtime_assistance=runtime_assistance,
         san_aftermath_suggestions=san_aftermath_suggestions,
+        context_pack=context_pack,
         assistant_result=assistant_result,
         assistant_scope=assistant_scope,
         selected_assistant_task="draft_review_note_draft",
@@ -5565,7 +5713,7 @@ async def web_app_recap_assistant(
         _normalize_form_text(form.get("assistant_task")),
     )
     try:
-        snapshot = service.snapshot_session(session_id)
+        session, keeper_view, _, _ = service.get_keeper_workspace(session_id)
     except LookupError as exc:
         body = _detail_block(extract_error_detail(exc)) + _page_head(
             eyebrow="Recap / Review",
@@ -5579,16 +5727,22 @@ async def web_app_recap_assistant(
             body_html=body,
             status_code=status.HTTP_404_NOT_FOUND,
         )
+    snapshot = session.model_dump(mode="json")
+    context_pack = service.build_keeper_context_pack_from_workspace(
+        session=session,
+        keeper_view=keeper_view,
+    ).model_dump(mode="json")
     assistant_result = _generate_local_llm_assistant(
         local_llm_service=local_llm_service,
         workspace_key="session_recap",
         task_key=selected_task,
         task_label=task_label,
-        context=_build_recap_assistant_context(snapshot=snapshot),
+        context=_build_recap_assistant_context(snapshot=snapshot, context_pack=context_pack),
     )
     return _render_recap_page(
         session_id=session_id,
         snapshot=snapshot,
+        context_pack=context_pack,
         assistant_result=assistant_result,
         selected_assistant_task=selected_task,
     )

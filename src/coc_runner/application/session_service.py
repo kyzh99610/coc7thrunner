@@ -85,6 +85,9 @@ from coc_runner.domain.models import (
     ListCheckpointsResponse,
     KeeperPromptPriority,
     KeeperWorkflowState,
+    KeeperContextPack,
+    KeeperContextPackCombatSummary,
+    KeeperContextPackIdentity,
     KeeperPromptStatus,
     LanguagePreference,
     ManualActionRequest,
@@ -676,6 +679,130 @@ class SessionService:
                     suggestion.model_dump(mode="json") for suggestion in suggestions
                 ]
         return suggestions_by_prompt_id
+
+    def build_keeper_context_pack(
+        self,
+        session_id: str,
+        *,
+        narrative_work_note: str | None = None,
+        language_preference: LanguagePreference | None = None,
+    ) -> KeeperContextPack:
+        session, keeper_view, _, _ = self.get_keeper_workspace(
+            session_id,
+            language_preference=language_preference,
+        )
+        return self.build_keeper_context_pack_from_workspace(
+            session=session,
+            keeper_view=keeper_view,
+            narrative_work_note=narrative_work_note,
+        )
+
+    def build_keeper_context_pack_from_workspace(
+        self,
+        *,
+        session: SessionState,
+        keeper_view: InvestigatorView,
+        narrative_work_note: str | None = None,
+        runtime_assistance: dict[str, list[dict[str, Any]]] | None = None,
+    ) -> KeeperContextPack:
+        workflow = keeper_view.keeper_workflow or KeeperWorkflowState()
+        runtime_assistance = runtime_assistance or self.get_keeper_runtime_assistance(
+            keeper_view=keeper_view
+        )
+        participant_by_id = {
+            participant.actor_id: participant.display_name
+            for participant in session.participants
+        }
+        current_beat = (
+            keeper_view.progress_state.current_beat
+            if keeper_view.progress_state is not None
+            else None
+        )
+        current_beat_title = next(
+            (
+                beat.title
+                for beat in keeper_view.scenario.beats
+                if beat.beat_id == current_beat
+            ),
+            None,
+        )
+        summary_lines = [
+            line
+            for line in (
+                self._context_pack_excerpt(line, limit=120)
+                for line in workflow.summary.summary_lines[:5]
+            )
+            if line
+        ]
+        if not summary_lines:
+            fallback_line = self._context_pack_excerpt(keeper_view.current_scene.summary, limit=120)
+            if fallback_line:
+                summary_lines.append(fallback_line)
+        recent_event_lines = [
+            line
+            for line in (
+                self._format_context_event_line(event.text, event.event_type.value)
+                for event in reversed(keeper_view.visible_events[-4:])
+            )
+            if line
+        ]
+        objective_lines = [
+            line
+            for line in (
+                self._context_pack_excerpt(
+                    objective.text or objective.scene_id,
+                    limit=96,
+                )
+                for objective in workflow.unresolved_objectives[:4]
+            )
+            if line
+        ]
+        prompt_lines = [
+            line
+            for line in (
+                self._format_context_prompt_line(prompt)
+                for prompt in workflow.active_prompts[:4]
+            )
+            if line
+        ]
+        recent_keeper_notes = self._collect_recent_keeper_notes(keeper_view)
+        knowledge_highlights = self._collect_context_pack_knowledge_highlights(
+            runtime_assistance.get("knowledge_hints") or []
+        )
+        combat_summary = self._build_keeper_context_pack_combat_summary(
+            session=session,
+            participant_by_id=participant_by_id,
+        )
+        open_threads = self._collect_context_pack_open_threads(
+            objective_lines=objective_lines,
+            prompt_lines=prompt_lines,
+            combat_summary=combat_summary,
+            knowledge_highlights=knowledge_highlights,
+        )
+        normalized_narrative_note = self._context_pack_excerpt(
+            narrative_work_note,
+            limit=220,
+        )
+        return KeeperContextPack(
+            identity=KeeperContextPackIdentity(
+                session_id=session.session_id,
+                scenario_title=session.scenario.title,
+                playtest_group=session.playtest_group,
+                status=session.status,
+                current_scene=keeper_view.current_scene.title,
+                current_beat=current_beat,
+                current_beat_title=current_beat_title,
+            ),
+            summary_lines=summary_lines,
+            recent_event_lines=recent_event_lines,
+            objective_lines=objective_lines,
+            prompt_lines=prompt_lines,
+            combat=combat_summary,
+            recent_keeper_notes=recent_keeper_notes,
+            knowledge_highlights=knowledge_highlights,
+            open_threads=open_threads,
+            narrative_work_note=normalized_narrative_note,
+        )
 
     def upsert_character_suggestion_hook(
         self,
@@ -1561,6 +1688,168 @@ class SessionService:
             append_query(event.text)
 
         return query_texts[:6]
+
+    @staticmethod
+    def _context_pack_excerpt(
+        text: str | None,
+        *,
+        limit: int = 96,
+    ) -> str | None:
+        if text is None:
+            return None
+        normalized = " ".join(str(text).split())
+        if not normalized:
+            return None
+        if len(normalized) <= limit:
+            return normalized
+        return normalized[: limit - 1].rstrip() + "…"
+
+    @classmethod
+    def _format_context_event_line(
+        cls,
+        text: str | None,
+        event_type: str | None,
+    ) -> str | None:
+        excerpt = cls._context_pack_excerpt(text, limit=108)
+        if excerpt is None:
+            return None
+        event_label = event_type or "event"
+        return f"{event_label}：{excerpt}"
+
+    @classmethod
+    def _format_context_prompt_line(
+        cls,
+        prompt: QueuedKPPrompt,
+    ) -> str | None:
+        prompt_excerpt = cls._context_pack_excerpt(
+            prompt.prompt_text or prompt.trigger_reason or prompt.category,
+            limit=84,
+        )
+        if prompt_excerpt is None:
+            return None
+        return f"{prompt.category or 'kp_prompt'} / {prompt.status.value}：{prompt_excerpt}"
+
+    @classmethod
+    def _collect_recent_keeper_notes(
+        cls,
+        keeper_view: InvestigatorView,
+    ) -> list[str]:
+        notes: list[str] = []
+        for prompt in reversed(keeper_view.keeper_workflow.active_prompts[-4:] if keeper_view.keeper_workflow else []):
+            latest_note = prompt.notes[-1] if prompt.notes else None
+            excerpt = cls._context_pack_excerpt(latest_note, limit=88)
+            if excerpt:
+                notes.append(f"Prompt：{excerpt}")
+            if len(notes) >= 2:
+                break
+        for reviewed in reversed(keeper_view.visible_reviewed_actions[-4:]):
+            excerpt = cls._context_pack_excerpt(reviewed.decision.editor_notes, limit=88)
+            if excerpt:
+                notes.append(f"审阅：{excerpt}")
+            if len(notes) >= 4:
+                break
+        deduped: list[str] = []
+        for item in notes:
+            if item not in deduped:
+                deduped.append(item)
+        return deduped[:4]
+
+    @classmethod
+    def _collect_context_pack_knowledge_highlights(
+        cls,
+        knowledge_hints: list[dict[str, Any]],
+    ) -> list[str]:
+        highlights: list[str] = []
+        for item in knowledge_hints[:3]:
+            title = cls._context_pack_excerpt(
+                str(item.get("title") or item.get("source_title") or "资料提示"),
+                limit=40,
+            )
+            summary = cls._context_pack_excerpt(
+                item.get("summary") or item.get("content"),
+                limit=96,
+            )
+            if title and summary:
+                highlights.append(f"{title}：{summary}")
+            elif title:
+                highlights.append(title)
+        return highlights[:3]
+
+    @staticmethod
+    def _build_keeper_context_pack_combat_summary(
+        *,
+        session: SessionState,
+        participant_by_id: dict[str, str],
+    ) -> KeeperContextPackCombatSummary:
+        combat_context = session.combat_context
+        current_actor_id = combat_context.current_actor_id if combat_context is not None else None
+        turn_order_count = len(combat_context.turn_order) if combat_context is not None else 0
+        wound_follow_up_count = sum(
+            1
+            for state in session.character_states.values()
+            if any(
+                [
+                    state.heavy_wound_active,
+                    state.is_unconscious,
+                    state.is_dying,
+                    state.rescue_window_open,
+                    state.death_confirmed,
+                ]
+            )
+        )
+        pending_damage_actor_count = sum(
+            1
+            for state in session.character_states.values()
+            if state.pending_damage_context is not None
+        )
+        in_combat = bool(
+            combat_context is not None
+            and (current_actor_id or turn_order_count or combat_context.round_number)
+        )
+        if in_combat:
+            summary_line = (
+                f"战斗进行中：round {combat_context.round_number or '—'}，当前行动者 "
+                f"{participant_by_id.get(current_actor_id or '', current_actor_id or '未建立')}。"
+            )
+        elif wound_follow_up_count:
+            summary_line = f"当前没有战斗顺序，但仍有 {wound_follow_up_count} 条伤势 / 抢救 follow-up。"
+        else:
+            summary_line = "当前没有战斗顺序或紧急伤势 follow-up。"
+        return KeeperContextPackCombatSummary(
+            in_combat=in_combat,
+            current_actor_id=current_actor_id,
+            current_actor_name=participant_by_id.get(current_actor_id or "", current_actor_id or None),
+            round_number=combat_context.round_number if combat_context is not None else None,
+            turn_order_count=turn_order_count,
+            wound_follow_up_count=wound_follow_up_count,
+            pending_damage_actor_count=pending_damage_actor_count,
+            summary_line=summary_line,
+        )
+
+    @classmethod
+    def _collect_context_pack_open_threads(
+        cls,
+        *,
+        objective_lines: list[str],
+        prompt_lines: list[str],
+        combat_summary: KeeperContextPackCombatSummary,
+        knowledge_highlights: list[str],
+    ) -> list[str]:
+        candidates: list[str] = []
+        candidates.extend(f"目标：{item}" for item in objective_lines[:2])
+        candidates.extend(f"提示：{item}" for item in prompt_lines[:2])
+        if combat_summary.summary_line and (combat_summary.in_combat or combat_summary.wound_follow_up_count):
+            candidates.append(combat_summary.summary_line)
+        if knowledge_highlights:
+            candidates.append(f"资料方向：{knowledge_highlights[0]}")
+        open_threads: list[str] = []
+        for item in candidates:
+            excerpt = cls._context_pack_excerpt(item, limit=112)
+            if excerpt and excerpt not in open_threads:
+                open_threads.append(excerpt)
+            if len(open_threads) >= 4:
+                break
+        return open_threads
 
     def _resolve_checkpoint_namespace_session_id(
         self,

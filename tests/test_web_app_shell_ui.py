@@ -225,6 +225,7 @@ def test_web_app_keeper_assistant_block_defaults_to_disabled_without_breaking_wo
 
     assert response.status_code == 200
     html = response.text
+    assert "Keeper Context Pack" in html
     assert "AI-KP Narrative Scaffolding" in html
     assert "Keeper Assistant" in html
     assert "Local LLM 未启用" in html
@@ -253,6 +254,8 @@ def test_web_app_keeper_workspace_surfaces_pending_ops_and_legacy_handoffs(
     assert "控场摘要" in html
     assert "战斗与伤势" in html
     assert "规则与知识辅助" in html
+    assert "未解决事项 / 当前压力" in html
+    assert "最近 Keeper 备注" in html
     assert f'action="/app/sessions/{session_id}/keeper/lifecycle"' in html
     assert "只有进行中的会话才能开始或推进战斗顺序。" in html
     assert "KP：秦老板看到调查员翻出旧图纸时，应表现出短暂失态。" in html
@@ -419,10 +422,18 @@ def test_web_app_keeper_narrative_scaffolding_generates_non_authoritative_draft(
     request = fake_service.requests[0]
     assert request.workspace_key == "keeper_narrative_scaffolding"
     assert request.task_key == "scene_framing"
+    assert "context_pack" in request.context
+    assert request.context["context_pack"]["identity"]["current_scene"] == "旅店账房"
+    assert request.context["context_pack"]["prompt_lines"]
+    assert request.context["context_pack"]["open_threads"]
     assert request.context["session"]["current_scene"] == "旅店账房"
     assert request.context["active_prompts"]
     assert "runtime_hints" in request.context
     assert "knowledge_hints" in request.context["runtime_hints"]
+    serialized_pack = str(request.context["context_pack"])
+    assert "private_notes" not in serialized_pack
+    assert "secret_state_refs" not in serialized_pack
+    assert "participants" not in serialized_pack
     serialized_context = str(request.context)
     assert "private_notes" not in serialized_context
     assert "secret_state_refs" not in serialized_context
@@ -1014,6 +1025,8 @@ def test_web_app_recap_page_joins_timeline_and_review_shell(
     assert response.status_code == 200
     html = response.text
     assert "Recap / Review" in html
+    assert "Keeper Context Pack" in html
+    assert "当前局势摘要" in html
     assert "最近时间线" in html
     assert "Audit / Review" in html
     assert "Closeout 摘要" in html
@@ -1046,6 +1059,9 @@ def test_web_app_recap_assistant_generates_draft_without_mutating_state(
     assert len(fake_service.requests) == 1
     request = fake_service.requests[0]
     assert request.workspace_key == "session_recap"
+    assert "context_pack" in request.context
+    assert request.context["context_pack"]["identity"]["current_scene"] == "旅店账房"
     serialized_context = str(request.context)
     assert "private_notes" not in serialized_context
     assert "own_private_state" not in serialized_context
+    assert "participants" not in str(request.context["context_pack"])

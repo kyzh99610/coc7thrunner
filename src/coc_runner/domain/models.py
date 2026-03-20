@@ -759,6 +759,43 @@ class KeeperWorkflowState(BaseModel):
     summary: KeeperWorkflowSummary = Field(default_factory=KeeperWorkflowSummary)
 
 
+class KeeperContextPackIdentity(BaseModel):
+    session_id: str
+    scenario_title: str | None = None
+    playtest_group: str | None = None
+    status: SessionStatus = SessionStatus.PLANNED
+    current_scene: str | None = None
+    current_beat: str | None = None
+    current_beat_title: str | None = None
+
+
+class KeeperContextPackCombatSummary(BaseModel):
+    in_combat: bool = False
+    current_actor_id: str | None = None
+    current_actor_name: str | None = None
+    round_number: int | None = None
+    turn_order_count: int = 0
+    wound_follow_up_count: int = 0
+    pending_damage_actor_count: int = 0
+    summary_line: str | None = None
+
+
+class KeeperContextPack(BaseModel):
+    identity: KeeperContextPackIdentity
+    summary_lines: list[str] = Field(default_factory=list)
+    recent_event_lines: list[str] = Field(default_factory=list)
+    objective_lines: list[str] = Field(default_factory=list)
+    prompt_lines: list[str] = Field(default_factory=list)
+    combat: KeeperContextPackCombatSummary = Field(default_factory=KeeperContextPackCombatSummary)
+    recent_keeper_notes: list[str] = Field(default_factory=list)
+    knowledge_highlights: list[str] = Field(default_factory=list)
+    open_threads: list[str] = Field(default_factory=list)
+    narrative_work_note: str | None = None
+    disclaimer: str = Field(
+        default="这是 keeper-side 当前工作摘要 / context pack，只用于查看与 AI copilot 输入，不是 authoritative truth。"
+    )
+
+
 class ScenarioProgressState(BaseModel):
     current_beat: str | None = None
     unlocked_beats: list[str] = Field(default_factory=list)

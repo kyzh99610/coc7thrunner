@@ -14,6 +14,7 @@
 - 如果草稿更偏 NPC 反应 / 压力，draft_kind 用 npc_pressure_note_draft。
 - 若草稿适合带入当前 keeper narrative 工作备注，suggested_target 填 narrative_work_note。
 - source_context_label 用一句中文明确说明来源语境，例如“基于当前 keeper workspace：旅店账房 / 核对账房记录”。
+- 如果上下文包含 context_pack，优先把它视为当前 keeper-side 局势压缩层；不要把它说成 authoritative truth，也不要自行扩成全量历史。
 
 上下文 JSON：
 {{context_json}}

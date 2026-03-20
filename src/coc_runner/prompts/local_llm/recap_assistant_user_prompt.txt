@@ -8,6 +8,7 @@
 - 不要把 recap 草稿说成 authoritative 记录。
 - 不要新增未在上下文出现的情节或结论。
 - draft_text 若填写，应是一段可供 Keeper 继续编辑的 recap 草稿。
+- 如果上下文包含 context_pack，优先把它视为 keeper-side 当前工作摘要，不要把它写成新的 truth source。
 
 上下文 JSON：
 {{context_json}}
