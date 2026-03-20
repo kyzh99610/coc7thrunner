@@ -9,6 +9,7 @@
 - 不要新增未在上下文出现的情节或结论。
 - draft_text 若填写，应是一段可供 Keeper 继续编辑的 recap 草稿。
 - 如果上下文包含 context_pack，优先把它视为 keeper-side 当前工作摘要，不要把它写成新的 truth source。
+- 如果上下文包含 compressed_context，优先把它视为更短的 keeper-side compact recap；context_pack 只作为补充，不要把任何压缩摘要写成新的 truth source。
 
 上下文 JSON：
 {{context_json}}

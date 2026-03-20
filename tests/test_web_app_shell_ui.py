@@ -226,6 +226,8 @@ def test_web_app_keeper_assistant_block_defaults_to_disabled_without_breaking_wo
     assert response.status_code == 200
     html = response.text
     assert "Keeper Context Pack" in html
+    assert "Compact Recap / 压缩工作摘要" in html
+    assert "当前局势一句话" in html
     assert 'id="keeper-context-pack"' in html
     assert "AI-KP Narrative Scaffolding" in html
     assert "Keeper Assistant" in html
@@ -233,6 +235,34 @@ def test_web_app_keeper_assistant_block_defaults_to_disabled_without_breaking_wo
     assert "不会直接修改 authoritative state" in html
     assert 'action="/app/sessions/' in html
     assert 'name="narrative_note"' in html
+
+
+def test_keeper_compressed_context_builder_stays_short_and_secret_safe(
+    client: TestClient,
+) -> None:
+    session_id = _start_keeper_dashboard_session(client)
+    _advance_keeper_dashboard_session(client, session_id)
+    service = client.app.state.session_service
+    session, keeper_view, _, _ = service.get_keeper_workspace(session_id)
+    runtime_assistance = service.get_keeper_runtime_assistance(keeper_view=keeper_view)
+    context_pack = service.build_keeper_context_pack_from_workspace(
+        session=session,
+        keeper_view=keeper_view,
+        runtime_assistance=runtime_assistance,
+        narrative_work_note="先把账房里的旧账册、潮气和秦老板的反应压成一条开场说明。",
+    )
+    compressed_context = service.build_keeper_compressed_context_from_context_pack(context_pack)
+
+    serialized_pack = str(context_pack.model_dump(mode="json"))
+    serialized_compressed = str(compressed_context.model_dump(mode="json"))
+
+    assert compressed_context.situation_summary
+    assert compressed_context.immediate_pressures
+    assert compressed_context.next_focus
+    assert len(serialized_compressed) < len(serialized_pack)
+    assert "private_notes" not in serialized_compressed
+    assert "secret_state_refs" not in serialized_compressed
+    assert "participants" not in serialized_compressed
 
 
 def test_web_app_keeper_workspace_surfaces_pending_ops_and_legacy_handoffs(
@@ -430,7 +460,11 @@ def test_web_app_keeper_narrative_scaffolding_generates_non_authoritative_draft(
     assert request.workspace_key == "keeper_narrative_scaffolding"
     assert request.task_key == "scene_framing"
     assert "context_pack" in request.context
+    assert "compressed_context" in request.context
     assert request.context["context_pack"]["identity"]["current_scene"] == "旅店账房"
+    assert request.context["compressed_context"]["current_scene"] == "旅店账房"
+    assert request.context["compressed_context"]["situation_summary"]
+    assert request.context["compressed_context"]["next_focus"]
     assert request.context["context_pack"]["prompt_lines"]
     assert request.context["context_pack"]["open_threads"]
     assert request.context["session"]["current_scene"] == "旅店账房"
@@ -438,9 +472,14 @@ def test_web_app_keeper_narrative_scaffolding_generates_non_authoritative_draft(
     assert "runtime_hints" in request.context
     assert "knowledge_hints" in request.context["runtime_hints"]
     serialized_pack = str(request.context["context_pack"])
+    serialized_compressed = str(request.context["compressed_context"])
+    assert len(serialized_compressed) < len(serialized_pack)
     assert "private_notes" not in serialized_pack
     assert "secret_state_refs" not in serialized_pack
     assert "participants" not in serialized_pack
+    assert "private_notes" not in serialized_compressed
+    assert "secret_state_refs" not in serialized_compressed
+    assert "participants" not in serialized_compressed
     assert "private_notes" not in html
     assert "secret_state_refs" not in html
     serialized_context = str(request.context)
@@ -1035,7 +1074,9 @@ def test_web_app_recap_page_joins_timeline_and_review_shell(
     html = response.text
     assert "Recap / Review" in html
     assert "Keeper Context Pack" in html
+    assert "Compact Recap / 压缩工作摘要" in html
     assert 'id="keeper-context-pack"' in html
+    assert "当前局势一句话" in html
     assert "当前局势摘要" in html
     assert "最近时间线" in html
     assert "Audit / Review" in html
@@ -1076,10 +1117,20 @@ def test_web_app_recap_assistant_generates_draft_without_mutating_state(
     request = fake_service.requests[0]
     assert request.workspace_key == "session_recap"
     assert "context_pack" in request.context
+    assert "compressed_context" in request.context
     assert request.context["context_pack"]["identity"]["current_scene"] == "旅店账房"
+    assert request.context["compressed_context"]["current_scene"] == "旅店账房"
+    assert request.context["compressed_context"]["situation_summary"]
+    assert request.context["compressed_context"]["next_focus"]
     serialized_context = str(request.context)
+    serialized_pack = str(request.context["context_pack"])
+    serialized_compressed = str(request.context["compressed_context"])
+    assert len(serialized_compressed) < len(serialized_pack)
     assert "private_notes" not in serialized_context
     assert "own_private_state" not in serialized_context
     assert "participants" not in str(request.context["context_pack"])
+    assert "private_notes" not in serialized_compressed
+    assert "secret_state_refs" not in serialized_compressed
+    assert "participants" not in serialized_compressed
     assert "private_notes" not in html
     assert "secret_state_refs" not in html

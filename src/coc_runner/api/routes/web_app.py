@@ -42,6 +42,7 @@ from coc_runner.domain.models import (
     InvestigatorSanCheckRequest,
     InvestigatorSkillCheckRequest,
     KeeperWoundResolution,
+    KeeperContextPack,
     KeeperWoundResolutionRequest,
     ReviewDraftRequest,
     SessionStatus,
@@ -1062,6 +1063,7 @@ def _build_keeper_narrative_context(
     keeper_view: dict[str, Any],
     runtime_assistance: dict[str, Any],
     context_pack: dict[str, Any] | None = None,
+    compressed_context: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     workflow = keeper_view.get("keeper_workflow") or {}
     current_scene, beat_id, beat_title = _scene_and_beat(snapshot)
@@ -1130,6 +1132,8 @@ def _build_keeper_narrative_context(
     }
     if context_pack:
         context["context_pack"] = context_pack
+    if compressed_context:
+        context["compressed_context"] = compressed_context
     return context
 
 
@@ -1630,6 +1634,7 @@ def _build_recap_assistant_context(
     *,
     snapshot: dict[str, Any],
     context_pack: dict[str, Any] | None = None,
+    compressed_context: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     current_scene, beat_id, beat_title = _scene_and_beat(snapshot)
     context = {
@@ -1656,6 +1661,8 @@ def _build_recap_assistant_context(
     }
     if context_pack:
         context["context_pack"] = context_pack
+    if compressed_context:
+        context["compressed_context"] = compressed_context
     return context
 
 
@@ -1672,6 +1679,16 @@ def _build_keeper_context_pack_payload(
         keeper_view=keeper_view,
         narrative_work_note=narrative_note_value,
         runtime_assistance=runtime_assistance,
+    ).model_dump(mode="json")
+
+
+def _build_keeper_compressed_context_payload(
+    *,
+    service: SessionService,
+    context_pack: dict[str, Any],
+) -> dict[str, Any]:
+    return service.build_keeper_compressed_context_from_context_pack(
+        KeeperContextPack.model_validate(context_pack)
     ).model_dump(mode="json")
 
 
@@ -1726,6 +1743,71 @@ def _render_keeper_context_pack_block(
             if narrative_work_note
             else '<p class="meta-line">当前 narrative_work_note：未填写。</p>'
         }
+      </section>
+    """
+
+
+def _render_keeper_compressed_context_block(
+    *,
+    compressed_context: dict[str, Any],
+    title: str = "Compact Recap / 压缩工作摘要",
+    summary: str = "比 Keeper Context Pack 更短、更稳的 keeper-side compressed context，优先给 narrative scaffolding、recap assistant 和 future AI demo 复用；不是 authoritative truth。",
+) -> str:
+    immediate_pressures = list(compressed_context.get("immediate_pressures") or [])
+    next_focus = list(compressed_context.get("next_focus") or [])
+    prompt_focus = list(compressed_context.get("active_prompt_briefs") or [])
+    knowledge_direction = list(compressed_context.get("knowledge_direction") or [])
+    disclaimer = (
+        _normalize_form_text(compressed_context.get("disclaimer"))
+        or "这是非权威的 keeper-side 压缩工作摘要。"
+    )
+    situation_summary = _normalize_form_text(compressed_context.get("situation_summary")) or "当前局势暂无额外压缩摘要。"
+    combat_summary = _normalize_form_text(compressed_context.get("combat_summary"))
+    narrative_work_summary = _normalize_form_text(compressed_context.get("narrative_work_summary"))
+    current_scene = _normalize_form_text(compressed_context.get("current_scene")) or "未知场景"
+    current_beat_title = _normalize_form_text(compressed_context.get("current_beat_title")) or "未命名节点"
+    pressure_html = "".join(f"<li>{escape(str(line))}</li>" for line in immediate_pressures[:3])
+    focus_html = "".join(f"<li>{escape(str(line))}</li>" for line in next_focus[:3])
+    prompt_html = "".join(f"<li>{escape(str(line))}</li>" for line in prompt_focus[:2])
+    knowledge_html = "".join(f"<li>{escape(str(line))}</li>" for line in knowledge_direction[:2])
+    return f"""
+      <section class="surface">
+        <div class="surface-header">
+          <div>
+            <h2>{escape(title)}</h2>
+            <p>{escape(summary)}</p>
+          </div>
+          <span class="tag">compressed</span>
+        </div>
+        <p class="helper">{escape(disclaimer)}</p>
+        <ul class="meta-list">
+          <li>当前场景：{escape(current_scene)}</li>
+          <li>当前 beat：{escape(current_beat_title)}</li>
+          <li>当前局势一句话：{escape(situation_summary)}</li>
+        </ul>
+        <div class="divider"></div>
+        <p class="meta-line">当前压力 / 未解决事项</p>
+        {f'<ul class="meta-list">{pressure_html}</ul>' if pressure_html else '<p class="empty">当前没有额外即时压力摘要。</p>'}
+        <p class="meta-line">当前最该推进</p>
+        {f'<ul class="meta-list">{focus_html}</ul>' if focus_html else '<p class="empty">当前没有额外 next focus。</p>'}
+        <p class="meta-line">当前 prompts</p>
+        {f'<ul class="meta-list">{prompt_html}</ul>' if prompt_html else '<p class="empty">当前没有额外 prompt 摘要。</p>'}
+        {
+            (
+                f'<p class="meta-line">战斗 / 伤势摘要：{escape(combat_summary)}</p>'
+            )
+            if combat_summary
+            else ""
+        }
+        {
+            (
+                f'<p class="meta-line">当前 narrative 工作摘要：{escape(narrative_work_summary)}</p>'
+            )
+            if narrative_work_summary
+            else ""
+        }
+        <p class="meta-line">资料方向</p>
+        {f'<ul class="meta-list">{knowledge_html}</ul>' if knowledge_html else '<p class="empty">当前没有额外 knowledge direction。</p>'}
       </section>
     """
 
@@ -3091,6 +3173,7 @@ def _render_keeper_workspace_page(
     detail: dict[str, Any] | str | None = None,
     action_result: dict[str, Any] | None = None,
     context_pack: dict[str, Any] | None = None,
+    compressed_context: dict[str, Any] | None = None,
     narrative_note_value: str = "",
     narrative_completion_notice: str | None = None,
     narrative_result: LocalLLMAssistantResult | None = None,
@@ -3331,6 +3414,11 @@ def _render_keeper_workspace_page(
             </section>
           </div>
           <div class="card-list">
+            {
+                _render_keeper_compressed_context_block(compressed_context=compressed_context)
+                if compressed_context is not None
+                else ""
+            }
             {
                 _render_keeper_context_pack_block(context_pack=context_pack)
                 if context_pack is not None
@@ -4367,6 +4455,7 @@ def _render_recap_page(
     session_id: str,
     snapshot: dict[str, Any],
     context_pack: dict[str, Any] | None = None,
+    compressed_context: dict[str, Any] | None = None,
     assistant_result: LocalLLMAssistantResult | None = None,
     selected_assistant_task: str | None = None,
 ) -> HTMLResponse:
@@ -4441,6 +4530,15 @@ def _render_recap_page(
           </div>
           <div class="card-list">
             {
+                _render_keeper_compressed_context_block(
+                    compressed_context=compressed_context,
+                    title="Compact Recap / 压缩工作摘要",
+                    summary="把 keeper-side compact recap 固定挂在 recap 页，便于 closeout 回看，并优先供 recap assistant 与 future AI demo 复用。",
+                )
+                if compressed_context is not None
+                else ""
+            }
+            {
                 _render_keeper_context_pack_block(
                     context_pack=context_pack,
                     title="Keeper Context Pack",
@@ -4499,6 +4597,7 @@ def _render_app_keeper_from_service(
     detail: dict[str, Any] | str | None = None,
     action_result: dict[str, Any] | None = None,
     context_pack: dict[str, Any] | None = None,
+    compressed_context: dict[str, Any] | None = None,
     narrative_note_value: str = "",
     narrative_completion_notice: str | None = None,
     narrative_result: LocalLLMAssistantResult | None = None,
@@ -4545,6 +4644,11 @@ def _render_app_keeper_from_service(
             runtime_assistance=runtime_assistance,
             narrative_note_value=narrative_note_value,
         )
+    if compressed_context is None:
+        compressed_context = _build_keeper_compressed_context_payload(
+            service=service,
+            context_pack=context_pack,
+        )
     response = _render_keeper_workspace_page(
         session_id=session_id,
         snapshot=session.model_dump(mode="json"),
@@ -4557,6 +4661,7 @@ def _render_app_keeper_from_service(
         detail=detail,
         action_result=action_result,
         context_pack=context_pack,
+        compressed_context=compressed_context,
         narrative_note_value=narrative_note_value,
         narrative_completion_notice=narrative_completion_notice,
         narrative_result=narrative_result,
@@ -4653,6 +4758,10 @@ def _render_app_recap_from_service(
         session=session,
         keeper_view=keeper_view,
     ).model_dump(mode="json")
+    compressed_context = _build_keeper_compressed_context_payload(
+        service=service,
+        context_pack=context_pack,
+    )
     if assistant_result is None and local_llm_service is not None and not local_llm_service.enabled:
         assistant_result = _disabled_assistant_result(
             workspace_key="session_recap",
@@ -4663,6 +4772,7 @@ def _render_app_recap_from_service(
         session_id=session_id,
         snapshot=snapshot,
         context_pack=context_pack,
+        compressed_context=compressed_context,
         assistant_result=assistant_result,
         selected_assistant_task=selected_assistant_task,
     )
@@ -4909,6 +5019,10 @@ async def web_app_keeper_narrative_assistant(
         runtime_assistance=runtime_assistance,
         narrative_note_value=narrative_note_value,
     )
+    compressed_context = _build_keeper_compressed_context_payload(
+        service=service,
+        context_pack=context_pack,
+    )
     narrative_scope = _keeper_narrative_scope_metadata(
         session_id=session_id,
         snapshot=snapshot,
@@ -4923,6 +5037,7 @@ async def web_app_keeper_narrative_assistant(
             keeper_view=keeper_view.model_dump(mode="json"),
             runtime_assistance=runtime_assistance,
             context_pack=context_pack,
+            compressed_context=compressed_context,
         ),
     )
     return _render_keeper_workspace_page(
@@ -4934,6 +5049,7 @@ async def web_app_keeper_narrative_assistant(
         runtime_assistance=runtime_assistance,
         san_aftermath_suggestions=san_aftermath_suggestions,
         context_pack=context_pack,
+        compressed_context=compressed_context,
         narrative_note_value=narrative_note_value,
         narrative_result=narrative_result,
         narrative_scope=narrative_scope,
@@ -5777,17 +5893,26 @@ async def web_app_recap_assistant(
         session=session,
         keeper_view=keeper_view,
     ).model_dump(mode="json")
+    compressed_context = _build_keeper_compressed_context_payload(
+        service=service,
+        context_pack=context_pack,
+    )
     assistant_result = _generate_local_llm_assistant(
         local_llm_service=local_llm_service,
         workspace_key="session_recap",
         task_key=selected_task,
         task_label=task_label,
-        context=_build_recap_assistant_context(snapshot=snapshot, context_pack=context_pack),
+        context=_build_recap_assistant_context(
+            snapshot=snapshot,
+            context_pack=context_pack,
+            compressed_context=compressed_context,
+        ),
     )
     return _render_recap_page(
         session_id=session_id,
         snapshot=snapshot,
         context_pack=context_pack,
+        compressed_context=compressed_context,
         assistant_result=assistant_result,
         selected_assistant_task=selected_task,
     )

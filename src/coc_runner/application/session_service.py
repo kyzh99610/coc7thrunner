@@ -86,6 +86,7 @@ from coc_runner.domain.models import (
     KeeperPromptPriority,
     KeeperWorkflowState,
     KeeperContextPack,
+    KeeperCompressedContext,
     KeeperContextPackCombatSummary,
     KeeperContextPackIdentity,
     KeeperPromptStatus,
@@ -802,6 +803,114 @@ class SessionService:
             knowledge_highlights=knowledge_highlights,
             open_threads=open_threads,
             narrative_work_note=normalized_narrative_note,
+        )
+
+    def build_keeper_compressed_context(
+        self,
+        session_id: str,
+        *,
+        narrative_work_note: str | None = None,
+        language_preference: LanguagePreference | None = None,
+    ) -> KeeperCompressedContext:
+        context_pack = self.build_keeper_context_pack(
+            session_id,
+            narrative_work_note=narrative_work_note,
+            language_preference=language_preference,
+        )
+        return self.build_keeper_compressed_context_from_context_pack(context_pack)
+
+    def build_keeper_compressed_context_from_context_pack(
+        self,
+        context_pack: KeeperContextPack,
+    ) -> KeeperCompressedContext:
+        identity = context_pack.identity
+        scene_bits = [
+            bit
+            for bit in [
+                self._context_pack_excerpt(identity.current_scene, limit=48),
+                self._context_pack_excerpt(identity.current_beat_title, limit=48),
+            ]
+            if bit
+        ]
+        summary_seed = next(
+            (
+                item
+                for item in [
+                    *context_pack.summary_lines,
+                    *context_pack.recent_event_lines,
+                    context_pack.combat.summary_line,
+                    *context_pack.open_threads,
+                ]
+                if item
+            ),
+            None,
+        )
+        if summary_seed and scene_bits:
+            situation_summary = self._context_pack_excerpt(
+                f"{' / '.join(scene_bits)}：{summary_seed}",
+                limit=180,
+            )
+        else:
+            situation_summary = self._context_pack_excerpt(
+                summary_seed or "当前局势暂无额外压缩摘要。",
+                limit=180,
+            )
+        immediate_pressures = self._compact_context_lines(
+            context_pack.open_threads,
+            item_limit=3,
+            char_limit=96,
+        )
+        next_focus = self._compact_context_lines(
+            [
+                *context_pack.objective_lines[:2],
+                *context_pack.prompt_lines[:1],
+            ],
+            item_limit=3,
+            char_limit=96,
+        )
+        if not next_focus:
+            next_focus = self._compact_context_lines(
+                context_pack.knowledge_highlights,
+                item_limit=2,
+                char_limit=96,
+            )
+        active_prompt_briefs = self._compact_context_lines(
+            context_pack.prompt_lines,
+            item_limit=2,
+            char_limit=88,
+        )
+        knowledge_direction = self._compact_context_lines(
+            context_pack.knowledge_highlights,
+            item_limit=2,
+            char_limit=88,
+        )
+        combat_summary = None
+        if (
+            context_pack.combat.in_combat
+            or context_pack.combat.wound_follow_up_count
+            or context_pack.combat.pending_damage_actor_count
+        ):
+            combat_summary = self._context_pack_excerpt(
+                context_pack.combat.summary_line,
+                limit=120,
+            )
+        narrative_work_summary = self._context_pack_excerpt(
+            context_pack.narrative_work_note,
+            limit=120,
+        )
+        return KeeperCompressedContext(
+            session_id=identity.session_id,
+            scenario_title=identity.scenario_title,
+            status=identity.status,
+            current_scene=identity.current_scene,
+            current_beat_title=identity.current_beat_title,
+            situation_summary=situation_summary or "当前局势暂无额外压缩摘要。",
+            immediate_pressures=immediate_pressures,
+            next_focus=next_focus,
+            active_prompt_briefs=active_prompt_briefs,
+            combat_summary=combat_summary,
+            narrative_work_summary=narrative_work_summary,
+            knowledge_direction=knowledge_direction,
         )
 
     def upsert_character_suggestion_hook(
@@ -1703,6 +1812,21 @@ class SessionService:
         if len(normalized) <= limit:
             return normalized
         return normalized[: limit - 1].rstrip() + "…"
+
+    @classmethod
+    def _compact_context_lines(
+        cls,
+        items: list[str] | tuple[str, ...],
+        *,
+        item_limit: int = 3,
+        char_limit: int = 96,
+    ) -> list[str]:
+        compressed: list[str] = []
+        for item in items[:item_limit]:
+            excerpt = cls._context_pack_excerpt(item, limit=char_limit)
+            if excerpt and excerpt not in compressed:
+                compressed.append(excerpt)
+        return compressed
 
     @classmethod
     def _format_context_event_line(

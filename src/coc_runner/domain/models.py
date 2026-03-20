@@ -796,6 +796,24 @@ class KeeperContextPack(BaseModel):
     )
 
 
+class KeeperCompressedContext(BaseModel):
+    session_id: str
+    scenario_title: str | None = None
+    status: SessionStatus = SessionStatus.PLANNED
+    current_scene: str | None = None
+    current_beat_title: str | None = None
+    situation_summary: str = Field(min_length=1, max_length=220)
+    immediate_pressures: list[str] = Field(default_factory=list)
+    next_focus: list[str] = Field(default_factory=list)
+    active_prompt_briefs: list[str] = Field(default_factory=list)
+    combat_summary: str | None = Field(default=None, max_length=160)
+    narrative_work_summary: str | None = Field(default=None, max_length=160)
+    knowledge_direction: list[str] = Field(default_factory=list)
+    disclaimer: str = Field(
+        default="这是 keeper-side 的 compressed context / compact recap，只用于查看与 AI 输入，不是 authoritative truth。"
+    )
+
+
 class ScenarioProgressState(BaseModel):
     current_beat: str | None = None
     unlocked_beats: list[str] = Field(default_factory=list)
