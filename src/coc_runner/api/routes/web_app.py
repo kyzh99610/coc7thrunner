@@ -1729,6 +1729,33 @@ def _render_keeper_context_pack_block(
     """
 
 
+def _render_context_pack_source_echo(
+    *,
+    result: LocalLLMAssistantResult | None,
+    context_pack: dict[str, Any] | None,
+    suggestion_label: str,
+) -> str:
+    if result is None or result.status != "success" or result.assistant is None or context_pack is None:
+        return ""
+    coverage_bits = ["局势摘要", "未解决事项", "当前压力 / 线索方向"]
+    if _normalize_form_text(context_pack.get("narrative_work_note")):
+        coverage_bits.append("当前 narrative_work_note")
+    coverage_text = "、".join(coverage_bits[:4])
+    return f"""
+      <article class="assistant-source-echo">
+        <div class="list-head">
+          <h3>当前输入来源</h3>
+          <span class="tag">context pack</span>
+        </div>
+        <ul class="meta-list">
+          <li>本次 {escape(suggestion_label)}基于当前 Keeper Context Pack。</li>
+          <li>摘要范围：{escape(coverage_text)}。</li>
+          <li>说明：这是 keeper-side 工作摘要输入，不是已执行结果，也不是 authoritative truth。</li>
+        </ul>
+      </article>
+    """
+
+
 def _generate_local_llm_assistant(
     *,
     local_llm_service: LocalLLMService,
@@ -2796,6 +2823,7 @@ def _render_keeper_narrative_scaffolding(
     *,
     session_id: str,
     snapshot: dict[str, Any],
+    context_pack: dict[str, Any] | None = None,
     narrative_note_value: str = "",
     narrative_completion_notice: str | None = None,
     narrative_result: LocalLLMAssistantResult | None = None,
@@ -2834,9 +2862,16 @@ def _render_keeper_narrative_scaffolding(
           selected_task=selected_narrative_task,
           result=narrative_result,
           hidden_fields={"narrative_note": narrative_note_value},
-          extra_output_html=_render_assistant_draft_source(
-              assistant_scope=narrative_scope,
-              assistant_adoption=narrative_adoption,
+          extra_output_html=(
+              _render_context_pack_source_echo(
+                  result=narrative_result,
+                  context_pack=context_pack,
+                  suggestion_label="剧情支架建议",
+              )
+              + _render_assistant_draft_source(
+                  assistant_scope=narrative_scope,
+                  assistant_adoption=narrative_adoption,
+              )
           ),
       )}
       <section class="surface">
@@ -3300,6 +3335,7 @@ def _render_keeper_workspace_page(
             {_render_keeper_narrative_scaffolding(
                 session_id=session_id,
                 snapshot=snapshot,
+                context_pack=context_pack,
                 narrative_note_value=narrative_note_value,
                 narrative_completion_notice=narrative_completion_notice,
                 narrative_result=narrative_result,
@@ -4416,6 +4452,11 @@ def _render_recap_page(
                 tasks=RECAP_ASSISTANT_TASKS,
                 selected_task=selected_assistant_task,
                 result=assistant_result,
+                extra_output_html=_render_context_pack_source_echo(
+                    result=assistant_result,
+                    context_pack=context_pack,
+                    suggestion_label="recap 建议",
+                ),
             )}
             <section class="surface">
               <div class="surface-header">

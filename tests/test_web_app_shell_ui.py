@@ -406,6 +406,10 @@ def test_web_app_keeper_narrative_scaffolding_generates_non_authoritative_draft(
     assert "AI-KP Narrative Scaffolding" in html
     assert "下一幕开场建议 结果" in html
     assert "这是非权威辅助输出。" in html
+    assert "当前输入来源" in html
+    assert "本次 剧情支架建议基于当前 Keeper Context Pack。" in html
+    assert "摘要范围：局势摘要、未解决事项、当前压力 / 线索方向、当前 narrative_work_note。" in html
+    assert "这是 keeper-side 工作摘要输入，不是已执行结果，也不是 authoritative truth。" in html
     assert "草稿类型：场景开场草稿" in html
     assert "推荐带入：剧情工作备注" in html
     assert "当前对象：当前会话" in html
@@ -434,6 +438,8 @@ def test_web_app_keeper_narrative_scaffolding_generates_non_authoritative_draft(
     assert "private_notes" not in serialized_pack
     assert "secret_state_refs" not in serialized_pack
     assert "participants" not in serialized_pack
+    assert "private_notes" not in html
+    assert "secret_state_refs" not in html
     serialized_context = str(request.context)
     assert "private_notes" not in serialized_context
     assert "secret_state_refs" not in serialized_context
@@ -1054,6 +1060,10 @@ def test_web_app_recap_assistant_generates_draft_without_mutating_state(
     assert "Recap Assistant" in html
     assert "本局 recap 草稿 结果" in html
     assert "这是非权威辅助输出。" in html
+    assert "当前输入来源" in html
+    assert "本次 recap 建议基于当前 Keeper Context Pack。" in html
+    assert "摘要范围：局势摘要、未解决事项、当前压力 / 线索方向。" in html
+    assert "这是 keeper-side 工作摘要输入，不是已执行结果，也不是 authoritative truth。" in html
     after_snapshot = _get_snapshot(client, session_id)
     assert before_snapshot == after_snapshot
     assert len(fake_service.requests) == 1
@@ -1065,3 +1075,5 @@ def test_web_app_recap_assistant_generates_draft_without_mutating_state(
     assert "private_notes" not in serialized_context
     assert "own_private_state" not in serialized_context
     assert "participants" not in str(request.context["context_pack"])
+    assert "private_notes" not in html
+    assert "secret_state_refs" not in html
