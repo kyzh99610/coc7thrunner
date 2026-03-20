@@ -3719,6 +3719,7 @@ def _render_knowledge_detail_page(
     notice: str | None = None,
     detail: dict[str, Any] | str | None = None,
     working_note_value: str = "",
+    working_note_completion_notice: str | None = None,
     assistant_result: LocalLLMAssistantResult | None = None,
     assistant_scope: dict[str, str] | None = None,
     selected_assistant_task: str | None = None,
@@ -3896,6 +3897,13 @@ def _render_knowledge_detail_page(
                   }
                   <button class="button-button secondary" type="submit">确认当前页工作备注</button>
                 </form>
+                {
+                    (
+                        f'<p class="helper assistant-completion-status">{escape(working_note_completion_notice)}</p>'
+                    )
+                    if working_note_completion_notice
+                    else ""
+                }
               </section>
               <div class="divider"></div>
               <div class="toolbar">
@@ -4090,6 +4098,7 @@ def _render_app_knowledge_detail_from_service(
     notice: str | None = None,
     detail: dict[str, Any] | str | None = None,
     working_note_value: str = "",
+    working_note_completion_notice: str | None = None,
     assistant_result: LocalLLMAssistantResult | None = None,
     assistant_scope: dict[str, str] | None = None,
     selected_assistant_task: str | None = None,
@@ -4125,6 +4134,7 @@ def _render_app_knowledge_detail_from_service(
         notice=notice,
         detail=detail,
         working_note_value=working_note_value,
+        working_note_completion_notice=working_note_completion_notice,
         assistant_result=assistant_result,
         assistant_scope=assistant_scope,
         selected_assistant_task=selected_assistant_task,
@@ -5095,6 +5105,11 @@ async def web_app_knowledge_working_note(
         if working_note_value
         else "当前页工作备注已清空；不会写入 knowledge 主状态。"
     )
+    completion_notice = (
+        "当前页工作备注已人工提交，本轮 assistant 半手动链已结束。"
+        if working_note_value
+        else "当前页工作备注已清空，当前页已恢复默认状态。"
+    )
     return _render_app_knowledge_detail_from_service(
         knowledge_service=knowledge_service,
         source_id=source_id,
@@ -5102,6 +5117,7 @@ async def web_app_knowledge_working_note(
         session_id=session_id,
         notice=notice,
         working_note_value=working_note_value,
+        working_note_completion_notice=completion_notice,
     )
 
 

@@ -890,10 +890,13 @@ def test_web_app_knowledge_working_note_submit_stays_non_authoritative(
     html = response.text
     assert "当前页工作备注已人工确认" in html
     assert "不会写入 knowledge 主状态" in html
+    assert "当前页工作备注已人工提交，本轮 assistant 半手动链已结束。" in html
     assert "假说：204 房的住客登记和地窖搬运时间存在对应关系。" in html
     assert 'name="working_note"' in html
     assert "当前可采纳草稿" not in html
-    assert "带入当前知识工作备注框" not in html
+    assert "带入当前页工作备注框" not in html
+    assert "当前尚未带入。若采纳，将带入当前页工作备注框，之后仍需人工编辑并提交。" not in html
+    assert "当前仍待人工编辑并提交。" not in html
     after_source = client.app.state.knowledge_service.get_source("note-source").model_dump(
         mode="json"
     )
