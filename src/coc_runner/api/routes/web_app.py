@@ -191,6 +191,21 @@ EXPERIMENTAL_ONE_SHOT_ENDING_REASON_LABELS: dict[str, str] = {
     "visible_secret_breach": "visible-side 输出触碰 keeper-only 线索标题，当前 run 中止。",
     "turn_limit_reached": "达到当前受控 one-shot demo run 的最大轮数上限。",
 }
+EXPERIMENTAL_PRESET_ENDING_JUDGMENT_LABELS: dict[str, str] = {
+    "decisive_success": "明确成功",
+    "partial_success": "部分成功",
+    "stalled_or_inconclusive": "停滞 / 未决",
+    "collapse_or_failure": "崩坏 / 失败",
+    "aborted": "中止",
+}
+
+
+@dataclass(slots=True)
+class ExperimentalScenarioPresetEnding:
+    preset_id: str
+    judgment: str
+    reason: str
+    recap: str
 
 
 @dataclass(slots=True)
@@ -222,6 +237,7 @@ class ExperimentalOneShotRunResult:
     investigator_turn_bridge: dict[str, Any] | None
     keeper_draft_applied: bool
     visible_draft_applied: bool
+    scenario_preset_ending: ExperimentalScenarioPresetEnding | None = None
     error_message: str = ""
     secret_breach_term: str = ""
 
@@ -2577,6 +2593,208 @@ def _run_experimental_one_shot_demo(
     )
 
 
+def _build_experimental_one_shot_transcript_text(
+    *,
+    run_result: ExperimentalOneShotRunResult,
+) -> str:
+    transcript_parts: list[str] = []
+    for record in run_result.turn_records:
+        transcript_parts.extend(
+            [
+                _normalize_form_text(record.kp_summary),
+                _normalize_form_text(record.investigator_summary),
+                _normalize_form_text(record.keeper_continuity),
+                _normalize_form_text(record.visible_continuity),
+                _normalize_form_text(record.narrative_work_note),
+            ]
+        )
+    transcript_parts.extend(
+        [
+            _normalize_form_text(run_result.narrative_work_note_value),
+            _normalize_form_text(run_result.keeper_turn_note_value),
+            _normalize_form_text(run_result.visible_turn_note_value),
+        ]
+    )
+    return "\n".join(part for part in transcript_parts if part)
+
+
+def _experimental_one_shot_contains_any_cue(
+    text: str,
+    *,
+    cues: tuple[str, ...],
+) -> bool:
+    return any(cue in text for cue in cues if cue)
+
+
+def _experimental_scenario_preset_label(preset_id: str) -> str:
+    if preset_id == "scenario.whispering_guesthouse":
+        return "雾港旅店的低语"
+    return preset_id
+
+
+def _judge_generic_experimental_one_shot_scenario_preset_ending(
+    *,
+    run_result: ExperimentalOneShotRunResult,
+) -> ExperimentalScenarioPresetEnding:
+    if run_result.ending_status == "aborted":
+        return ExperimentalScenarioPresetEnding(
+            preset_id="generic.experimental_one_shot",
+            judgment="aborted",
+            reason="当前受控 demo run 被中止，只有 run-local transcript 可供回看，不能继续解释成场景结局。",
+            recap="这次 demo 在形成稳定收尾前就已中止；当前结果只是一段 non-authoritative 的实验记录。",
+        )
+    if run_result.ending_status == "failure":
+        judgment = (
+            "stalled_or_inconclusive"
+            if run_result.ending_reason == "stagnation_threshold"
+            else "collapse_or_failure"
+        )
+        reason = (
+            "当前 demo run 连续空转，没有形成新的可解释推进，因此按停滞 / 未决处理。"
+            if judgment == "stalled_or_inconclusive"
+            else "当前 demo run 没能形成稳定推进或 continuity bridge，因此按崩坏 / 失败处理。"
+        )
+        recap = (
+            "这次 demo 没有跑出足够清晰的收尾，只留下当前页 transcript 作为非权威实验观察。"
+        )
+        return ExperimentalScenarioPresetEnding(
+            preset_id="generic.experimental_one_shot",
+            judgment=judgment,
+            reason=reason,
+            recap=recap,
+        )
+    if run_result.ending_status == "max_turns":
+        return ExperimentalScenarioPresetEnding(
+            preset_id="generic.experimental_one_shot",
+            judgment="stalled_or_inconclusive",
+            reason="当前 demo run 到达轮数上限，只能按未决收尾解释，不能把它视为已完成的场景结局。",
+            recap="这次 demo 在达到最大轮数后收束；保留下来的 transcript 只说明 run 停在了哪里。",
+        )
+    return ExperimentalScenarioPresetEnding(
+        preset_id="generic.experimental_one_shot",
+        judgment="partial_success",
+        reason="当前 demo run 形成了可读 mini-arc，但缺少更具体的 preset 结局依据，因此只按部分成功解释。",
+        recap="这次 demo 跑出了基本完整的 mini-arc，但当前结果仍只是 non-authoritative 的 demo ending。",
+    )
+
+
+def _judge_whispering_guesthouse_experimental_one_shot_ending(
+    *,
+    run_result: ExperimentalOneShotRunResult,
+) -> ExperimentalScenarioPresetEnding:
+    transcript_text = _build_experimental_one_shot_transcript_text(run_result=run_result)
+    decisive_cues = (
+        "地窖门前异味",
+        "封死地窖门",
+        "地窖入口",
+        "地窖门",
+        "门槛",
+        "异味",
+    )
+    progress_cues = (
+        "204 房",
+        "204房",
+        "账册",
+        "缺页",
+        "登记",
+        "二楼脚步声",
+        "二楼",
+    )
+    has_decisive_cue = _experimental_one_shot_contains_any_cue(
+        transcript_text,
+        cues=decisive_cues,
+    )
+    has_progress_cue = _experimental_one_shot_contains_any_cue(
+        transcript_text,
+        cues=progress_cues,
+    )
+    if run_result.ending_status == "aborted":
+        if run_result.ending_reason == "visible_secret_breach":
+            reason = (
+                "当前 demo run 因公开侧触碰 keeper-only 禁区而被保护性中止，不能继续把这次输出解释成场景结局。"
+            )
+            recap = (
+                "这次雾港旅店 demo 在形成稳定收尾前就触发了 secret boundary；当前 transcript 只保留为实验记录。"
+            )
+        else:
+            reason = (
+                "当前 demo run 没有拿到可用实验输出，未能形成足够的调查推进，因此只能按中止处理。"
+            )
+            recap = (
+                "这次雾港旅店 demo 在形成稳定调查弧线前就已中止，没有得到可解释的场景收尾。"
+            )
+        return ExperimentalScenarioPresetEnding(
+            preset_id="scenario.whispering_guesthouse",
+            judgment="aborted",
+            reason=reason,
+            recap=recap,
+        )
+    if run_result.ending_status == "failure":
+        if run_result.ending_reason == "stagnation_threshold":
+            return ExperimentalScenarioPresetEnding(
+                preset_id="scenario.whispering_guesthouse",
+                judgment="stalled_or_inconclusive",
+                reason="调查一直围绕账房记录、缺页与老板回避打转，没有把压力继续推进到更明确的异常入口，因此按停滞 / 未决收尾。",
+                recap="这次雾港旅店 demo 反复停在账册缺页与老板回避周围，没有真正把收尾推进到地窖入口层级。",
+            )
+        return ExperimentalScenarioPresetEnding(
+            preset_id="scenario.whispering_guesthouse",
+            judgment="collapse_or_failure",
+            reason="当前 demo run 没能维持可解释的 continuity bridge，preset 下视为这次调查弧线已经崩坏。",
+            recap="这次雾港旅店 demo 没能维持住调查推进，最后只留下一个崩坏 / 失败的实验收尾。",
+        )
+    if run_result.ending_status == "max_turns":
+        if has_decisive_cue or has_progress_cue:
+            return ExperimentalScenarioPresetEnding(
+                preset_id="scenario.whispering_guesthouse",
+                judgment="partial_success",
+                reason="调查已经把旅店疑点推进到账房记录、204 房或更深一层的异常，但在轮数上限前没有完成更明确的收束，因此按部分成功解释。",
+                recap="这次雾港旅店 demo 已经把疑点从账房推进到旅店异常链上，但仍在真正收尾前被轮数上限截住。",
+            )
+        return ExperimentalScenarioPresetEnding(
+            preset_id="scenario.whispering_guesthouse",
+            judgment="stalled_or_inconclusive",
+            reason="当前 demo run 达到轮数上限时仍没有形成足够的调查推进，因此只能按未决收尾解释。",
+            recap="这次雾港旅店 demo 在达到最大轮数后停下，留下的是未决而非完成的场景收尾。",
+        )
+    if has_decisive_cue:
+        return ExperimentalScenarioPresetEnding(
+            preset_id="scenario.whispering_guesthouse",
+            judgment="decisive_success",
+            reason="run 已从账房记录推进到地窖入口级别的异常，并保持连续 continuity，当前 preset 下可视为一次明确成功的 demo 收尾。",
+            recap="这次雾港旅店 demo 最终从账房缺页和 204 房异常一路推进到地窖门前异味，形成了一个足以指向封死地窖入口的收尾。",
+        )
+    if has_progress_cue:
+        return ExperimentalScenarioPresetEnding(
+            preset_id="scenario.whispering_guesthouse",
+            judgment="partial_success",
+            reason="run 虽形成了连续 mini-arc，但主要停留在账房记录、204 房与旅店动静这一层，因此按部分成功解释。",
+            recap="这次雾港旅店 demo 已把调查推进到账房记录与旅店异常，但还没有真正触到更深一层的地窖入口收尾。",
+        )
+    return ExperimentalScenarioPresetEnding(
+        preset_id="scenario.whispering_guesthouse",
+        judgment="stalled_or_inconclusive",
+        reason="当前 demo run 虽已结束，但 transcript 中没有足够的 preset 进展锚点，只能按未决解释。",
+        recap="这次雾港旅店 demo 虽然跑完了，但没有形成足够清晰的场景收尾锚点。",
+    )
+
+
+def _judge_experimental_one_shot_scenario_preset_ending(
+    *,
+    snapshot: Mapping[str, Any],
+    run_result: ExperimentalOneShotRunResult,
+) -> ExperimentalScenarioPresetEnding:
+    scenario = snapshot.get("scenario") or {}
+    scenario_id = _normalize_form_text(scenario.get("scenario_id"))
+    if scenario_id == "scenario.whispering_guesthouse":
+        return _judge_whispering_guesthouse_experimental_one_shot_ending(
+            run_result=run_result,
+        )
+    return _judge_generic_experimental_one_shot_scenario_preset_ending(
+        run_result=run_result,
+    )
+
+
 def _assistant_result_hidden_json(
     result: LocalLLMAssistantResult | None,
 ) -> str:
@@ -3231,6 +3449,16 @@ def _build_experimental_one_shot_run_summary_lines(
         f"结束状态：{status_label}。",
         f"结束原因：{reason_label}",
     ]
+    if run_result.scenario_preset_ending is not None:
+        judgment_label = EXPERIMENTAL_PRESET_ENDING_JUDGMENT_LABELS.get(
+            run_result.scenario_preset_ending.judgment,
+            run_result.scenario_preset_ending.judgment,
+        )
+        preset_label = _experimental_scenario_preset_label(
+            run_result.scenario_preset_ending.preset_id
+        )
+        lines.append(f"场景 preset：{preset_label}（{run_result.scenario_preset_ending.preset_id}）")
+        lines.append(f"场景结局判定：{judgment_label}。")
     if run_result.error_message:
         lines.append(f"错误摘要：{run_result.error_message}")
     if run_result.secret_breach_term:
@@ -3261,6 +3489,30 @@ def _render_experimental_one_shot_run_panel(
         run_result.ending_status,
         run_result.ending_status,
     )
+    scenario_preset_html = ""
+    if run_result.scenario_preset_ending is not None:
+        judgment_label = EXPERIMENTAL_PRESET_ENDING_JUDGMENT_LABELS.get(
+            run_result.scenario_preset_ending.judgment,
+            run_result.scenario_preset_ending.judgment,
+        )
+        preset_label = _experimental_scenario_preset_label(
+            run_result.scenario_preset_ending.preset_id
+        )
+        scenario_preset_html = f"""
+        <article class="assistant-source-echo">
+          <div class="list-head">
+            <h3>Scenario Preset Ending Judge</h3>
+            <span class="tag warn">{escape(judgment_label)}</span>
+          </div>
+          <ul class="meta-list">
+            <li>preset：{escape(preset_label)}（{escape(run_result.scenario_preset_ending.preset_id)}）</li>
+            <li>ending judgment：{escape(judgment_label)}</li>
+            <li>ending reason：{escape(run_result.scenario_preset_ending.reason)}</li>
+            <li>ending recap：{escape(run_result.scenario_preset_ending.recap)}</li>
+          </ul>
+          <p class="helper">说明：这只是 preset-based / non-authoritative 的 ending interpretation，用于把当前 demo 收尾说清楚，不代表 scenario truth。</p>
+        </article>
+        """
     summary_html = "".join(
         f"<li>{escape(line)}</li>"
         for line in _build_experimental_one_shot_run_summary_lines(run_result=run_result)
@@ -3293,6 +3545,7 @@ def _render_experimental_one_shot_run_panel(
           <span class="tag warn">{escape(status_label)}</span>
         </div>
         <ul class="meta-list">{summary_html}</ul>
+        {scenario_preset_html}
         <div class="card-list">{transcript_html}</div>
       </section>
     """
@@ -7354,6 +7607,10 @@ async def web_app_experimental_ai_demo_one_shot_run(
         initial_narrative_work_note_value=narrative_work_note_value,
         initial_keeper_turn_note_value=keeper_turn_note_value,
         initial_visible_turn_note_value=visible_turn_note_value,
+    )
+    run_result.scenario_preset_ending = _judge_experimental_one_shot_scenario_preset_ending(
+        snapshot=snapshot,
+        run_result=run_result,
     )
     ending_status_label = EXPERIMENTAL_ONE_SHOT_ENDING_STATUS_LABELS.get(
         run_result.ending_status,

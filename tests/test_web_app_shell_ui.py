@@ -806,6 +806,18 @@ def test_web_app_experimental_ai_demo_one_shot_run_can_finish_with_demo_success_
     assert "one-shot self-play demo run 已结束：成功。" in html
     assert "结束状态：成功。" in html
     assert "结束原因：已形成连续、可读且带 continuity 的受控 demo mini-arc。" in html
+    assert "Scenario Preset Ending Judge" in html
+    assert "场景 preset：雾港旅店的低语（scenario.whispering_guesthouse）" in html
+    assert "场景结局判定：明确成功。" in html
+    assert "ending judgment：明确成功" in html
+    assert (
+        "ending reason：run 已从账房记录推进到地窖入口级别的异常，并保持连续 continuity，当前 preset 下可视为一次明确成功的 demo 收尾。"
+        in html
+    )
+    assert (
+        "ending recap：这次雾港旅店 demo 最终从账房缺页和 204 房异常一路推进到地窖门前异味，形成了一个足以指向封死地窖入口的收尾。"
+        in html
+    )
     assert "共自动运行 3 轮 / 最大 6 轮。" in html
     assert "Turn 1" in html
     assert "Turn 2" in html
@@ -863,6 +875,16 @@ def test_web_app_experimental_ai_demo_one_shot_run_stops_at_turn_limit_when_demo
     assert "one-shot self-play demo run 已结束：达到轮数上限。" in html
     assert "结束状态：达到轮数上限。" in html
     assert "结束原因：达到当前受控 one-shot demo run 的最大轮数上限。" in html
+    assert "场景结局判定：部分成功。" in html
+    assert "ending judgment：部分成功" in html
+    assert (
+        "ending reason：调查已经把旅店疑点推进到账房记录、204 房或更深一层的异常，但在轮数上限前没有完成更明确的收束，因此按部分成功解释。"
+        in html
+    )
+    assert (
+        "ending recap：这次雾港旅店 demo 已经把疑点从账房推进到旅店异常链上，但仍在真正收尾前被轮数上限截住。"
+        in html
+    )
     assert "共自动运行 2 轮 / 最大 2 轮。" in html
     assert len(fake_service.requests) == 8
     after_snapshot = _get_snapshot(client, session_id)
@@ -891,6 +913,16 @@ def test_web_app_experimental_ai_demo_one_shot_run_can_fail_on_stagnation_withou
     assert "one-shot self-play demo run 已结束：失败。" in html
     assert "结束状态：失败。" in html
     assert "结束原因：连续多轮没有出现新的 run-local 推进点，判定为空转。" in html
+    assert "场景结局判定：停滞 / 未决。" in html
+    assert "ending judgment：停滞 / 未决" in html
+    assert (
+        "ending reason：调查一直围绕账房记录、缺页与老板回避打转，没有把压力继续推进到更明确的异常入口，因此按停滞 / 未决收尾。"
+        in html
+    )
+    assert (
+        "ending recap：这次雾港旅店 demo 反复停在账册缺页与老板回避周围，没有真正把收尾推进到地窖入口层级。"
+        in html
+    )
     assert "共自动运行 3 轮 / 最大 6 轮。" in html
     assert len(fake_service.requests) == 12
     after_snapshot = _get_snapshot(client, session_id)
@@ -919,6 +951,16 @@ def test_web_app_experimental_ai_demo_one_shot_run_aborts_on_visible_secret_brea
     assert "one-shot self-play demo run 已结束：中止。" in html
     assert "结束状态：中止。" in html
     assert "结束原因：visible-side 输出触碰 keeper-only 线索标题，当前 run 中止。" in html
+    assert "场景结局判定：中止。" in html
+    assert "ending judgment：中止" in html
+    assert (
+        "ending reason：当前 demo run 因公开侧触碰 keeper-only 禁区而被保护性中止，不能继续把这次输出解释成场景结局。"
+        in html
+    )
+    assert (
+        "ending recap：这次雾港旅店 demo 在形成稳定收尾前就触发了 secret boundary；当前 transcript 只保留为实验记录。"
+        in html
+    )
     assert "可见侧命中禁区词：储物间账本残页" in html
     assert len(fake_service.requests) == 4
     after_snapshot = _get_snapshot(client, session_id)
@@ -945,6 +987,16 @@ def test_web_app_experimental_ai_demo_one_shot_run_aborts_cleanly_when_llm_disab
     assert "one-shot self-play demo run 已结束：中止。" in html
     assert "结束状态：中止。" in html
     assert "结束原因：实验块未返回可用结构化输出，当前 run 中止。" in html
+    assert "场景结局判定：中止。" in html
+    assert "ending judgment：中止" in html
+    assert (
+        "ending reason：当前 demo run 没有拿到可用实验输出，未能形成足够的调查推进，因此只能按中止处理。"
+        in html
+    )
+    assert (
+        "ending recap：这次雾港旅店 demo 在形成稳定调查弧线前就已中止，没有得到可解释的场景收尾。"
+        in html
+    )
     assert "错误摘要：当前未启用本地 LLM；主流程不依赖它。" in html
     after_snapshot = _get_snapshot(client, session_id)
     assert before_snapshot == after_snapshot
