@@ -2273,14 +2273,11 @@ def _render_compressed_context_source_echo(
     """
 
 
-def _render_experimental_demo_source_echo(
+def _render_experimental_source_echo_card(
     *,
-    result: LocalLLMAssistantResult | None,
     title: str,
     lines: list[str],
 ) -> str:
-    if result is None or result.status != "success" or result.assistant is None:
-        return ""
     line_html = "".join(f"<li>{escape(line)}</li>" for line in lines if line)
     return f"""
       <article class="assistant-source-echo">
@@ -2291,6 +2288,17 @@ def _render_experimental_demo_source_echo(
         <ul class="meta-list">{line_html}</ul>
       </article>
     """
+
+
+def _render_experimental_demo_source_echo(
+    *,
+    result: LocalLLMAssistantResult | None,
+    title: str,
+    lines: list[str],
+) -> str:
+    if result is None or result.status != "success" or result.assistant is None:
+        return ""
+    return _render_experimental_source_echo_card(title=title, lines=lines)
 
 
 def _render_experimental_kp_continuity_source_echo(
@@ -2328,6 +2336,43 @@ def _render_experimental_investigator_continuity_source_echo(
     return _render_experimental_demo_source_echo(
         result=result,
         title="本轮 continuity 来源",
+        lines=lines,
+    )
+
+
+def _render_experimental_keeper_drafting_source_echo(
+    *,
+    draft_applied: bool,
+    evaluation_state: Mapping[str, str] | None = None,
+) -> str:
+    if not draft_applied:
+        return ""
+    lines = [
+        "本次 keeper continuity draft 已参考当前 Compressed Context。",
+        "已纳入当前轮 AI KP 输出摘要与 AI investigator 输出摘要。",
+    ]
+    if _build_experimental_demo_evaluation_hint(evaluation_state):
+        lines.append("已参考当前页实验标签 / 评估备注。")
+    lines.append("说明：这些只是当前页临时起草输入，不是已写入状态。")
+    return _render_experimental_source_echo_card(
+        title="keeper draft 起草来源",
+        lines=lines,
+    )
+
+
+def _render_experimental_visible_drafting_source_echo(
+    *,
+    draft_applied: bool,
+) -> str:
+    if not draft_applied:
+        return ""
+    lines = [
+        "本次 visible continuity draft 已参考当前 investigator visible summary。",
+        "已纳入 recent visible events 与当前轮 AI investigator 输出摘要。",
+        "说明：这只是当前页公开可见起草输入，不是已写入状态。",
+    ]
+    return _render_experimental_source_echo_card(
+        title="visible draft 起草来源",
         lines=lines,
     )
 
@@ -2469,6 +2514,13 @@ def _render_experimental_ai_demo_turn_loop_form(
           <li>说明：这些补充只作为当前页临时 continuity bridge，不会写入 authoritative state。</li>
         </ul>
         {draft_echo_html}
+        {_render_experimental_keeper_drafting_source_echo(
+            draft_applied=keeper_draft_applied,
+            evaluation_state=evaluation_state,
+        )}
+        {_render_experimental_visible_drafting_source_echo(
+            draft_applied=visible_draft_applied,
+        )}
         <form method="post" action="/app/sessions/{escape(session_id)}/experimental-ai-demo/run" class="form-stack">
           <input type="hidden" name="investigator_id" value="{escape(selected_investigator_id)}">
           <input type="hidden" name="current_turn_index" value="{current_turn_index}">

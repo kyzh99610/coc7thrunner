@@ -517,6 +517,8 @@ def test_web_app_experimental_ai_demo_result_page_can_trigger_continuity_bridge_
     assert 'name="current_investigator_result_json"' in html
     assert 'name="keeper_turn_outcome_note"' in html
     assert 'name="visible_turn_outcome_note"' in html
+    assert "keeper draft 起草来源" not in html
+    assert "visible draft 起草来源" not in html
     assert len(fake_service.requests) == 2
 
 
@@ -561,6 +563,13 @@ def test_web_app_experimental_ai_demo_draft_continuity_prefills_dual_textareas_w
     assert "已起草 continuity bridge 草稿并填入当前页 textarea；仍需 Keeper 人工审阅、修改并手工触发下一轮。" in html
     assert "已填入 keeper continuity bridge 草稿；仍需人工审阅、修改或清空。" in html
     assert "已填入公开 continuity bridge 草稿；仍需人工审阅、修改或清空。" in html
+    assert "keeper draft 起草来源" in html
+    assert "本次 keeper continuity draft 已参考当前 Compressed Context。" in html
+    assert "已纳入当前轮 AI KP 输出摘要与 AI investigator 输出摘要。" in html
+    assert "已参考当前页实验标签 / 评估备注。" in html
+    assert "visible draft 起草来源" in html
+    assert "本次 visible continuity draft 已参考当前 investigator visible summary。" in html
+    assert "已纳入 recent visible events 与当前轮 AI investigator 输出摘要。" in html
     assert "Keeper 暂定保留账册缺页、老板回避和二楼脚步声作为下一轮内部 continuity" in html
     assert "调查员目前只确认了账册缺页、老板回避和二楼脚步声" in html
     assert 'name="keeper_turn_outcome_note"' in html
@@ -583,6 +592,10 @@ def test_web_app_experimental_ai_demo_draft_continuity_prefills_dual_textareas_w
     assert "keeper_workflow" not in serialized_visible_context
     assert "evaluation_hint" not in visible_request.context
     assert "Keeper 暂定保留账册缺页" not in serialized_visible_context
+    visible_echo_section = html.split("visible draft 起草来源", 1)[1].split("</article>", 1)[0]
+    assert "Compressed Context" not in visible_echo_section
+    assert "实验标签" not in visible_echo_section
+    assert "AI KP 输出摘要" not in visible_echo_section
     after_snapshot = _get_snapshot(client, session_id)
     assert before_snapshot == after_snapshot
 
