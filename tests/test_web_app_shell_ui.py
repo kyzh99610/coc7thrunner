@@ -335,6 +335,33 @@ def test_web_app_experimental_ai_demo_page_loads_without_breaking_keeper_shell_w
     assert "当前页实验评估" not in html
 
 
+def test_web_app_experimental_ai_demo_launcher_entry_redirects_to_latest_session_demo(
+    client: TestClient,
+) -> None:
+    latest_session_id = _start_keeper_dashboard_session(client)
+    older_session_id = _start_keeper_dashboard_session(client)
+    _advance_keeper_dashboard_session(client, latest_session_id)
+
+    response = client.get("/app/experimental-ai-demo", follow_redirects=False)
+
+    assert response.status_code == 303
+    assert response.headers["location"] == (
+        f"/app/sessions/{latest_session_id}/experimental-ai-demo"
+    )
+    assert response.headers["location"] != (
+        f"/app/sessions/{older_session_id}/experimental-ai-demo"
+    )
+
+
+def test_web_app_experimental_ai_demo_launcher_entry_falls_back_to_sessions_index_without_session(
+    client: TestClient,
+) -> None:
+    response = client.get("/app/experimental-ai-demo", follow_redirects=False)
+
+    assert response.status_code == 303
+    assert response.headers["location"] == "/app/sessions"
+
+
 def test_keeper_compressed_context_builder_stays_short_and_secret_safe(
     client: TestClient,
 ) -> None:

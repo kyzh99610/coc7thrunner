@@ -7,9 +7,11 @@ import socket
 import subprocess
 import sys
 from pathlib import Path
+from unittest.mock import patch
 from uuid import uuid4
 
 from coc_runner.internal_local_launcher import (
+    DEFAULT_EXPERIMENTAL_DEMO_PATH,
     DEFAULT_HOST,
     LocalServiceManager,
     build_service_command,
@@ -219,6 +221,46 @@ def test_local_service_manager_open_browser_uses_target_url() -> None:
 
     assert manager.open_browser() is True
     assert opened_urls == [manager.web_url]
+
+
+def test_local_service_manager_open_experimental_demo_uses_launcher_deep_link() -> None:
+    opened_urls: list[str] = []
+
+    def fake_opener(url: str) -> bool:
+        opened_urls.append(url)
+        return True
+
+    manager = LocalServiceManager(
+        project_root=PROJECT_ROOT,
+        service_python=Path(sys.executable),
+        browser_opener=fake_opener,
+    )
+
+    with patch("coc_runner.internal_local_launcher.probe_healthz", return_value=True):
+        assert manager.open_experimental_demo() is True
+
+    assert manager.experimental_demo_url.endswith(DEFAULT_EXPERIMENTAL_DEMO_PATH)
+    assert opened_urls == [manager.experimental_demo_url]
+
+
+def test_local_service_manager_open_experimental_demo_requires_running_service() -> None:
+    opened_urls: list[str] = []
+
+    def fake_opener(url: str) -> bool:
+        opened_urls.append(url)
+        return True
+
+    manager = LocalServiceManager(
+        project_root=PROJECT_ROOT,
+        service_python=Path(sys.executable),
+        browser_opener=fake_opener,
+    )
+
+    with patch("coc_runner.internal_local_launcher.probe_healthz", return_value=False):
+        assert manager.open_experimental_demo() is False
+
+    assert opened_urls == []
+    assert "请先启动本地应用后再打开 experimental AI demo" in manager.snapshot().last_error
 
 
 def test_launcher_cli_smoke_json_uses_real_entry() -> None:

@@ -21,6 +21,7 @@ from typing import Callable, Mapping
 DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 8000
 DEFAULT_WEB_PATH = "/app/sessions"
+DEFAULT_EXPERIMENTAL_DEMO_PATH = "/app/experimental-ai-demo"
 DEFAULT_HEALTH_PATH = "/healthz"
 MAX_LOG_LINES = 200
 ENV_PROBE_TIMEOUT_SECONDS = 15.0
@@ -425,6 +426,10 @@ class LocalServiceManager:
         return f"http://{self.host}:{self.port}{DEFAULT_WEB_PATH}"
 
     @property
+    def experimental_demo_url(self) -> str:
+        return f"http://{self.host}:{self.port}{DEFAULT_EXPERIMENTAL_DEMO_PATH}"
+
+    @property
     def health_url(self) -> str:
         return f"http://{self.host}:{self.port}{DEFAULT_HEALTH_PATH}"
 
@@ -527,8 +532,18 @@ class LocalServiceManager:
         return True
 
     def open_browser(self) -> bool:
+        return self._open_url(self.web_url)
+
+    def open_experimental_demo(self) -> bool:
+        if not probe_healthz(self.health_url):
+            self.poll()
+            self._last_error = "当前服务未运行；请先启动本地应用后再打开 experimental AI demo。"
+            return False
+        return self._open_url(self.experimental_demo_url)
+
+    def _open_url(self, url: str) -> bool:
         try:
-            return bool(self.browser_opener(self.web_url))
+            return bool(self.browser_opener(url))
         except Exception as exc:  # pragma: no cover - browser failures depend on host integration
             self._last_error = str(exc)
             return False
@@ -745,7 +760,7 @@ def run_launcher_window(
     ).pack(anchor="w")
     ttk.Label(
         header,
-        text="仅供本地 / internal 使用：启动、停服、打开 Web UI、做 very small 环境检查。",
+        text="仅供本地 / internal 使用：启动、停服、打开首页或 experimental AI demo、做 very small 环境检查。",
     ).pack(anchor="w", pady=(4, 10))
 
     controls = ttk.Frame(frame)
@@ -753,7 +768,12 @@ def run_launcher_window(
     ttk.Button(controls, text="检查环境", command=lambda: _refresh_environment()).pack(side="left")
     ttk.Button(controls, text="启动本地应用", command=lambda: _start_service()).pack(side="left", padx=(8, 0))
     ttk.Button(controls, text="停止本地应用", command=lambda: _stop_service()).pack(side="left", padx=(8, 0))
-    ttk.Button(controls, text="打开浏览器", command=lambda: _open_browser()).pack(side="left", padx=(8, 0))
+    ttk.Button(controls, text="打开首页", command=lambda: _open_browser()).pack(side="left", padx=(8, 0))
+    ttk.Button(
+        controls,
+        text="打开 Experimental AI Demo",
+        command=lambda: _open_experimental_demo(),
+    ).pack(side="left", padx=(8, 0))
 
     status_frame = ttk.LabelFrame(frame, text="服务状态", padding=10)
     status_frame.pack(fill="x", pady=(0, 10))
@@ -815,6 +835,10 @@ def run_launcher_window(
 
     def _open_browser() -> None:
         manager.open_browser()
+        _apply_snapshot(manager.snapshot())
+
+    def _open_experimental_demo() -> None:
+        manager.open_experimental_demo()
         _apply_snapshot(manager.snapshot())
 
     def _poll() -> None:

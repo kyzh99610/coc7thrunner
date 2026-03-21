@@ -6210,6 +6210,20 @@ def web_app_sessions(
     )
 
 
+@router.get("/experimental-ai-demo", include_in_schema=False)
+def web_app_experimental_ai_demo_launcher_entry(
+    service: SessionService = Depends(get_session_service),
+) -> RedirectResponse:
+    sessions = service.list_sessions()
+    if not sessions:
+        return RedirectResponse(url="/app/sessions", status_code=status.HTTP_303_SEE_OTHER)
+    latest_session_id = sessions[0].session_id
+    return RedirectResponse(
+        url=f"/app/sessions/{latest_session_id}/experimental-ai-demo",
+        status_code=status.HTTP_303_SEE_OTHER,
+    )
+
+
 @router.get("/groups/{group_name}", response_class=HTMLResponse)
 def web_app_group(
     group_name: str,
