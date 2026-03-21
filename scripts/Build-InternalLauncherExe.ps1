@@ -7,7 +7,12 @@ $ErrorActionPreference = "Stop"
 
 $projectRoot = Split-Path -Parent $PSScriptRoot
 $entryScript = Join-Path $projectRoot "src\coc_runner\internal_local_launcher.py"
-$artifactRoot = Join-Path $projectRoot "build-artifacts\internal-launcher-exe"
+$variantName = if ($Windowed) { "CoCRunnerInternalLauncherWindowed" } else { "CoCRunnerInternalLauncher" }
+$artifactRoot = if ($Windowed) {
+    Join-Path $projectRoot "build-artifacts\internal-launcher-exe-windowed"
+} else {
+    Join-Path $projectRoot "build-artifacts\internal-launcher-exe"
+}
 $distRoot = Join-Path $artifactRoot "dist"
 $workRoot = Join-Path $artifactRoot "build"
 $specRoot = Join-Path $artifactRoot "spec"
@@ -56,7 +61,7 @@ $arguments = @(
     "--clean",
     "--onedir",
     $consoleFlag,
-    "--name", "CoCRunnerInternalLauncher",
+    "--name", $variantName,
     "--distpath", $distRoot,
     "--workpath", $workRoot,
     "--specpath", $specRoot,
@@ -78,7 +83,7 @@ finally {
     Pop-Location
 }
 
-$exePath = Join-Path $distRoot "CoCRunnerInternalLauncher\CoCRunnerInternalLauncher.exe"
+$exePath = Join-Path $distRoot "$variantName\$variantName.exe"
 if (-not (Test-Path $exePath)) {
     throw "Expected launcher exe was not produced: $exePath"
 }

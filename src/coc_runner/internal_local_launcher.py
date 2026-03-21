@@ -9,6 +9,7 @@ import subprocess
 import sys
 import threading
 import time
+import traceback
 import urllib.error
 import urllib.request
 import webbrowser
@@ -26,6 +27,9 @@ ENV_PROBE_TIMEOUT_SECONDS = 15.0
 HEALTHCHECK_TIMEOUT_SECONDS = 0.5
 STARTUP_TIMEOUT_SECONDS = 15.0
 PROJECT_ROOT_SENTINEL = Path("src") / "coc_runner" / "main.py"
+FATAL_ERROR_LOG_NAME = "internal-local-launcher-fatal.log"
+FATAL_ERROR_TITLE = "CoC Runner Internal Local Launcher"
+_UNSET = object()
 
 _PYTHON_INFO_SCRIPT = """
 import json
@@ -326,6 +330,65 @@ def _environment_snapshot_payload(snapshot: EnvironmentSnapshot | None) -> dict[
         "dice_backend_mode": snapshot.dice_backend_mode,
         "error": snapshot.error,
     }
+
+
+def _fatal_error_log_path(project_root: Path | None = None) -> Path:
+    resolved_project_root = (project_root or project_root_from_module()).resolve()
+    temp_root = resolved_project_root / ".tmp"
+    temp_root.mkdir(parents=True, exist_ok=True)
+    return temp_root / FATAL_ERROR_LOG_NAME
+
+
+def _should_surface_windowed_fatal_error(
+    *,
+    frozen: bool | None = None,
+    stdout: object = _UNSET,
+    stderr: object = _UNSET,
+) -> bool:
+    resolved_frozen = getattr(sys, "frozen", False) if frozen is None else frozen
+    resolved_stdout = sys.stdout if stdout is _UNSET else stdout
+    resolved_stderr = sys.stderr if stderr is _UNSET else stderr
+    return resolved_frozen and (resolved_stdout is None or resolved_stderr is None)
+
+
+def _show_native_error_dialog(title: str, message: str) -> None:
+    try:
+        import ctypes
+
+        ctypes.windll.user32.MessageBoxW(None, message, title, 0x10)
+    except Exception:
+        return
+
+
+def report_fatal_launcher_error(
+    exc: BaseException,
+    *,
+    project_root: Path | None = None,
+    reporter: Callable[[str, str], None] | None = None,
+) -> Path:
+    log_path = _fatal_error_log_path(project_root)
+    traceback_text = "".join(traceback.format_exception(exc))
+    log_path.write_text(traceback_text, encoding="utf-8")
+    summary = (
+        "launcher 启动失败。\n\n"
+        f"{exc}\n\n"
+        f"详细日志：{log_path}"
+    )
+    (reporter or _show_native_error_dialog)(FATAL_ERROR_TITLE, summary)
+    return log_path
+
+
+def _emit_smoke_payload(
+    payload: Mapping[str, object],
+    *,
+    output_path: Path | None = None,
+) -> None:
+    payload_text = json.dumps(payload, ensure_ascii=True)
+    if output_path is not None:
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        output_path.write_text(payload_text, encoding="utf-8")
+    if sys.stdout is not None:
+        print(payload_text)
 
 
 class LocalServiceManager:
@@ -782,24 +845,50 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="Run the internal exe smoke path without opening the GUI window.",
     )
+    parser.add_argument(
+        "--smoke-output-file",
+        type=Path,
+        default=None,
+        help="Write the smoke-json payload to a file for windowed exe validation.",
+    )
     args = parser.parse_args(argv)
-    if args.smoke_json:
-        exit_code, payload = run_headless_smoke(
+    try:
+        if args.smoke_json:
+            exit_code, payload = run_headless_smoke(
+                project_root=args.project_root,
+                service_python=args.service_python,
+                host=args.host,
+                port=args.port,
+                base_env=os.environ,
+            )
+            _emit_smoke_payload(payload, output_path=args.smoke_output_file)
+            return exit_code
+        run_launcher_window(
             project_root=args.project_root,
             service_python=args.service_python,
             host=args.host,
             port=args.port,
-            base_env=os.environ,
         )
-        print(json.dumps(payload, ensure_ascii=True))
-        return exit_code
-    run_launcher_window(
-        project_root=args.project_root,
-        service_python=args.service_python,
-        host=args.host,
-        port=args.port,
-    )
-    return 0
+        return 0
+    except Exception as exc:
+        if args.smoke_json:
+            log_path = report_fatal_launcher_error(
+                exc,
+                project_root=args.project_root,
+                reporter=lambda _title, _message: None,
+            )
+            payload = {
+                "mode": "smoke-json",
+                "success": False,
+                "last_error": str(exc),
+                "fatal_error_log": str(log_path),
+            }
+            _emit_smoke_payload(payload, output_path=args.smoke_output_file)
+            return 1
+        if _should_surface_windowed_fatal_error():
+            report_fatal_launcher_error(exc, project_root=args.project_root)
+            return 1
+        raise
 
 
 if __name__ == "__main__":
