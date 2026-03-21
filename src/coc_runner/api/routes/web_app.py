@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from dataclasses import dataclass
 from html import escape
 from typing import Any, Mapping
 from urllib.parse import quote, urlencode
@@ -171,6 +172,58 @@ EXPERIMENTAL_DEMO_RUBRIC_VALUE_LABELS: dict[str, str] = {
     "mixed": "一般",
     "poor": "差",
 }
+EXPERIMENTAL_ONE_SHOT_DEFAULT_MAX_TURNS = 6
+EXPERIMENTAL_ONE_SHOT_MAX_TURNS_LIMIT = 10
+EXPERIMENTAL_ONE_SHOT_SUCCESS_STREAK_TARGET = 3
+EXPERIMENTAL_ONE_SHOT_STAGNATION_STREAK_LIMIT = 2
+EXPERIMENTAL_ONE_SHOT_MISSING_CONTINUITY_STREAK_LIMIT = 2
+EXPERIMENTAL_ONE_SHOT_ENDING_STATUS_LABELS: dict[str, str] = {
+    "success": "成功",
+    "failure": "失败",
+    "aborted": "中止",
+    "max_turns": "达到轮数上限",
+}
+EXPERIMENTAL_ONE_SHOT_ENDING_REASON_LABELS: dict[str, str] = {
+    "completed_demo_arc": "已形成连续、可读且带 continuity 的受控 demo mini-arc。",
+    "stagnation_threshold": "连续多轮没有出现新的 run-local 推进点，判定为空转。",
+    "missing_continuity_threshold": "连续多轮没有形成可用 continuity bridge，判定 demo run 失败。",
+    "llm_unavailable": "实验块未返回可用结构化输出，当前 run 中止。",
+    "visible_secret_breach": "visible-side 输出触碰 keeper-only 线索标题，当前 run 中止。",
+    "turn_limit_reached": "达到当前受控 one-shot demo run 的最大轮数上限。",
+}
+
+
+@dataclass(slots=True)
+class ExperimentalOneShotTurnRecord:
+    turn_index: int
+    kp_summary: str
+    investigator_summary: str
+    keeper_continuity: str
+    visible_continuity: str
+    narrative_work_note: str
+    signature: str
+
+
+@dataclass(slots=True)
+class ExperimentalOneShotRunResult:
+    ending_status: str
+    ending_reason: str
+    max_turns: int
+    turn_records: list[ExperimentalOneShotTurnRecord]
+    kp_result: LocalLLMAssistantResult | None
+    investigator_result: LocalLLMAssistantResult | None
+    keeper_draft_result: LocalLLMAssistantResult | None
+    visible_draft_result: LocalLLMAssistantResult | None
+    current_turn_index: int
+    narrative_work_note_value: str
+    keeper_turn_note_value: str
+    visible_turn_note_value: str
+    kp_turn_bridge: dict[str, Any] | None
+    investigator_turn_bridge: dict[str, Any] | None
+    keeper_draft_applied: bool
+    visible_draft_applied: bool
+    error_message: str = ""
+    secret_breach_term: str = ""
 
 
 def _experimental_ai_demo_narrative_work_note_target_id(session_id: str) -> str:
@@ -2048,6 +2101,482 @@ def _build_experimental_ai_investigator_turn_bridge(
     return bridge
 
 
+def _parse_one_shot_max_turns(raw_value: Any) -> int:
+    try:
+        value = int(str(raw_value or EXPERIMENTAL_ONE_SHOT_DEFAULT_MAX_TURNS))
+    except (TypeError, ValueError):
+        return EXPERIMENTAL_ONE_SHOT_DEFAULT_MAX_TURNS
+    return max(1, min(value, EXPERIMENTAL_ONE_SHOT_MAX_TURNS_LIMIT))
+
+
+def _assistant_summary_text(result: LocalLLMAssistantResult | None) -> str:
+    if result is None or result.status != "success" or result.assistant is None:
+        return ""
+    return _normalize_form_text(result.assistant.summary) or ""
+
+
+def _assistant_draft_text(result: LocalLLMAssistantResult | None) -> str:
+    if result is None or result.status != "success" or result.assistant is None:
+        return ""
+    return _normalize_form_text(result.assistant.draft_text) or ""
+
+
+def _assistant_combined_text(result: LocalLLMAssistantResult | None) -> str:
+    if result is None or result.assistant is None:
+        return ""
+    assistant = result.assistant
+    parts = [
+        _normalize_form_text(assistant.title) or "",
+        _normalize_form_text(assistant.summary) or "",
+        _normalize_form_text(assistant.draft_text) or "",
+        *[
+            _normalize_form_text(item) or ""
+            for item in list(assistant.bullets or []) + list(assistant.suggested_questions or [])
+        ],
+    ]
+    return " ".join(part for part in parts if part)
+
+
+def _run_experimental_self_play_chain_turn(
+    *,
+    local_llm_service: LocalLLMService,
+    snapshot: dict[str, Any],
+    context_pack: dict[str, Any],
+    compressed_context: dict[str, Any],
+    viewer_id: str,
+    investigator_view: dict[str, Any],
+    previous_turn_index: int,
+    previous_kp_payload: dict[str, str] | None,
+    previous_investigator_payload: dict[str, str] | None,
+    keeper_turn_note_value: str = "",
+    visible_turn_note_value: str = "",
+    evaluation_state: Mapping[str, str] | None = None,
+) -> dict[str, Any]:
+    kp_turn_bridge = _build_experimental_ai_kp_turn_bridge(
+        previous_turn_index=previous_turn_index,
+        prior_kp_payload=previous_kp_payload,
+        prior_investigator_payload=previous_investigator_payload,
+        keeper_turn_note=keeper_turn_note_value,
+        visible_turn_note=visible_turn_note_value,
+    )
+    investigator_turn_bridge = _build_experimental_ai_investigator_turn_bridge(
+        previous_turn_index=previous_turn_index,
+        prior_investigator_payload=previous_investigator_payload,
+        visible_turn_note=visible_turn_note_value,
+    )
+    next_turn_index = previous_turn_index + 1
+    kp_result = _generate_local_llm_assistant(
+        local_llm_service=local_llm_service,
+        workspace_key="experimental_ai_kp_demo",
+        task_key="demo_loop",
+        task_label=EXPERIMENTAL_AI_KP_DEMO_TASKS["demo_loop"],
+        context=_build_experimental_ai_kp_demo_context(
+            snapshot=snapshot,
+            context_pack=context_pack,
+            compressed_context=compressed_context,
+            turn_bridge=kp_turn_bridge,
+        ),
+    )
+    investigator_result = _generate_local_llm_assistant(
+        local_llm_service=local_llm_service,
+        workspace_key="experimental_ai_investigator_demo",
+        task_key="demo_loop",
+        task_label=EXPERIMENTAL_AI_INVESTIGATOR_DEMO_TASKS["demo_loop"],
+        context=_build_experimental_ai_investigator_demo_context(
+            viewer_id=viewer_id,
+            view=investigator_view,
+            turn_bridge=investigator_turn_bridge,
+        ),
+    )
+    keeper_draft_result = _generate_local_llm_assistant(
+        local_llm_service=local_llm_service,
+        workspace_key="experimental_ai_keeper_continuity_draft",
+        task_key="draft_bridge",
+        task_label=EXPERIMENTAL_AI_KEEPER_CONTINUITY_DRAFT_TASKS["draft_bridge"],
+        context=_build_experimental_keeper_continuity_draft_context(
+            snapshot=snapshot,
+            compressed_context=compressed_context,
+            kp_result=kp_result,
+            investigator_result=investigator_result,
+            evaluation_state=evaluation_state,
+        ),
+    )
+    visible_draft_result = _generate_local_llm_assistant(
+        local_llm_service=local_llm_service,
+        workspace_key="experimental_ai_visible_continuity_draft",
+        task_key="draft_bridge",
+        task_label=EXPERIMENTAL_AI_VISIBLE_CONTINUITY_DRAFT_TASKS["draft_bridge"],
+        context=_build_experimental_visible_continuity_draft_context(
+            viewer_id=viewer_id,
+            view=investigator_view,
+            investigator_result=investigator_result,
+        ),
+    )
+    kp_payload = _assistant_result_turn_bridge_payload(kp_result)
+    investigator_payload = _assistant_result_turn_bridge_payload(investigator_result)
+    kp_draft_text = _assistant_draft_text(kp_result)
+    next_keeper_turn_note_value = _assistant_draft_text(keeper_draft_result) or keeper_turn_note_value
+    next_visible_turn_note_value = _assistant_draft_text(visible_draft_result) or visible_turn_note_value
+    keeper_draft_applied = bool(_assistant_draft_text(keeper_draft_result))
+    visible_draft_applied = bool(_assistant_draft_text(visible_draft_result))
+    return {
+        "next_turn_index": next_turn_index,
+        "kp_turn_bridge": kp_turn_bridge,
+        "investigator_turn_bridge": investigator_turn_bridge,
+        "kp_result": kp_result,
+        "investigator_result": investigator_result,
+        "keeper_draft_result": keeper_draft_result,
+        "visible_draft_result": visible_draft_result,
+        "kp_payload": kp_payload,
+        "investigator_payload": investigator_payload,
+        "kp_draft_text": kp_draft_text,
+        "keeper_turn_note_value": next_keeper_turn_note_value,
+        "visible_turn_note_value": next_visible_turn_note_value,
+        "keeper_draft_applied": keeper_draft_applied,
+        "visible_draft_applied": visible_draft_applied,
+    }
+
+
+def _build_experimental_one_shot_forbidden_visible_terms(
+    *,
+    snapshot: dict[str, Any],
+    investigator_view: dict[str, Any],
+) -> list[str]:
+    keeper_clues = [
+        clue
+        for clue in ((snapshot.get("scenario") or {}).get("clues") or [])
+        if isinstance(clue, dict)
+    ]
+    visible_clue_titles = {
+        _normalize_form_text(clue.get("title")) or ""
+        for clue in (((investigator_view.get("scenario") or {}).get("clues") or []))
+        if isinstance(clue, dict)
+    }
+    terms: list[str] = ["private_notes", "secret_state_refs", "keeper_workflow"]
+    for clue in keeper_clues:
+        title = _normalize_form_text(clue.get("title")) or ""
+        if title and title not in visible_clue_titles:
+            terms.append(title)
+    return list(dict.fromkeys(term for term in terms if term))
+
+
+def _find_experimental_visible_secret_breach(
+    *,
+    investigator_result: LocalLLMAssistantResult | None,
+    visible_draft_result: LocalLLMAssistantResult | None,
+    forbidden_terms: list[str],
+) -> str:
+    candidate_text = " ".join(
+        text
+        for text in [
+            _assistant_combined_text(investigator_result),
+            _assistant_combined_text(visible_draft_result),
+        ]
+        if text
+    )
+    for term in forbidden_terms:
+        if term and term in candidate_text:
+            return term
+    return ""
+
+
+def _build_experimental_one_shot_turn_signature(
+    *,
+    kp_result: LocalLLMAssistantResult | None,
+    investigator_result: LocalLLMAssistantResult | None,
+    keeper_turn_note_value: str,
+    visible_turn_note_value: str,
+) -> str:
+    signature_parts = [
+        _assistant_summary_text(kp_result),
+        _assistant_summary_text(investigator_result),
+        _normalize_form_text(keeper_turn_note_value) or "",
+        _normalize_form_text(visible_turn_note_value) or "",
+    ]
+    return " | ".join(part for part in signature_parts if part)
+
+
+def _build_experimental_one_shot_turn_record(
+    *,
+    turn_index: int,
+    kp_result: LocalLLMAssistantResult | None,
+    investigator_result: LocalLLMAssistantResult | None,
+    keeper_turn_note_value: str,
+    visible_turn_note_value: str,
+    narrative_work_note_value: str,
+    signature: str,
+) -> ExperimentalOneShotTurnRecord:
+    return ExperimentalOneShotTurnRecord(
+        turn_index=turn_index,
+        kp_summary=_assistant_summary_text(kp_result),
+        investigator_summary=_assistant_summary_text(investigator_result),
+        keeper_continuity=_normalize_form_text(keeper_turn_note_value) or "",
+        visible_continuity=_normalize_form_text(visible_turn_note_value) or "",
+        narrative_work_note=_normalize_form_text(narrative_work_note_value) or "",
+        signature=signature,
+    )
+
+
+def _run_experimental_one_shot_demo(
+    *,
+    service: SessionService,
+    local_llm_service: LocalLLMService,
+    session: Any,
+    keeper_view: Any,
+    snapshot: dict[str, Any],
+    investigator_view: dict[str, Any],
+    investigator_id: str,
+    max_turns: int,
+    evaluation_state: Mapping[str, str] | None = None,
+    initial_narrative_work_note_value: str = "",
+    initial_keeper_turn_note_value: str = "",
+    initial_visible_turn_note_value: str = "",
+) -> ExperimentalOneShotRunResult:
+    runtime_assistance = service.get_keeper_runtime_assistance(keeper_view=keeper_view)
+    forbidden_terms = _build_experimental_one_shot_forbidden_visible_terms(
+        snapshot=snapshot,
+        investigator_view=investigator_view,
+    )
+    turn_records: list[ExperimentalOneShotTurnRecord] = []
+    previous_kp_payload: dict[str, str] | None = None
+    previous_investigator_payload: dict[str, str] | None = None
+    current_turn_index = 0
+    narrative_work_note_value = initial_narrative_work_note_value
+    keeper_turn_note_value = initial_keeper_turn_note_value
+    visible_turn_note_value = initial_visible_turn_note_value
+    successful_turn_streak = 0
+    stagnation_streak = 0
+    missing_continuity_streak = 0
+    previous_signature = ""
+    last_turn: dict[str, Any] = {
+        "kp_result": None,
+        "investigator_result": None,
+        "keeper_draft_result": None,
+        "visible_draft_result": None,
+        "kp_turn_bridge": None,
+        "investigator_turn_bridge": None,
+        "keeper_draft_applied": False,
+        "visible_draft_applied": False,
+    }
+
+    for _ in range(max_turns):
+        context_pack = _build_keeper_context_pack_payload(
+            service=service,
+            session=session,
+            keeper_view=keeper_view,
+            runtime_assistance=runtime_assistance,
+            narrative_note_value=narrative_work_note_value,
+        )
+        compressed_context = _build_keeper_compressed_context_payload(
+            service=service,
+            context_pack=context_pack,
+        )
+        turn = _run_experimental_self_play_chain_turn(
+            local_llm_service=local_llm_service,
+            snapshot=snapshot,
+            context_pack=context_pack,
+            compressed_context=compressed_context,
+            viewer_id=investigator_id,
+            investigator_view=investigator_view,
+            previous_turn_index=current_turn_index,
+            previous_kp_payload=previous_kp_payload,
+            previous_investigator_payload=previous_investigator_payload,
+            keeper_turn_note_value=keeper_turn_note_value,
+            visible_turn_note_value=visible_turn_note_value,
+            evaluation_state=evaluation_state,
+        )
+        current_turn_index = int(turn["next_turn_index"])
+        kp_result = turn["kp_result"]
+        investigator_result = turn["investigator_result"]
+        keeper_draft_result = turn["keeper_draft_result"]
+        visible_draft_result = turn["visible_draft_result"]
+        keeper_turn_note_value = turn["keeper_turn_note_value"]
+        visible_turn_note_value = turn["visible_turn_note_value"]
+        if turn["kp_draft_text"]:
+            narrative_work_note_value = turn["kp_draft_text"]
+        signature = _build_experimental_one_shot_turn_signature(
+            kp_result=kp_result,
+            investigator_result=investigator_result,
+            keeper_turn_note_value=keeper_turn_note_value,
+            visible_turn_note_value=visible_turn_note_value,
+        )
+        turn_records.append(
+            _build_experimental_one_shot_turn_record(
+                turn_index=current_turn_index,
+                kp_result=kp_result,
+                investigator_result=investigator_result,
+                keeper_turn_note_value=keeper_turn_note_value,
+                visible_turn_note_value=visible_turn_note_value,
+                narrative_work_note_value=narrative_work_note_value,
+                signature=signature,
+            )
+        )
+        last_turn = turn
+        if any(
+            result is None or result.status != "success" or result.assistant is None
+            for result in [
+                kp_result,
+                investigator_result,
+                keeper_draft_result,
+                visible_draft_result,
+            ]
+        ):
+            error_message = next(
+                (
+                    result.error_message or ""
+                    for result in [
+                        kp_result,
+                        investigator_result,
+                        keeper_draft_result,
+                        visible_draft_result,
+                    ]
+                    if result is not None and result.status != "success"
+                ),
+                "",
+            )
+            return ExperimentalOneShotRunResult(
+                ending_status="aborted",
+                ending_reason="llm_unavailable",
+                max_turns=max_turns,
+                turn_records=turn_records,
+                kp_result=kp_result,
+                investigator_result=investigator_result,
+                keeper_draft_result=keeper_draft_result,
+                visible_draft_result=visible_draft_result,
+                current_turn_index=current_turn_index,
+                narrative_work_note_value=narrative_work_note_value,
+                keeper_turn_note_value=keeper_turn_note_value,
+                visible_turn_note_value=visible_turn_note_value,
+                kp_turn_bridge=turn["kp_turn_bridge"],
+                investigator_turn_bridge=turn["investigator_turn_bridge"],
+                keeper_draft_applied=bool(turn["keeper_draft_applied"]),
+                visible_draft_applied=bool(turn["visible_draft_applied"]),
+                error_message=error_message,
+            )
+        secret_breach_term = _find_experimental_visible_secret_breach(
+            investigator_result=investigator_result,
+            visible_draft_result=visible_draft_result,
+            forbidden_terms=forbidden_terms,
+        )
+        if secret_breach_term:
+            return ExperimentalOneShotRunResult(
+                ending_status="aborted",
+                ending_reason="visible_secret_breach",
+                max_turns=max_turns,
+                turn_records=turn_records,
+                kp_result=kp_result,
+                investigator_result=investigator_result,
+                keeper_draft_result=keeper_draft_result,
+                visible_draft_result=visible_draft_result,
+                current_turn_index=current_turn_index,
+                narrative_work_note_value=narrative_work_note_value,
+                keeper_turn_note_value=keeper_turn_note_value,
+                visible_turn_note_value=visible_turn_note_value,
+                kp_turn_bridge=turn["kp_turn_bridge"],
+                investigator_turn_bridge=turn["investigator_turn_bridge"],
+                keeper_draft_applied=bool(turn["keeper_draft_applied"]),
+                visible_draft_applied=bool(turn["visible_draft_applied"]),
+                secret_breach_term=secret_breach_term,
+            )
+        if signature and signature == previous_signature:
+            stagnation_streak += 1
+        else:
+            stagnation_streak = 0
+        previous_signature = signature or previous_signature
+        if turn["keeper_draft_applied"] and turn["visible_draft_applied"]:
+            missing_continuity_streak = 0
+        else:
+            missing_continuity_streak += 1
+        if (
+            _assistant_summary_text(kp_result)
+            and _assistant_summary_text(investigator_result)
+            and turn["keeper_draft_applied"]
+            and turn["visible_draft_applied"]
+            and stagnation_streak == 0
+        ):
+            successful_turn_streak += 1
+        else:
+            successful_turn_streak = 0
+        previous_kp_payload = turn["kp_payload"]
+        previous_investigator_payload = turn["investigator_payload"]
+        if successful_turn_streak >= EXPERIMENTAL_ONE_SHOT_SUCCESS_STREAK_TARGET:
+            return ExperimentalOneShotRunResult(
+                ending_status="success",
+                ending_reason="completed_demo_arc",
+                max_turns=max_turns,
+                turn_records=turn_records,
+                kp_result=kp_result,
+                investigator_result=investigator_result,
+                keeper_draft_result=keeper_draft_result,
+                visible_draft_result=visible_draft_result,
+                current_turn_index=current_turn_index,
+                narrative_work_note_value=narrative_work_note_value,
+                keeper_turn_note_value=keeper_turn_note_value,
+                visible_turn_note_value=visible_turn_note_value,
+                kp_turn_bridge=turn["kp_turn_bridge"],
+                investigator_turn_bridge=turn["investigator_turn_bridge"],
+                keeper_draft_applied=bool(turn["keeper_draft_applied"]),
+                visible_draft_applied=bool(turn["visible_draft_applied"]),
+            )
+        if stagnation_streak >= EXPERIMENTAL_ONE_SHOT_STAGNATION_STREAK_LIMIT:
+            return ExperimentalOneShotRunResult(
+                ending_status="failure",
+                ending_reason="stagnation_threshold",
+                max_turns=max_turns,
+                turn_records=turn_records,
+                kp_result=kp_result,
+                investigator_result=investigator_result,
+                keeper_draft_result=keeper_draft_result,
+                visible_draft_result=visible_draft_result,
+                current_turn_index=current_turn_index,
+                narrative_work_note_value=narrative_work_note_value,
+                keeper_turn_note_value=keeper_turn_note_value,
+                visible_turn_note_value=visible_turn_note_value,
+                kp_turn_bridge=turn["kp_turn_bridge"],
+                investigator_turn_bridge=turn["investigator_turn_bridge"],
+                keeper_draft_applied=bool(turn["keeper_draft_applied"]),
+                visible_draft_applied=bool(turn["visible_draft_applied"]),
+            )
+        if missing_continuity_streak >= EXPERIMENTAL_ONE_SHOT_MISSING_CONTINUITY_STREAK_LIMIT:
+            return ExperimentalOneShotRunResult(
+                ending_status="failure",
+                ending_reason="missing_continuity_threshold",
+                max_turns=max_turns,
+                turn_records=turn_records,
+                kp_result=kp_result,
+                investigator_result=investigator_result,
+                keeper_draft_result=keeper_draft_result,
+                visible_draft_result=visible_draft_result,
+                current_turn_index=current_turn_index,
+                narrative_work_note_value=narrative_work_note_value,
+                keeper_turn_note_value=keeper_turn_note_value,
+                visible_turn_note_value=visible_turn_note_value,
+                kp_turn_bridge=turn["kp_turn_bridge"],
+                investigator_turn_bridge=turn["investigator_turn_bridge"],
+                keeper_draft_applied=bool(turn["keeper_draft_applied"]),
+                visible_draft_applied=bool(turn["visible_draft_applied"]),
+            )
+
+    return ExperimentalOneShotRunResult(
+        ending_status="max_turns",
+        ending_reason="turn_limit_reached",
+        max_turns=max_turns,
+        turn_records=turn_records,
+        kp_result=last_turn["kp_result"],
+        investigator_result=last_turn["investigator_result"],
+        keeper_draft_result=last_turn["keeper_draft_result"],
+        visible_draft_result=last_turn["visible_draft_result"],
+        current_turn_index=current_turn_index,
+        narrative_work_note_value=narrative_work_note_value,
+        keeper_turn_note_value=keeper_turn_note_value,
+        visible_turn_note_value=visible_turn_note_value,
+        kp_turn_bridge=last_turn["kp_turn_bridge"],
+        investigator_turn_bridge=last_turn["investigator_turn_bridge"],
+        keeper_draft_applied=bool(last_turn["keeper_draft_applied"]),
+        visible_draft_applied=bool(last_turn["visible_draft_applied"]),
+    )
+
+
 def _assistant_result_hidden_json(
     result: LocalLLMAssistantResult | None,
 ) -> str:
@@ -2645,6 +3174,126 @@ def _render_experimental_ai_demo_preview_chain(
               ),
           )}
         </div>
+      </section>
+    """
+
+
+def _render_experimental_ai_demo_one_shot_control(
+    *,
+    session_id: str,
+    options_html: str,
+    selected_investigator_id: str,
+    max_turns: int,
+    evaluation_state: Mapping[str, str] | None = None,
+    narrative_work_note_value: str = "",
+    keeper_turn_note_value: str = "",
+    visible_turn_note_value: str = "",
+) -> str:
+    if not options_html:
+        return ""
+    return f"""
+      <div class="divider"></div>
+      <form method="post" action="/app/sessions/{escape(session_id)}/experimental-ai-demo/one-shot-run" class="form-stack">
+        <label>
+          Investigator 视角
+          <select name="investigator_id">{options_html}</select>
+        </label>
+        <label>
+          最大轮数
+          <input type="number" name="max_turns" min="1" max="{EXPERIMENTAL_ONE_SHOT_MAX_TURNS_LIMIT}" value="{escape(str(max_turns))}">
+        </label>
+        <input type="hidden" name="seed_narrative_work_note" value="{escape(narrative_work_note_value)}">
+        <input type="hidden" name="seed_keeper_turn_outcome_note" value="{escape(keeper_turn_note_value)}">
+        <input type="hidden" name="seed_visible_turn_outcome_note" value="{escape(visible_turn_note_value)}">
+        {_render_hidden_experimental_demo_evaluation_state_inputs(evaluation_state)}
+        <p class="helper">受控 one-shot self-play demo run：每轮顺序复用 AI KP、AI investigator、keeper continuity draft 与 visible continuity draft，直到成功 / 失败 / 中止 / 达到轮数上限；只保留当前页 run-local transcript，不会写入 authoritative state。</p>
+        <div class="toolbar">
+          <button class="button-button ghost" type="submit">开始 one-shot self-play demo</button>
+        </div>
+      </form>
+    """
+
+
+def _build_experimental_one_shot_run_summary_lines(
+    *,
+    run_result: ExperimentalOneShotRunResult,
+) -> list[str]:
+    status_label = EXPERIMENTAL_ONE_SHOT_ENDING_STATUS_LABELS.get(
+        run_result.ending_status,
+        run_result.ending_status,
+    )
+    reason_label = EXPERIMENTAL_ONE_SHOT_ENDING_REASON_LABELS.get(
+        run_result.ending_reason,
+        run_result.ending_reason,
+    )
+    lines = [
+        f"共自动运行 {len(run_result.turn_records)} 轮 / 最大 {run_result.max_turns} 轮。",
+        f"结束状态：{status_label}。",
+        f"结束原因：{reason_label}",
+    ]
+    if run_result.error_message:
+        lines.append(f"错误摘要：{run_result.error_message}")
+    if run_result.secret_breach_term:
+        lines.append(f"可见侧命中禁区词：{run_result.secret_breach_term}")
+    if run_result.narrative_work_note_value:
+        lines.append(
+            f"最终 run-local narrative_work_note：{_excerpt(run_result.narrative_work_note_value, limit=120)}"
+        )
+    if run_result.keeper_turn_note_value:
+        lines.append(
+            f"最终 keeper continuity：{_excerpt(run_result.keeper_turn_note_value, limit=120)}"
+        )
+    if run_result.visible_turn_note_value:
+        lines.append(
+            f"最终 visible continuity：{_excerpt(run_result.visible_turn_note_value, limit=120)}"
+        )
+    lines.append("说明：这只是当前页 run-local transcript / ending summary，不是 authoritative history。")
+    return lines
+
+
+def _render_experimental_one_shot_run_panel(
+    *,
+    run_result: ExperimentalOneShotRunResult,
+) -> str:
+    if not run_result.turn_records:
+        return ""
+    status_label = EXPERIMENTAL_ONE_SHOT_ENDING_STATUS_LABELS.get(
+        run_result.ending_status,
+        run_result.ending_status,
+    )
+    summary_html = "".join(
+        f"<li>{escape(line)}</li>"
+        for line in _build_experimental_one_shot_run_summary_lines(run_result=run_result)
+    )
+    transcript_html = "".join(
+        f"""
+        <article class="assistant-source-echo">
+          <div class="list-head">
+            <h3>Turn {escape(str(record.turn_index))}</h3>
+            <span class="tag">run-local</span>
+          </div>
+          <ul class="meta-list">
+            <li>AI KP：{escape(record.kp_summary or '当前无可用摘要。')}</li>
+            <li>AI Investigator：{escape(record.investigator_summary or '当前无可用摘要。')}</li>
+            <li>keeper continuity：{escape(record.keeper_continuity or '当前未形成 keeper continuity。')}</li>
+            <li>visible continuity：{escape(record.visible_continuity or '当前未形成 visible continuity。')}</li>
+            <li>narrative_work_note：{escape(record.narrative_work_note or '当前未形成 run-local narrative note。')}</li>
+          </ul>
+        </article>
+        """
+        for record in run_result.turn_records
+    )
+    return f"""
+      <section class="surface">
+        <div class="surface-header">
+          <div>
+            <h2>One-shot Self-play Demo Run</h2>
+            <p>当前页受控自动 run：只复用 experimental blocks 与 run-local bridge，不会写入 authoritative state，也不是 full AI GM。</p>
+          </div>
+          <span class="tag warn">{escape(status_label)}</span>
+        </div>
+        <ul class="meta-list">{summary_html}</ul>
+        <div class="card-list">{transcript_html}</div>
       </section>
     """
 
@@ -5668,6 +6317,8 @@ def _render_experimental_ai_demo_page(
     keeper_draft_applied: bool = False,
     visible_draft_applied: bool = False,
     orchestration_preview_html: str = "",
+    one_shot_max_turns: int = EXPERIMENTAL_ONE_SHOT_DEFAULT_MAX_TURNS,
+    one_shot_run_html: str = "",
     notice: str | None = None,
     detail: dict[str, Any] | str | None = None,
 ) -> HTMLResponse:
@@ -5724,6 +6375,16 @@ def _render_experimental_ai_demo_page(
                   <button class="button-button ghost" type="submit" formaction="/app/sessions/{escape(session_id)}/experimental-ai-demo/self-play-preview">运行 self-play 预演链</button>
                 </div>
               </form>
+              {_render_experimental_ai_demo_one_shot_control(
+                  session_id=session_id,
+                  options_html=options_html,
+                  selected_investigator_id=selected_investigator_id or "",
+                  max_turns=one_shot_max_turns,
+                  evaluation_state=evaluation_state,
+                  narrative_work_note_value=narrative_work_note_value,
+                  keeper_turn_note_value=keeper_turn_note_value,
+                  visible_turn_note_value=visible_turn_note_value,
+              )}
               '''
               if options_html
               else '<p class="empty">当前没有可用于实验 harness 的 investigator 视角。</p>'
@@ -5741,6 +6402,7 @@ def _render_experimental_ai_demo_page(
             )}
           </div>
           <div class="card-list">
+            {one_shot_run_html}
             {orchestration_preview_html}
             {_render_experimental_ai_demo_output_block(
                 title="AI KP Demo Output",
@@ -6034,6 +6696,8 @@ def _render_app_experimental_ai_demo_from_service(
     keeper_draft_applied: bool = False,
     visible_draft_applied: bool = False,
     orchestration_preview_html: str = "",
+    one_shot_max_turns: int = EXPERIMENTAL_ONE_SHOT_DEFAULT_MAX_TURNS,
+    one_shot_run_html: str = "",
     notice: str | None = None,
     detail: dict[str, Any] | str | None = None,
     status_code: int = status.HTTP_200_OK,
@@ -6116,6 +6780,8 @@ def _render_app_experimental_ai_demo_from_service(
         keeper_draft_applied=keeper_draft_applied,
         visible_draft_applied=visible_draft_applied,
         orchestration_preview_html=orchestration_preview_html,
+        one_shot_max_turns=one_shot_max_turns,
+        one_shot_run_html=one_shot_run_html,
         notice=notice,
         detail=detail,
     )
@@ -6601,6 +7267,129 @@ async def web_app_experimental_ai_demo_self_play_preview(
             investigator_result=investigator_result,
             keeper_draft_result=keeper_draft_result,
             visible_draft_result=visible_draft_result,
+        ),
+        notice=notice,
+    )
+
+
+@router.post("/sessions/{session_id}/experimental-ai-demo/one-shot-run", response_class=HTMLResponse)
+async def web_app_experimental_ai_demo_one_shot_run(
+    session_id: str,
+    request: Request,
+    service: SessionService = Depends(get_session_service),
+    local_llm_service: LocalLLMService = Depends(get_local_llm_service),
+) -> HTMLResponse:
+    form = await _read_form_payload(request)
+    selected_investigator_id = _normalize_form_text(form.get("investigator_id"))
+    max_turns = _parse_one_shot_max_turns(form.get("max_turns"))
+    evaluation_state = _normalize_experimental_demo_rubric_state(form)
+    narrative_work_note_value = _normalize_form_text(form.get("seed_narrative_work_note")) or ""
+    keeper_turn_note_value = (
+        _normalize_form_text(form.get("seed_keeper_turn_outcome_note")) or ""
+    )
+    visible_turn_note_value = (
+        _normalize_form_text(form.get("seed_visible_turn_outcome_note")) or ""
+    )
+    try:
+        session, keeper_view, _, _ = service.get_keeper_workspace(session_id)
+    except LookupError as exc:
+        body = _detail_block(extract_error_detail(exc)) + _page_head(
+            eyebrow="Experimental AI Demo",
+            title="Experimental AI Demo 不可用",
+            summary="当前无法加载实验 harness 所需的 keeper workspace。",
+            actions=[("返回 Sessions", "/app/sessions", "ghost")],
+        )
+        return render_web_app_shell(
+            title=f"Session {session_id} Experimental AI Demo Missing",
+            sidebar_html=_render_sidebar(active_section="keeper"),
+            body_html=body,
+            status_code=status.HTTP_404_NOT_FOUND,
+        )
+    snapshot = session.model_dump(mode="json")
+    participants = [
+        participant
+        for participant in snapshot.get("participants") or []
+        if isinstance(participant, dict)
+    ]
+    candidates = _demo_investigator_candidates(
+        participants,
+        keeper_id=snapshot.get("keeper_id"),
+    )
+    candidate_ids = {
+        str(item.get("actor_id") or "")
+        for item in candidates
+        if str(item.get("actor_id") or "")
+    }
+    resolved_investigator_id = selected_investigator_id
+    if not resolved_investigator_id and candidates:
+        resolved_investigator_id = str(candidates[0].get("actor_id") or "")
+    if not resolved_investigator_id or resolved_investigator_id not in candidate_ids:
+        return _render_app_experimental_ai_demo_from_service(
+            service=service,
+            session_id=session_id,
+            local_llm_service=local_llm_service,
+            selected_investigator_id=resolved_investigator_id,
+            one_shot_max_turns=max_turns,
+            narrative_work_note_value=narrative_work_note_value,
+            keeper_turn_note_value=keeper_turn_note_value,
+            visible_turn_note_value=visible_turn_note_value,
+            detail="当前无法建立可用的 investigator visible summary；请先选择一个有效调查员视角。",
+            status_code=status.HTTP_404_NOT_FOUND,
+        )
+    investigator_view = service.get_session_view(
+        session_id,
+        viewer_id=resolved_investigator_id,
+        viewer_role=ViewerRole.INVESTIGATOR,
+    ).model_dump(mode="json")
+    run_result = _run_experimental_one_shot_demo(
+        service=service,
+        local_llm_service=local_llm_service,
+        session=session,
+        keeper_view=keeper_view,
+        snapshot=snapshot,
+        investigator_view=investigator_view,
+        investigator_id=resolved_investigator_id,
+        max_turns=max_turns,
+        evaluation_state=evaluation_state,
+        initial_narrative_work_note_value=narrative_work_note_value,
+        initial_keeper_turn_note_value=keeper_turn_note_value,
+        initial_visible_turn_note_value=visible_turn_note_value,
+    )
+    ending_status_label = EXPERIMENTAL_ONE_SHOT_ENDING_STATUS_LABELS.get(
+        run_result.ending_status,
+        run_result.ending_status,
+    )
+    notice = (
+        f"one-shot self-play demo run 已结束：{ending_status_label}。"
+        "当前只保留 run-local transcript / ending summary，不会写入 authoritative state。"
+    )
+    return _render_app_experimental_ai_demo_from_service(
+        service=service,
+        session_id=session_id,
+        local_llm_service=local_llm_service,
+        selected_investigator_id=resolved_investigator_id,
+        kp_result=run_result.kp_result,
+        investigator_result=run_result.investigator_result,
+        current_turn_index=run_result.current_turn_index,
+        kp_turn_bridge=run_result.kp_turn_bridge,
+        investigator_turn_bridge=run_result.investigator_turn_bridge,
+        evaluation_state=evaluation_state,
+        narrative_work_note_value=run_result.narrative_work_note_value,
+        keeper_turn_note_value=run_result.keeper_turn_note_value,
+        visible_turn_note_value=run_result.visible_turn_note_value,
+        keeper_draft_applied=run_result.keeper_draft_applied,
+        visible_draft_applied=run_result.visible_draft_applied,
+        orchestration_preview_html=_render_experimental_ai_demo_preview_chain(
+            session_id=session_id,
+            current_turn_index=run_result.current_turn_index,
+            kp_result=run_result.kp_result,
+            investigator_result=run_result.investigator_result,
+            keeper_draft_result=run_result.keeper_draft_result,
+            visible_draft_result=run_result.visible_draft_result,
+        ),
+        one_shot_max_turns=max_turns,
+        one_shot_run_html=_render_experimental_one_shot_run_panel(
+            run_result=run_result,
         ),
         notice=notice,
     )

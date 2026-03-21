@@ -156,6 +156,107 @@ class _FakeLocalLLMService:
         )
 
 
+class _SequencedOneShotLocalLLMService:
+    def __init__(self) -> None:
+        self.requests = []
+        self.enabled = True
+        self._workspace_counts: dict[str, int] = {}
+
+    def _turn_index_for(self, workspace_key: str) -> int:
+        next_index = self._workspace_counts.get(workspace_key, 0) + 1
+        self._workspace_counts[workspace_key] = next_index
+        return next_index
+
+    def generate_assistant(self, request):
+        self.requests.append(request)
+        turn_index = self._turn_index_for(request.workspace_key)
+        focus_by_turn = {
+            1: "204 房登记",
+            2: "二楼脚步声",
+            3: "地窖门前异味",
+            4: "封死地窖门",
+        }
+        focus = focus_by_turn.get(turn_index, f"第 {turn_index} 轮压力点")
+        if request.workspace_key == "experimental_ai_kp_demo":
+            return LocalLLMAssistantResult(
+                status="success",
+                workspace_key=request.workspace_key,
+                task_key=request.task_key,
+                task_label=request.task_label,
+                provider_name="stub-local",
+                model="stub-model",
+                assistant=LocalLLMAssistantPayload(
+                    title="AI KP 剧情支架提案",
+                    summary=f"第 {turn_index} 轮把压力推进到{focus}。",
+                    bullets=[f"KP 继续围绕{focus}压紧场景。"],
+                    suggested_questions=[f"是否继续让调查员围绕{focus}追问？"],
+                    draft_text=f"第 {turn_index} 轮 narrative note：先把焦点落到{focus}，再给出下一拍压力。",
+                    safety_notes=["不会自动推进剧情。", "不会写入 authoritative state。"],
+                ),
+            )
+        if request.workspace_key == "experimental_ai_investigator_demo":
+            return LocalLLMAssistantResult(
+                status="success",
+                workspace_key=request.workspace_key,
+                task_key=request.task_key,
+                task_label=request.task_label,
+                provider_name="stub-local",
+                model="stub-model",
+                assistant=LocalLLMAssistantPayload(
+                    title="AI Investigator 行动提案",
+                    summary=f"第 {turn_index} 轮公开追问方向是{focus}。",
+                    bullets=[f"先确认{focus}。"],
+                    suggested_questions=[f"{focus}是否和老板回避有关？"],
+                    draft_text=f"第 {turn_index} 轮调查员会继续公开追问{focus}。",
+                    safety_notes=["只基于可见信息。", "不会自动执行。"],
+                ),
+            )
+        if request.workspace_key == "experimental_ai_keeper_continuity_draft":
+            return LocalLLMAssistantResult(
+                status="success",
+                workspace_key=request.workspace_key,
+                task_key=request.task_key,
+                task_label=request.task_label,
+                provider_name="stub-local",
+                model="stub-model",
+                assistant=LocalLLMAssistantPayload(
+                    title="Keeper continuity bridge 草稿",
+                    summary=f"第 {turn_index} 轮 keeper continuity 聚焦{focus}。",
+                    bullets=[f"Keeper 内部继续保留{focus}造成的压力。"],
+                    suggested_questions=[f"下一轮是否把压力继续挂在{focus}上？"],
+                    draft_text=f"第 {turn_index} 轮 keeper continuity：内部继续保留{focus}，但仍不写入 authoritative state。",
+                    safety_notes=["仅当前页临时使用。", "不会自动推进剧情。"],
+                ),
+            )
+        if request.workspace_key == "experimental_ai_visible_continuity_draft":
+            return LocalLLMAssistantResult(
+                status="success",
+                workspace_key=request.workspace_key,
+                task_key=request.task_key,
+                task_label=request.task_label,
+                provider_name="stub-local",
+                model="stub-model",
+                assistant=LocalLLMAssistantPayload(
+                    title="Visible continuity bridge 草稿",
+                    summary=f"第 {turn_index} 轮 visible continuity 聚焦{focus}。",
+                    bullets=[f"公开侧继续围绕{focus}推进。"],
+                    suggested_questions=[f"下一轮是否继续公开追问{focus}？"],
+                    draft_text=f"第 {turn_index} 轮 visible continuity：公开继续围绕{focus}追问。",
+                    safety_notes=["只基于公开可见信息。", "不会自动推进剧情。"],
+                ),
+            )
+        raise AssertionError(f"unexpected workspace key: {request.workspace_key}")
+
+
+class _SecretBreachOneShotLocalLLMService(_SequencedOneShotLocalLLMService):
+    def generate_assistant(self, request):
+        result = super().generate_assistant(request)
+        if request.workspace_key == "experimental_ai_visible_continuity_draft":
+            assert result.assistant is not None
+            result.assistant.draft_text = "公开侧错误提到了储物间账本残页，这应该触发中止。"
+        return result
+
+
 def _make_experimental_result(
     *,
     workspace_key: str,
@@ -329,6 +430,8 @@ def test_web_app_experimental_ai_demo_page_loads_without_breaking_keeper_shell_w
     assert "Local LLM 未启用" in html
     assert "不会自动写入主状态" in html
     assert "运行 self-play 预演链" in html
+    assert "开始 one-shot self-play demo" in html
+    assert 'name="max_turns"' in html
     assert 'action="/app/sessions/' in html
     assert 'name="keeper_turn_outcome_note"' not in html
     assert 'name="visible_turn_outcome_note"' not in html
@@ -676,6 +779,173 @@ def test_web_app_experimental_ai_demo_preview_narrative_handoff_stays_manual_and
     assert f'data-adopt-target="experimental-narrative-work-note-{session_id}"' in html
     for llm_request in fake_service.requests:
         assert manual_note not in str(llm_request.context)
+    after_snapshot = _get_snapshot(client, session_id)
+    assert before_snapshot == after_snapshot
+
+
+def test_web_app_experimental_ai_demo_one_shot_run_can_finish_with_demo_success_without_state_mutation(
+    client: TestClient,
+) -> None:
+    session_id = _start_keeper_dashboard_session(client)
+    _advance_keeper_dashboard_session(client, session_id)
+    fake_service = _SequencedOneShotLocalLLMService()
+    client.app.state.local_llm_service = fake_service
+    before_snapshot = _get_snapshot(client, session_id)
+
+    response = client.post(
+        f"/app/sessions/{session_id}/experimental-ai-demo/one-shot-run",
+        data={
+            "investigator_id": "investigator-1",
+            "max_turns": "6",
+        },
+    )
+
+    assert response.status_code == 200
+    html = response.text
+    assert "One-shot Self-play Demo Run" in html
+    assert "one-shot self-play demo run 已结束：成功。" in html
+    assert "结束状态：成功。" in html
+    assert "结束原因：已形成连续、可读且带 continuity 的受控 demo mini-arc。" in html
+    assert "共自动运行 3 轮 / 最大 6 轮。" in html
+    assert "Turn 1" in html
+    assert "Turn 2" in html
+    assert "Turn 3" in html
+    assert "最终 keeper continuity" in html
+    assert "最终 visible continuity" in html
+    assert "不会写入 authoritative state" in html
+    assert len(fake_service.requests) == 12
+    assert [request.workspace_key for request in fake_service.requests] == [
+        "experimental_ai_kp_demo",
+        "experimental_ai_investigator_demo",
+        "experimental_ai_keeper_continuity_draft",
+        "experimental_ai_visible_continuity_draft",
+        "experimental_ai_kp_demo",
+        "experimental_ai_investigator_demo",
+        "experimental_ai_keeper_continuity_draft",
+        "experimental_ai_visible_continuity_draft",
+        "experimental_ai_kp_demo",
+        "experimental_ai_investigator_demo",
+        "experimental_ai_keeper_continuity_draft",
+        "experimental_ai_visible_continuity_draft",
+    ]
+    for llm_request in fake_service.requests:
+        serialized_context = str(llm_request.context)
+        if llm_request.workspace_key in {
+            "experimental_ai_investigator_demo",
+            "experimental_ai_visible_continuity_draft",
+        }:
+            assert "private_notes" not in serialized_context
+            assert "secret_state_refs" not in serialized_context
+            assert "keeper_workflow" not in serialized_context
+    after_snapshot = _get_snapshot(client, session_id)
+    assert before_snapshot == after_snapshot
+
+
+def test_web_app_experimental_ai_demo_one_shot_run_stops_at_turn_limit_when_demo_arc_not_complete(
+    client: TestClient,
+) -> None:
+    session_id = _start_keeper_dashboard_session(client)
+    _advance_keeper_dashboard_session(client, session_id)
+    fake_service = _SequencedOneShotLocalLLMService()
+    client.app.state.local_llm_service = fake_service
+    before_snapshot = _get_snapshot(client, session_id)
+
+    response = client.post(
+        f"/app/sessions/{session_id}/experimental-ai-demo/one-shot-run",
+        data={
+            "investigator_id": "investigator-1",
+            "max_turns": "2",
+        },
+    )
+
+    assert response.status_code == 200
+    html = response.text
+    assert "one-shot self-play demo run 已结束：达到轮数上限。" in html
+    assert "结束状态：达到轮数上限。" in html
+    assert "结束原因：达到当前受控 one-shot demo run 的最大轮数上限。" in html
+    assert "共自动运行 2 轮 / 最大 2 轮。" in html
+    assert len(fake_service.requests) == 8
+    after_snapshot = _get_snapshot(client, session_id)
+    assert before_snapshot == after_snapshot
+
+
+def test_web_app_experimental_ai_demo_one_shot_run_can_fail_on_stagnation_without_state_mutation(
+    client: TestClient,
+) -> None:
+    session_id = _start_keeper_dashboard_session(client)
+    _advance_keeper_dashboard_session(client, session_id)
+    fake_service = _FakeLocalLLMService()
+    client.app.state.local_llm_service = fake_service
+    before_snapshot = _get_snapshot(client, session_id)
+
+    response = client.post(
+        f"/app/sessions/{session_id}/experimental-ai-demo/one-shot-run",
+        data={
+            "investigator_id": "investigator-1",
+            "max_turns": "6",
+        },
+    )
+
+    assert response.status_code == 200
+    html = response.text
+    assert "one-shot self-play demo run 已结束：失败。" in html
+    assert "结束状态：失败。" in html
+    assert "结束原因：连续多轮没有出现新的 run-local 推进点，判定为空转。" in html
+    assert "共自动运行 3 轮 / 最大 6 轮。" in html
+    assert len(fake_service.requests) == 12
+    after_snapshot = _get_snapshot(client, session_id)
+    assert before_snapshot == after_snapshot
+
+
+def test_web_app_experimental_ai_demo_one_shot_run_aborts_on_visible_secret_breach(
+    client: TestClient,
+) -> None:
+    session_id = _start_keeper_dashboard_session(client)
+    _advance_keeper_dashboard_session(client, session_id)
+    fake_service = _SecretBreachOneShotLocalLLMService()
+    client.app.state.local_llm_service = fake_service
+    before_snapshot = _get_snapshot(client, session_id)
+
+    response = client.post(
+        f"/app/sessions/{session_id}/experimental-ai-demo/one-shot-run",
+        data={
+            "investigator_id": "investigator-1",
+            "max_turns": "4",
+        },
+    )
+
+    assert response.status_code == 200
+    html = response.text
+    assert "one-shot self-play demo run 已结束：中止。" in html
+    assert "结束状态：中止。" in html
+    assert "结束原因：visible-side 输出触碰 keeper-only 线索标题，当前 run 中止。" in html
+    assert "可见侧命中禁区词：储物间账本残页" in html
+    assert len(fake_service.requests) == 4
+    after_snapshot = _get_snapshot(client, session_id)
+    assert before_snapshot == after_snapshot
+
+
+def test_web_app_experimental_ai_demo_one_shot_run_aborts_cleanly_when_llm_disabled(
+    client: TestClient,
+) -> None:
+    session_id = _start_keeper_dashboard_session(client)
+    _advance_keeper_dashboard_session(client, session_id)
+    before_snapshot = _get_snapshot(client, session_id)
+
+    response = client.post(
+        f"/app/sessions/{session_id}/experimental-ai-demo/one-shot-run",
+        data={
+            "investigator_id": "investigator-1",
+            "max_turns": "3",
+        },
+    )
+
+    assert response.status_code == 200
+    html = response.text
+    assert "one-shot self-play demo run 已结束：中止。" in html
+    assert "结束状态：中止。" in html
+    assert "结束原因：实验块未返回可用结构化输出，当前 run 中止。" in html
+    assert "错误摘要：当前未启用本地 LLM；主流程不依赖它。" in html
     after_snapshot = _get_snapshot(client, session_id)
     assert before_snapshot == after_snapshot
 
