@@ -115,6 +115,26 @@ class _FakeLocalLLMService:
             suggested_questions = ["204 房登记是否和地窖搬运时间有关？"]
             draft_text = "调查员会先盯住账册缺页和住客编号，再顺势追问老板为何回避 204 房。"
             safety_notes = ["只基于可见信息。", "不会自动执行检定或推进状态。"]
+        if request.workspace_key == "experimental_ai_keeper_continuity_draft":
+            title = "Keeper continuity bridge 草稿"
+            summary = "这是 experimental / non-authoritative 的 keeper continuity 草稿。"
+            bullets = ["保留老板回避和二楼脚步声造成的下一轮压力。"]
+            suggested_questions = ["下一轮是否继续把压力推向 204 房和二楼动静？"]
+            draft_text = (
+                "Keeper 暂定保留账册缺页、老板回避和二楼脚步声作为下一轮内部 continuity，"
+                "并把压力从账房转向 204 房与楼上传来的异常动静。"
+            )
+            safety_notes = ["仅用于当前页 continuity bridge 起草。", "不会自动推进剧情或写入 authoritative state。"]
+        if request.workspace_key == "experimental_ai_visible_continuity_draft":
+            title = "Visible continuity bridge 草稿"
+            summary = "这是 experimental / non-authoritative 的 visible continuity 草稿。"
+            bullets = ["调查员只确认到账册缺页、老板回避和二楼脚步声。"]
+            suggested_questions = ["下一轮是否继续公开追问 204 房记录？"]
+            draft_text = (
+                "调查员目前只确认了账册缺页、老板回避和二楼脚步声，"
+                "下一轮可继续沿 204 房登记与楼上动静公开追问。"
+            )
+            safety_notes = ["只基于公开可见信息起草。", "不会自动推进剧情或写入 authoritative state。"]
         return LocalLLMAssistantResult(
             status="success",
             workspace_key=request.workspace_key,
@@ -471,6 +491,98 @@ def test_web_app_experimental_ai_demo_next_turn_uses_page_local_continuity_bridg
     assert "private_notes" not in serialized_investigator_context
     assert "secret_state_refs" not in serialized_investigator_context
     assert "Keeper 实际采纳了老板先否认" not in html
+    after_snapshot = _get_snapshot(client, session_id)
+    assert before_snapshot == after_snapshot
+
+
+def test_web_app_experimental_ai_demo_result_page_can_trigger_continuity_bridge_drafting(
+    client: TestClient,
+) -> None:
+    session_id = _start_keeper_dashboard_session(client)
+    _advance_keeper_dashboard_session(client, session_id)
+    fake_service = _FakeLocalLLMService()
+    client.app.state.local_llm_service = fake_service
+
+    response = client.post(
+        f"/app/sessions/{session_id}/experimental-ai-demo/run",
+        data={"investigator_id": "investigator-1"},
+    )
+
+    assert response.status_code == 200
+    html = response.text
+    assert 'formaction="/app/sessions/' in html
+    assert '/experimental-ai-demo/draft-continuity"' in html
+    assert "起草 continuity bridge 草稿" in html
+    assert 'name="current_kp_result_json"' in html
+    assert 'name="current_investigator_result_json"' in html
+    assert 'name="keeper_turn_outcome_note"' in html
+    assert 'name="visible_turn_outcome_note"' in html
+    assert len(fake_service.requests) == 2
+
+
+def test_web_app_experimental_ai_demo_draft_continuity_prefills_dual_textareas_without_state_mutation(
+    client: TestClient,
+) -> None:
+    session_id = _start_keeper_dashboard_session(client)
+    _advance_keeper_dashboard_session(client, session_id)
+    fake_service = _FakeLocalLLMService()
+    client.app.state.local_llm_service = fake_service
+    before_snapshot = _get_snapshot(client, session_id)
+    kp_result = _make_experimental_result(
+        workspace_key="experimental_ai_kp_demo",
+        task_label="AI KP 剧情支架提案",
+        title="AI KP 剧情支架提案",
+        summary="这是 experimental / non-authoritative 的 AI KP 候选叙事输出。",
+    )
+    investigator_result = _make_experimental_result(
+        workspace_key="experimental_ai_investigator_demo",
+        task_label="AI Investigator 行动提案",
+        title="AI Investigator 行动提案",
+        summary="这是 experimental / non-authoritative 的调查员行动提案。",
+    )
+
+    response = client.post(
+        f"/app/sessions/{session_id}/experimental-ai-demo/draft-continuity",
+        data={
+            "investigator_id": "investigator-1",
+            "current_turn_index": "1",
+            "current_kp_result_json": kp_result.model_dump_json(),
+            "current_investigator_result_json": investigator_result.model_dump_json(),
+            "current_kp_has_keeper_continuity": "1",
+            "current_kp_has_visible_continuity": "1",
+            "current_investigator_has_visible_continuity": "1",
+            "evaluation_label": "continuity 写法 2",
+            "evaluation_note": "先验证 continuity 草稿是否足够顺手。",
+        },
+    )
+
+    assert response.status_code == 200
+    html = response.text
+    assert "已起草 continuity bridge 草稿并填入当前页 textarea；仍需 Keeper 人工审阅、修改并手工触发下一轮。" in html
+    assert "已填入 keeper continuity bridge 草稿；仍需人工审阅、修改或清空。" in html
+    assert "已填入公开 continuity bridge 草稿；仍需人工审阅、修改或清空。" in html
+    assert "Keeper 暂定保留账册缺页、老板回避和二楼脚步声作为下一轮内部 continuity" in html
+    assert "调查员目前只确认了账册缺页、老板回避和二楼脚步声" in html
+    assert 'name="keeper_turn_outcome_note"' in html
+    assert 'name="visible_turn_outcome_note"' in html
+    assert 'name="evaluation_label" value="continuity 写法 2"' in html
+    assert len(fake_service.requests) == 2
+    keeper_request = fake_service.requests[0]
+    visible_request = fake_service.requests[1]
+    assert keeper_request.workspace_key == "experimental_ai_keeper_continuity_draft"
+    assert visible_request.workspace_key == "experimental_ai_visible_continuity_draft"
+    assert "compressed_context" in keeper_request.context
+    assert "current_ai_kp_output" in keeper_request.context
+    assert "current_ai_investigator_output" in keeper_request.context
+    assert keeper_request.context["evaluation_hint"]["label"] == "continuity 写法 2"
+    assert "compressed_context" not in visible_request.context
+    assert "current_ai_kp_output" not in visible_request.context
+    serialized_visible_context = str(visible_request.context)
+    assert "private_notes" not in serialized_visible_context
+    assert "secret_state_refs" not in serialized_visible_context
+    assert "keeper_workflow" not in serialized_visible_context
+    assert "evaluation_hint" not in visible_request.context
+    assert "Keeper 暂定保留账册缺页" not in serialized_visible_context
     after_snapshot = _get_snapshot(client, session_id)
     assert before_snapshot == after_snapshot
 

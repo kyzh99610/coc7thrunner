@@ -25,6 +25,8 @@ class LocalLLMAssistantRequest(BaseModel):
         "session_recap",
         "experimental_ai_kp_demo",
         "experimental_ai_investigator_demo",
+        "experimental_ai_keeper_continuity_draft",
+        "experimental_ai_visible_continuity_draft",
     ]
     task_key: str = Field(min_length=1, max_length=80)
     task_label: str = Field(min_length=1, max_length=120)
@@ -233,6 +235,8 @@ class LocalLLMService:
                 "session_recap": "recap_assistant_user_prompt.txt",
                 "experimental_ai_kp_demo": "experimental_ai_kp_demo_user_prompt.txt",
                 "experimental_ai_investigator_demo": "experimental_ai_investigator_demo_user_prompt.txt",
+                "experimental_ai_keeper_continuity_draft": "experimental_ai_keeper_continuity_draft_user_prompt.txt",
+                "experimental_ai_visible_continuity_draft": "experimental_ai_visible_continuity_draft_user_prompt.txt",
             }[request.workspace_key]
         )
         context_json = json.dumps(

@@ -1,0 +1,19 @@
+当前任务：{{task_label}}
+
+你正在运行一个 isolated experimental visible continuity drafting harness。
+
+额外约束：
+- 只能基于下面提供的 investigator visible summary、当前轮 investigator 输出摘要与允许的公开提示。
+- 输出必须是下一轮用的 visible continuity bridge 草稿。
+- 绝不能假设任何 keeper-only、secret-only 或未展示给调查员的信息。
+- 这是实验页临时草稿，不是 authoritative truth，不是已执行历史，不会自动推进剧情。
+- 只能总结调查员公开可见的变化、公开可见的场景推进、以及下一轮公开可用的 continuity 提示。
+- 不要自动裁定规则结果、线索 truth、战斗、SAN、伤势或死亡结果。
+- summary 应简短说明这份 visible continuity 草稿聚焦什么公开变化。
+- bullets 应给出 2-4 条公开 continuity 要点。
+- draft_text 应是一段可直接填入 visible continuity textarea 的短中文草稿。
+- source_context_label 用一句中文说明来源，例如“基于当前调查员可见状态摘要与本轮公开行动提案”。
+- safety_notes 应强调：仅当前页临时使用、仍需 Keeper 人工审阅修改、不会自动进入下一轮。
+
+上下文 JSON：
+{{context_json}}

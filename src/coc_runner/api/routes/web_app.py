@@ -152,6 +152,12 @@ EXPERIMENTAL_AI_KP_DEMO_TASKS: dict[str, str] = {
 EXPERIMENTAL_AI_INVESTIGATOR_DEMO_TASKS: dict[str, str] = {
     "demo_loop": "AI Investigator 行动提案",
 }
+EXPERIMENTAL_AI_KEEPER_CONTINUITY_DRAFT_TASKS: dict[str, str] = {
+    "draft_bridge": "Keeper continuity bridge 草稿",
+}
+EXPERIMENTAL_AI_VISIBLE_CONTINUITY_DRAFT_TASKS: dict[str, str] = {
+    "draft_bridge": "Visible continuity bridge 草稿",
+}
 EXPERIMENTAL_DEMO_RUBRIC_FIELD_LABELS: dict[str, str] = {
     "kp_scene_coherence": "AI KP：scene framing 连贯性",
     "kp_pressure_reasonableness": "AI KP：pressure / next beat 合理性",
@@ -1812,6 +1818,81 @@ def _build_experimental_ai_investigator_demo_context(
     return context
 
 
+def _build_experimental_demo_evaluation_hint(
+    evaluation_state: Mapping[str, str] | None,
+) -> dict[str, Any] | None:
+    if not evaluation_state:
+        return None
+    label = _normalize_form_text(evaluation_state.get("evaluation_label")) or ""
+    note = _normalize_form_text(evaluation_state.get("evaluation_note")) or ""
+    if not label and not note:
+        return None
+    payload: dict[str, Any] = {}
+    if label:
+        payload["label"] = label
+    if note:
+        payload["note"] = note
+    return payload or None
+
+
+def _build_experimental_keeper_continuity_draft_context(
+    *,
+    snapshot: dict[str, Any],
+    compressed_context: dict[str, Any],
+    kp_result: LocalLLMAssistantResult | None,
+    investigator_result: LocalLLMAssistantResult | None,
+    evaluation_state: Mapping[str, str] | None = None,
+) -> dict[str, Any]:
+    current_scene, beat_id, beat_title = _scene_and_beat(snapshot)
+    context = {
+        "session": {
+            "session_id": snapshot.get("session_id"),
+            "scenario_title": (snapshot.get("scenario") or {}).get("title"),
+            "status": snapshot.get("status"),
+            "current_scene": current_scene,
+            "current_beat": beat_id,
+            "current_beat_title": beat_title,
+        },
+        "compressed_context": compressed_context,
+        "current_ai_kp_output": _assistant_result_turn_bridge_payload(kp_result),
+        "current_ai_investigator_output": _assistant_result_turn_bridge_payload(
+            investigator_result
+        ),
+        "guardrail": {
+            "mode": "experimental_demo_continuity_draft",
+            "non_authoritative": True,
+            "page_local_only": True,
+            "auto_advance_allowed": False,
+        },
+    }
+    evaluation_hint = _build_experimental_demo_evaluation_hint(evaluation_state)
+    if evaluation_hint:
+        context["evaluation_hint"] = evaluation_hint
+    return context
+
+
+def _build_experimental_visible_continuity_draft_context(
+    *,
+    viewer_id: str,
+    view: dict[str, Any],
+    investigator_result: LocalLLMAssistantResult | None,
+) -> dict[str, Any]:
+    context = _build_experimental_ai_investigator_demo_context(
+        viewer_id=viewer_id,
+        view=view,
+    )
+    context["current_ai_investigator_output"] = _assistant_result_turn_bridge_payload(
+        investigator_result
+    )
+    context["guardrail"] = {
+        "mode": "experimental_demo_visible_continuity_draft",
+        "non_authoritative": True,
+        "page_local_only": True,
+        "keeper_only_fields_included": False,
+    }
+    return context
+
+
 def _assistant_result_turn_bridge_payload(
     result: LocalLLMAssistantResult | None,
 ) -> dict[str, str] | None:
@@ -1967,6 +2048,25 @@ def _normalize_experimental_demo_rubric_state(
     if free_note:
         state["evaluation_note"] = free_note
     return state
+
+
+def _render_hidden_experimental_demo_evaluation_state_inputs(
+    evaluation_state: Mapping[str, str] | None,
+) -> str:
+    if not evaluation_state:
+        return ""
+    parts: list[str] = []
+    for field_name in (
+        ["evaluation_label"]
+        + list(EXPERIMENTAL_DEMO_RUBRIC_FIELD_LABELS.keys())
+        + ["evaluation_note"]
+    ):
+        value = _normalize_form_text(evaluation_state.get(field_name)) or ""
+        if value:
+            parts.append(
+                f'<input type="hidden" name="{escape(field_name)}" value="{escape(value)}">'
+            )
+    return "".join(parts)
 
 
 def _build_keeper_context_pack_payload(
@@ -2318,22 +2418,41 @@ def _render_experimental_ai_demo_turn_loop_form(
     session_id: str,
     selected_investigator_id: str,
     current_turn_index: int,
+    kp_result: LocalLLMAssistantResult | None,
+    investigator_result: LocalLLMAssistantResult | None,
     kp_payload: dict[str, str] | None,
     investigator_payload: dict[str, str] | None,
+    kp_turn_bridge: dict[str, Any] | None = None,
+    investigator_turn_bridge: dict[str, Any] | None = None,
+    evaluation_state: Mapping[str, str] | None = None,
     keeper_turn_note_value: str = "",
     visible_turn_note_value: str = "",
+    keeper_draft_applied: bool = False,
+    visible_draft_applied: bool = False,
 ) -> str:
     if (
         current_turn_index <= 0
         or not selected_investigator_id
         or kp_payload is None
         or investigator_payload is None
+        or kp_result is None
+        or investigator_result is None
     ):
         return ""
     prior_kp_summary = _normalize_form_text(kp_payload.get("summary")) or "上一轮 AI KP 摘要暂缺。"
     prior_investigator_summary = (
         _normalize_form_text(investigator_payload.get("summary"))
         or "上一轮 AI investigator 摘要暂缺。"
+    )
+    draft_echo_lines: list[str] = []
+    if keeper_draft_applied:
+        draft_echo_lines.append("已填入 keeper continuity bridge 草稿；仍需人工审阅、修改或清空。")
+    if visible_draft_applied:
+        draft_echo_lines.append("已填入公开 continuity bridge 草稿；仍需人工审阅、修改或清空。")
+    draft_echo_html = (
+        f'<article class="assistant-source-echo"><div class="list-head"><h3>当前页草稿填充</h3><span class="tag">drafted</span></div><ul class="meta-list">{"".join(f"<li>{escape(line)}</li>" for line in draft_echo_lines)}</ul></article>'
+        if draft_echo_lines
+        else ""
     )
     return f"""
       <section class="surface">
@@ -2349,15 +2468,22 @@ def _render_experimental_ai_demo_turn_loop_form(
           <li>上一轮 AI investigator 摘要：{escape(prior_investigator_summary)}</li>
           <li>说明：这些补充只作为当前页临时 continuity bridge，不会写入 authoritative state。</li>
         </ul>
+        {draft_echo_html}
         <form method="post" action="/app/sessions/{escape(session_id)}/experimental-ai-demo/run" class="form-stack">
           <input type="hidden" name="investigator_id" value="{escape(selected_investigator_id)}">
           <input type="hidden" name="current_turn_index" value="{current_turn_index}">
+          <input type="hidden" name="current_kp_result_json" value="{escape(_assistant_result_hidden_json(kp_result))}">
+          <input type="hidden" name="current_investigator_result_json" value="{escape(_assistant_result_hidden_json(investigator_result))}">
+          <input type="hidden" name="current_kp_has_keeper_continuity" value="{1 if kp_turn_bridge and _normalize_form_text(kp_turn_bridge.get('keeper_adoption_and_outcome_note')) else 0}">
+          <input type="hidden" name="current_kp_has_visible_continuity" value="{1 if kp_turn_bridge and _normalize_form_text(kp_turn_bridge.get('public_outcome_note')) else 0}">
+          <input type="hidden" name="current_investigator_has_visible_continuity" value="{1 if investigator_turn_bridge and _normalize_form_text(investigator_turn_bridge.get('public_outcome_note')) else 0}">
           <input type="hidden" name="previous_kp_title" value="{escape(kp_payload.get('title') or '')}">
           <input type="hidden" name="previous_kp_summary" value="{escape(kp_payload.get('summary') or '')}">
           <input type="hidden" name="previous_kp_draft_excerpt" value="{escape(kp_payload.get('draft_excerpt') or '')}">
           <input type="hidden" name="previous_investigator_title" value="{escape(investigator_payload.get('title') or '')}">
           <input type="hidden" name="previous_investigator_summary" value="{escape(investigator_payload.get('summary') or '')}">
           <input type="hidden" name="previous_investigator_draft_excerpt" value="{escape(investigator_payload.get('draft_excerpt') or '')}">
+          {_render_hidden_experimental_demo_evaluation_state_inputs(evaluation_state)}
           <label>
             上一轮实际结果 / Keeper 采纳情况（仅 AI KP 可见）
             <textarea name="keeper_turn_outcome_note" rows="4" placeholder="例如：实际让秦老板先否认，再露出对 204 房登记的回避；当前压力从缺页账册转到二楼动静。">{escape(keeper_turn_note_value)}</textarea>
@@ -2366,6 +2492,7 @@ def _render_experimental_ai_demo_turn_loop_form(
             上一轮公开可见结果摘要（供 AI Investigator 下一轮使用）
             <textarea name="visible_turn_outcome_note" rows="3" placeholder="例如：老板回避了 204 房登记，调查员注意到账册缺页和二楼脚步声。">{escape(visible_turn_note_value)}</textarea>
           </label>
+          <button class="button-button ghost" type="submit" formaction="/app/sessions/{escape(session_id)}/experimental-ai-demo/draft-continuity">起草 continuity bridge 草稿</button>
           <button class="button-button secondary" type="submit">生成下一轮实验回合</button>
         </form>
       </section>
@@ -2382,6 +2509,10 @@ def _render_experimental_ai_demo_evaluation_rubric(
     kp_turn_bridge: dict[str, Any] | None = None,
     investigator_turn_bridge: dict[str, Any] | None = None,
     evaluation_state: Mapping[str, str] | None = None,
+    keeper_turn_note_value: str = "",
+    visible_turn_note_value: str = "",
+    keeper_draft_applied: bool = False,
+    visible_draft_applied: bool = False,
 ) -> str:
     if (
         current_turn_index <= 0
@@ -2480,6 +2611,10 @@ def _render_experimental_ai_demo_evaluation_rubric(
           <input type="hidden" name="current_kp_has_keeper_continuity" value="{1 if kp_turn_bridge and _normalize_form_text(kp_turn_bridge.get('keeper_adoption_and_outcome_note')) else 0}">
           <input type="hidden" name="current_kp_has_visible_continuity" value="{1 if kp_turn_bridge and _normalize_form_text(kp_turn_bridge.get('public_outcome_note')) else 0}">
           <input type="hidden" name="current_investigator_has_visible_continuity" value="{1 if investigator_turn_bridge and _normalize_form_text(investigator_turn_bridge.get('public_outcome_note')) else 0}">
+          <input type="hidden" name="current_keeper_turn_outcome_note" value="{escape(keeper_turn_note_value)}">
+          <input type="hidden" name="current_visible_turn_outcome_note" value="{escape(visible_turn_note_value)}">
+          <input type="hidden" name="current_keeper_draft_applied" value="{1 if keeper_draft_applied else 0}">
+          <input type="hidden" name="current_visible_draft_applied" value="{1 if visible_draft_applied else 0}">
           <label>
             当前实验标签 / 比较说明（可选）
             <input type="text" name="evaluation_label" value="{escape(evaluation_label)}" maxlength="120" placeholder="例如：continuity 写法 2 / 更激进的 KP framing / temp 低">
@@ -5268,6 +5403,10 @@ def _render_experimental_ai_demo_page(
     kp_turn_bridge: dict[str, Any] | None = None,
     investigator_turn_bridge: dict[str, Any] | None = None,
     evaluation_state: Mapping[str, str] | None = None,
+    keeper_turn_note_value: str = "",
+    visible_turn_note_value: str = "",
+    keeper_draft_applied: bool = False,
+    visible_draft_applied: bool = False,
     notice: str | None = None,
     detail: dict[str, Any] | str | None = None,
 ) -> HTMLResponse:
@@ -5381,8 +5520,17 @@ def _render_experimental_ai_demo_page(
                 session_id=session_id,
                 selected_investigator_id=selected_investigator_id or "",
                 current_turn_index=current_turn_index,
+                kp_result=kp_result,
+                investigator_result=investigator_result,
                 kp_payload=kp_turn_payload,
                 investigator_payload=investigator_turn_payload,
+                kp_turn_bridge=kp_turn_bridge,
+                investigator_turn_bridge=investigator_turn_bridge,
+                evaluation_state=evaluation_state,
+                keeper_turn_note_value=keeper_turn_note_value,
+                visible_turn_note_value=visible_turn_note_value,
+                keeper_draft_applied=keeper_draft_applied,
+                visible_draft_applied=visible_draft_applied,
             )}
             {_render_experimental_ai_demo_evaluation_rubric(
                 session_id=session_id,
@@ -5393,6 +5541,10 @@ def _render_experimental_ai_demo_page(
                 kp_turn_bridge=kp_turn_bridge,
                 investigator_turn_bridge=investigator_turn_bridge,
                 evaluation_state=evaluation_state,
+                keeper_turn_note_value=keeper_turn_note_value,
+                visible_turn_note_value=visible_turn_note_value,
+                keeper_draft_applied=keeper_draft_applied,
+                visible_draft_applied=visible_draft_applied,
             )}
           </div>
         </section>
@@ -5609,6 +5761,10 @@ def _render_app_experimental_ai_demo_from_service(
     kp_turn_bridge: dict[str, Any] | None = None,
     investigator_turn_bridge: dict[str, Any] | None = None,
     evaluation_state: Mapping[str, str] | None = None,
+    keeper_turn_note_value: str = "",
+    visible_turn_note_value: str = "",
+    keeper_draft_applied: bool = False,
+    visible_draft_applied: bool = False,
     notice: str | None = None,
     detail: dict[str, Any] | str | None = None,
     status_code: int = status.HTTP_200_OK,
@@ -5685,6 +5841,10 @@ def _render_app_experimental_ai_demo_from_service(
         kp_turn_bridge=kp_turn_bridge,
         investigator_turn_bridge=investigator_turn_bridge,
         evaluation_state=evaluation_state,
+        keeper_turn_note_value=keeper_turn_note_value,
+        visible_turn_note_value=visible_turn_note_value,
+        keeper_draft_applied=keeper_draft_applied,
+        visible_draft_applied=visible_draft_applied,
         notice=notice,
         detail=detail,
     )
@@ -5853,6 +6013,7 @@ async def web_app_experimental_ai_demo_run(
     form = await _read_form_payload(request)
     selected_investigator_id = _normalize_form_text(form.get("investigator_id"))
     previous_turn_index = _parse_turn_index(form.get("current_turn_index"))
+    evaluation_state = _normalize_experimental_demo_rubric_state(form)
     previous_kp_payload = _turn_bridge_payload_from_form(form, prefix="previous_kp")
     previous_investigator_payload = _turn_bridge_payload_from_form(
         form,
@@ -5968,7 +6129,174 @@ async def web_app_experimental_ai_demo_run(
         current_turn_index=next_turn_index,
         kp_turn_bridge=kp_turn_bridge,
         investigator_turn_bridge=investigator_turn_bridge,
+        evaluation_state=evaluation_state,
         notice=continuation_notice,
+    )
+
+
+@router.post("/sessions/{session_id}/experimental-ai-demo/draft-continuity", response_class=HTMLResponse)
+async def web_app_experimental_ai_demo_draft_continuity(
+    session_id: str,
+    request: Request,
+    service: SessionService = Depends(get_session_service),
+    local_llm_service: LocalLLMService = Depends(get_local_llm_service),
+) -> HTMLResponse:
+    form = await _read_form_payload(request)
+    selected_investigator_id = _normalize_form_text(form.get("investigator_id"))
+    current_turn_index = _parse_turn_index(form.get("current_turn_index"))
+    kp_result = _assistant_result_from_hidden_json(form.get("current_kp_result_json"))
+    investigator_result = _assistant_result_from_hidden_json(
+        form.get("current_investigator_result_json")
+    )
+    evaluation_state = _normalize_experimental_demo_rubric_state(form)
+    existing_keeper_turn_note = (
+        _normalize_form_text(form.get("keeper_turn_outcome_note")) or ""
+    )
+    existing_visible_turn_note = (
+        _normalize_form_text(form.get("visible_turn_outcome_note")) or ""
+    )
+    kp_turn_bridge = _build_experimental_kp_echo_bridge_from_flags(
+        has_keeper_continuity=_form_flag_enabled(
+            form.get("current_kp_has_keeper_continuity")
+        ),
+        has_visible_continuity=_form_flag_enabled(
+            form.get("current_kp_has_visible_continuity")
+        ),
+    )
+    investigator_turn_bridge = _build_experimental_investigator_echo_bridge_from_flags(
+        has_visible_continuity=_form_flag_enabled(
+            form.get("current_investigator_has_visible_continuity")
+        ),
+    )
+    if kp_result is None or investigator_result is None:
+        return _render_app_experimental_ai_demo_from_service(
+            service=service,
+            session_id=session_id,
+            local_llm_service=local_llm_service,
+            selected_investigator_id=selected_investigator_id,
+            detail="当前无法恢复本轮 experimental demo 输出；请重新运行实验回合后再起草 continuity bridge。",
+            status_code=status.HTTP_400_BAD_REQUEST,
+        )
+    try:
+        session, keeper_view, _, _ = service.get_keeper_workspace(session_id)
+    except LookupError as exc:
+        body = _detail_block(extract_error_detail(exc)) + _page_head(
+            eyebrow="Experimental AI Demo",
+            title="Experimental AI Demo 不可用",
+            summary="当前无法加载实验 harness 所需的 keeper workspace。",
+            actions=[("返回 Sessions", "/app/sessions", "ghost")],
+        )
+        return render_web_app_shell(
+            title=f"Session {session_id} Experimental AI Demo Missing",
+            sidebar_html=_render_sidebar(active_section="keeper"),
+            body_html=body,
+            status_code=status.HTTP_404_NOT_FOUND,
+        )
+    snapshot = session.model_dump(mode="json")
+    participants = [
+        participant
+        for participant in snapshot.get("participants") or []
+        if isinstance(participant, dict)
+    ]
+    candidates = _demo_investigator_candidates(
+        participants,
+        keeper_id=snapshot.get("keeper_id"),
+    )
+    candidate_ids = {
+        str(item.get("actor_id") or "")
+        for item in candidates
+        if str(item.get("actor_id") or "")
+    }
+    resolved_investigator_id = selected_investigator_id
+    if not resolved_investigator_id and candidates:
+        resolved_investigator_id = str(candidates[0].get("actor_id") or "")
+    if not resolved_investigator_id or resolved_investigator_id not in candidate_ids:
+        return _render_app_experimental_ai_demo_from_service(
+            service=service,
+            session_id=session_id,
+            local_llm_service=local_llm_service,
+            selected_investigator_id=resolved_investigator_id,
+            kp_result=kp_result,
+            investigator_result=investigator_result,
+            current_turn_index=current_turn_index,
+            kp_turn_bridge=kp_turn_bridge,
+            investigator_turn_bridge=investigator_turn_bridge,
+            evaluation_state=evaluation_state,
+            keeper_turn_note_value=existing_keeper_turn_note,
+            visible_turn_note_value=existing_visible_turn_note,
+            detail="当前无法建立可用的 investigator visible summary；请先选择一个有效调查员视角。",
+            status_code=status.HTTP_404_NOT_FOUND,
+        )
+    investigator_view = service.get_session_view(
+        session_id,
+        viewer_id=resolved_investigator_id,
+        viewer_role=ViewerRole.INVESTIGATOR,
+    ).model_dump(mode="json")
+    context_pack = service.build_keeper_context_pack_from_workspace(
+        session=session,
+        keeper_view=keeper_view,
+    ).model_dump(mode="json")
+    compressed_context = _build_keeper_compressed_context_payload(
+        service=service,
+        context_pack=context_pack,
+    )
+    keeper_draft_result = _generate_local_llm_assistant(
+        local_llm_service=local_llm_service,
+        workspace_key="experimental_ai_keeper_continuity_draft",
+        task_key="draft_bridge",
+        task_label=EXPERIMENTAL_AI_KEEPER_CONTINUITY_DRAFT_TASKS["draft_bridge"],
+        context=_build_experimental_keeper_continuity_draft_context(
+            snapshot=snapshot,
+            compressed_context=compressed_context,
+            kp_result=kp_result,
+            investigator_result=investigator_result,
+            evaluation_state=evaluation_state,
+        ),
+    )
+    visible_draft_result = _generate_local_llm_assistant(
+        local_llm_service=local_llm_service,
+        workspace_key="experimental_ai_visible_continuity_draft",
+        task_key="draft_bridge",
+        task_label=EXPERIMENTAL_AI_VISIBLE_CONTINUITY_DRAFT_TASKS["draft_bridge"],
+        context=_build_experimental_visible_continuity_draft_context(
+            viewer_id=resolved_investigator_id,
+            view=investigator_view,
+            investigator_result=investigator_result,
+        ),
+    )
+    keeper_draft_text = _normalize_form_text(
+        ((keeper_draft_result.assistant or None) and (keeper_draft_result.assistant or None).draft_text)
+    ) or existing_keeper_turn_note
+    visible_draft_text = _normalize_form_text(
+        ((visible_draft_result.assistant or None) and (visible_draft_result.assistant or None).draft_text)
+    ) or existing_visible_turn_note
+    keeper_draft_applied = bool(
+        keeper_draft_result.assistant and _normalize_form_text(keeper_draft_result.assistant.draft_text)
+    )
+    visible_draft_applied = bool(
+        visible_draft_result.assistant and _normalize_form_text(visible_draft_result.assistant.draft_text)
+    )
+    notice = (
+        "已起草 continuity bridge 草稿并填入当前页 textarea；仍需 Keeper 人工审阅、修改并手工触发下一轮。"
+        if keeper_draft_applied or visible_draft_applied
+        else "当前未生成可用的 continuity bridge 草稿；主流程不受影响。"
+    )
+    return _render_app_experimental_ai_demo_from_service(
+        service=service,
+        session_id=session_id,
+        local_llm_service=local_llm_service,
+        selected_investigator_id=resolved_investigator_id,
+        kp_result=kp_result,
+        investigator_result=investigator_result,
+        current_turn_index=current_turn_index,
+        kp_turn_bridge=kp_turn_bridge,
+        investigator_turn_bridge=investigator_turn_bridge,
+        evaluation_state=evaluation_state,
+        keeper_turn_note_value=keeper_draft_text,
+        visible_turn_note_value=visible_draft_text,
+        keeper_draft_applied=keeper_draft_applied,
+        visible_draft_applied=visible_draft_applied,
+        notice=notice,
     )
 
 
@@ -5987,6 +6315,14 @@ async def web_app_experimental_ai_demo_evaluate(
         form.get("current_investigator_result_json")
     )
     evaluation_state = _normalize_experimental_demo_rubric_state(form)
+    keeper_turn_note_value = (
+        _normalize_form_text(form.get("current_keeper_turn_outcome_note")) or ""
+    )
+    visible_turn_note_value = (
+        _normalize_form_text(form.get("current_visible_turn_outcome_note")) or ""
+    )
+    keeper_draft_applied = _form_flag_enabled(form.get("current_keeper_draft_applied"))
+    visible_draft_applied = _form_flag_enabled(form.get("current_visible_draft_applied"))
     kp_turn_bridge = _build_experimental_kp_echo_bridge_from_flags(
         has_keeper_continuity=_form_flag_enabled(
             form.get("current_kp_has_keeper_continuity")
@@ -6020,6 +6356,10 @@ async def web_app_experimental_ai_demo_evaluate(
         kp_turn_bridge=kp_turn_bridge,
         investigator_turn_bridge=investigator_turn_bridge,
         evaluation_state=evaluation_state,
+        keeper_turn_note_value=keeper_turn_note_value,
+        visible_turn_note_value=visible_turn_note_value,
+        keeper_draft_applied=keeper_draft_applied,
+        visible_draft_applied=visible_draft_applied,
         notice="已记录当前页实验评估；仅用于当前页比较，不会写入主状态，也不会跨刷新保留。",
     )
 

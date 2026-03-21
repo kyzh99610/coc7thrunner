@@ -1,0 +1,19 @@
+当前任务：{{task_label}}
+
+你正在运行一个 isolated experimental keeper continuity drafting harness。
+
+额外约束：
+- 只能基于下面提供的 keeper-side compressed context、当前轮 AI 输出摘要和允许的页内评估提示。
+- 输出必须是下一轮用的 keeper-side continuity bridge 草稿。
+- 这是实验页临时草稿，不是 authoritative truth，不是已执行历史，不会自动推进剧情。
+- 可以总结 Keeper 可能采纳了什么、当前压力如何变化、下一轮内部需要记住什么。
+- 不要把任何内容写成已经写入 session state 或已经确认的世界事实。
+- 不要自动裁定规则结果、线索 truth、战斗、SAN、伤势或死亡结果。
+- summary 应简短说明这份 keeper continuity 草稿聚焦什么变化。
+- bullets 应给出 2-4 条 keeper 侧 continuity 要点。
+- draft_text 应是一段可直接填入 continuity textarea 的短中文草稿。
+- source_context_label 用一句中文说明来源，例如“基于当前实验轮的 AI KP / AI investigator 输出与 keeper-side compressed context”。
+- safety_notes 应强调：仅当前页临时使用、仍需 Keeper 人工审阅修改、不会自动进入下一轮。
+
+上下文 JSON：
+{{context_json}}

@@ -101,6 +101,45 @@ def _experimental_ai_investigator_demo_request() -> LocalLLMAssistantRequest:
     )
 
 
+def _experimental_ai_keeper_continuity_draft_request() -> LocalLLMAssistantRequest:
+    return LocalLLMAssistantRequest(
+        workspace_key="experimental_ai_keeper_continuity_draft",
+        task_key="draft_bridge",
+        task_label="Keeper continuity bridge 草稿",
+        context={
+            "compressed_context": {
+                "situation_summary": "账房里的缺页记录和二楼动静构成当前压力。",
+                "next_focus": ["确认 204 房登记与楼上动静的关系。"],
+            },
+            "current_ai_kp_output": {
+                "title": "AI KP 剧情支架提案",
+                "summary": "建议把老板的回避和二楼压力一起立起来。",
+            },
+            "current_ai_investigator_output": {
+                "title": "AI Investigator 行动提案",
+                "summary": "调查员会先追问 204 房登记。",
+            },
+        },
+    )
+
+
+def _experimental_ai_visible_continuity_draft_request() -> LocalLLMAssistantRequest:
+    return LocalLLMAssistantRequest(
+        workspace_key="experimental_ai_visible_continuity_draft",
+        task_key="draft_bridge",
+        task_label="Visible continuity bridge 草稿",
+        context={
+            "viewer": {"actor_id": "investigator-1", "display_name": "林舟"},
+            "session": {"session_id": "session-1", "current_scene": "旅店账房"},
+            "current_ai_investigator_output": {
+                "title": "AI Investigator 行动提案",
+                "summary": "先确认缺页，再试探老板对 204 房的反应。",
+            },
+            "recent_events": [{"event_type": "player_action", "text": "调查员注意到账册缺页。"}],
+        },
+    )
+
+
 def test_local_llm_service_disabled_short_circuits_provider() -> None:
     provider = _RecordingProvider(
         '{"title":"t","summary":"s","bullets":[],"suggested_questions":[],"draft_text":null,"safety_notes":[]}'
@@ -235,3 +274,51 @@ def test_local_llm_service_supports_experimental_ai_investigator_demo_prompt_tem
     assert result.assistant is not None
     assert "isolated experimental AI investigator demo harness" in provider.user_prompt
     assert "当前任务：AI Investigator 行动提案" in provider.user_prompt
+
+
+def test_local_llm_service_supports_experimental_keeper_continuity_draft_prompt_template() -> None:
+    provider = _RecordingProvider(
+        """
+        {
+          "title": "Keeper continuity bridge 草稿",
+          "summary": "这是 experimental / non-authoritative 的 keeper continuity 草稿。",
+          "bullets": ["保留老板回避 204 房登记这条内部压力。"],
+          "suggested_questions": ["下一轮是否要把压力推向二楼动静？"],
+          "draft_text": "可先把老板回避与二楼脚步声并列成下一轮的 keeper continuity。",
+          "source_context_label": "基于当前实验轮的 AI KP / AI investigator 输出与 keeper-side compressed context。",
+          "safety_notes": ["仅当前页临时使用。", "不会自动进入下一轮。"]
+        }
+        """
+    )
+    service = LocalLLMService(provider, enabled=True)
+
+    result = service.generate_assistant(_experimental_ai_keeper_continuity_draft_request())
+
+    assert result.status == "success"
+    assert result.assistant is not None
+    assert "isolated experimental keeper continuity drafting harness" in provider.user_prompt
+    assert "当前任务：Keeper continuity bridge 草稿" in provider.user_prompt
+
+
+def test_local_llm_service_supports_experimental_visible_continuity_draft_prompt_template() -> None:
+    provider = _RecordingProvider(
+        """
+        {
+          "title": "Visible continuity bridge 草稿",
+          "summary": "这是 experimental / non-authoritative 的 visible continuity 草稿。",
+          "bullets": ["老板回避 204 房登记，调查员注意到账册缺页。"],
+          "suggested_questions": ["是否继续追问 204 房？"],
+          "draft_text": "调查员目前只确认了账册缺页和老板的回避，下一轮可继续沿 204 房追问。",
+          "source_context_label": "基于当前调查员可见状态摘要与本轮公开行动提案。",
+          "safety_notes": ["仅当前页临时使用。", "不会自动进入下一轮。"]
+        }
+        """
+    )
+    service = LocalLLMService(provider, enabled=True)
+
+    result = service.generate_assistant(_experimental_ai_visible_continuity_draft_request())
+
+    assert result.status == "success"
+    assert result.assistant is not None
+    assert "isolated experimental visible continuity drafting harness" in provider.user_prompt
+    assert "当前任务：Visible continuity bridge 草稿" in provider.user_prompt
