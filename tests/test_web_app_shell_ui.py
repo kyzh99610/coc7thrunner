@@ -136,6 +136,31 @@ class _FakeLocalLLMService:
         )
 
 
+def _make_experimental_result(
+    *,
+    workspace_key: str,
+    task_label: str,
+    title: str,
+    summary: str,
+) -> LocalLLMAssistantResult:
+    return LocalLLMAssistantResult(
+        status="success",
+        workspace_key=workspace_key,
+        task_key="demo_loop",
+        task_label=task_label,
+        provider_name="stub-local",
+        model="stub-model",
+        assistant=LocalLLMAssistantPayload(
+            title=title,
+            summary=summary,
+            bullets=["要点一", "要点二"],
+            suggested_questions=["下一步还要确认什么？"],
+            draft_text="这是一段实验输出草稿。",
+            safety_notes=["不会直接修改 authoritative state。"],
+        ),
+    )
+
+
 def _register_text_source(
     client: TestClient,
     *,
@@ -286,6 +311,7 @@ def test_web_app_experimental_ai_demo_page_loads_without_breaking_keeper_shell_w
     assert 'action="/app/sessions/' in html
     assert 'name="keeper_turn_outcome_note"' not in html
     assert 'name="visible_turn_outcome_note"' not in html
+    assert "当前页实验评估" not in html
 
 
 def test_keeper_compressed_context_builder_stays_short_and_secret_safe(
@@ -346,6 +372,10 @@ def test_web_app_experimental_ai_demo_run_keeps_kp_and_investigator_inputs_isola
     assert "不含 keeper-only 信息" in html
     assert "experimental / non-authoritative" in html
     assert "为下一轮补充上一轮实际结果 / Keeper 采纳情况" in html
+    assert "当前页实验评估" in html
+    assert "AI KP：scene framing 连贯性" in html
+    assert 'action="/app/sessions/' in html
+    assert 'name="evaluation_note"' in html
     assert 'name="keeper_turn_outcome_note"' in html
     assert 'name="visible_turn_outcome_note"' in html
     assert 'name="current_turn_index" value="1"' in html
@@ -442,6 +472,65 @@ def test_web_app_experimental_ai_demo_next_turn_uses_page_local_continuity_bridg
     assert "Keeper 实际采纳了老板先否认" not in html
     after_snapshot = _get_snapshot(client, session_id)
     assert before_snapshot == after_snapshot
+
+
+def test_web_app_experimental_ai_demo_evaluation_rubric_stays_page_local_and_non_authoritative(
+    client: TestClient,
+) -> None:
+    session_id = _start_keeper_dashboard_session(client)
+    _advance_keeper_dashboard_session(client, session_id)
+    before_snapshot = _get_snapshot(client, session_id)
+    kp_result = _make_experimental_result(
+        workspace_key="experimental_ai_kp_demo",
+        task_label="AI KP 剧情支架提案",
+        title="AI KP 剧情支架提案",
+        summary="这是 experimental / non-authoritative 的 AI KP 候选叙事输出。",
+    )
+    investigator_result = _make_experimental_result(
+        workspace_key="experimental_ai_investigator_demo",
+        task_label="AI Investigator 行动提案",
+        title="AI Investigator 行动提案",
+        summary="这是 experimental / non-authoritative 的调查员行动提案。",
+    )
+
+    response = client.post(
+        f"/app/sessions/{session_id}/experimental-ai-demo/evaluate",
+        data={
+            "investigator_id": "investigator-1",
+            "current_turn_index": "2",
+            "current_kp_result_json": kp_result.model_dump_json(),
+            "current_investigator_result_json": investigator_result.model_dump_json(),
+            "current_kp_has_keeper_continuity": "1",
+            "current_kp_has_visible_continuity": "1",
+            "current_investigator_has_visible_continuity": "1",
+            "kp_scene_coherence": "good",
+            "kp_pressure_reasonableness": "mixed",
+            "investigator_visible_fit": "good",
+            "investigator_action_value": "mixed",
+            "continuity_stability": "good",
+            "drift_or_leak_risk": "good",
+            "evaluation_note": "第二轮连续性更稳，但调查员提案略有重复。",
+        },
+    )
+
+    assert response.status_code == 200
+    html = response.text
+    assert "已记录当前页实验评估" in html
+    assert "当前页评估回显" in html
+    assert "AI KP：scene framing 连贯性：好" in html
+    assert "AI KP：pressure / next beat 合理性：一般" in html
+    assert "第二轮连续性更稳，但调查员提案略有重复。" in html
+    assert "不会写入 authoritative state" in html
+    after_snapshot = _get_snapshot(client, session_id)
+    assert before_snapshot == after_snapshot
+
+    refresh_response = client.get(f"/app/sessions/{session_id}/experimental-ai-demo")
+
+    assert refresh_response.status_code == 200
+    refresh_html = refresh_response.text
+    assert "已记录当前页实验评估" not in refresh_html
+    assert "当前页评估回显" not in refresh_html
+    assert "第二轮连续性更稳，但调查员提案略有重复。" not in refresh_html
 
 
 def test_web_app_keeper_workspace_surfaces_pending_ops_and_legacy_handoffs(

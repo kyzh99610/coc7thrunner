@@ -152,6 +152,19 @@ EXPERIMENTAL_AI_KP_DEMO_TASKS: dict[str, str] = {
 EXPERIMENTAL_AI_INVESTIGATOR_DEMO_TASKS: dict[str, str] = {
     "demo_loop": "AI Investigator 行动提案",
 }
+EXPERIMENTAL_DEMO_RUBRIC_FIELD_LABELS: dict[str, str] = {
+    "kp_scene_coherence": "AI KP：scene framing 连贯性",
+    "kp_pressure_reasonableness": "AI KP：pressure / next beat 合理性",
+    "investigator_visible_fit": "AI investigator：是否符合 visible state",
+    "investigator_action_value": "AI investigator：行动是否具体且有推进价值",
+    "continuity_stability": "多轮 continuity 稳定性",
+    "drift_or_leak_risk": "是否出现泄密 / 漂移 / 重复 / 空转",
+}
+EXPERIMENTAL_DEMO_RUBRIC_VALUE_LABELS: dict[str, str] = {
+    "good": "好",
+    "mixed": "一般",
+    "poor": "差",
+}
 
 
 def _status_label(status_value: Any) -> str:
@@ -1891,6 +1904,68 @@ def _build_experimental_ai_investigator_turn_bridge(
     return bridge
 
 
+def _assistant_result_hidden_json(
+    result: LocalLLMAssistantResult | None,
+) -> str:
+    if result is None:
+        return ""
+    return result.model_dump_json()
+
+
+def _assistant_result_from_hidden_json(
+    raw_value: Any,
+) -> LocalLLMAssistantResult | None:
+    normalized = _normalize_form_text(raw_value)
+    if not normalized:
+        return None
+    try:
+        return LocalLLMAssistantResult.model_validate_json(normalized)
+    except ValidationError:
+        return None
+
+
+def _form_flag_enabled(raw_value: Any) -> bool:
+    return _normalize_form_text(raw_value) in {"1", "true", "yes", "on"}
+
+
+def _build_experimental_kp_echo_bridge_from_flags(
+    *,
+    has_keeper_continuity: bool,
+    has_visible_continuity: bool,
+) -> dict[str, Any] | None:
+    if not has_keeper_continuity and not has_visible_continuity:
+        return None
+    bridge: dict[str, Any] = {}
+    if has_keeper_continuity:
+        bridge["keeper_adoption_and_outcome_note"] = "used"
+    if has_visible_continuity:
+        bridge["public_outcome_note"] = "used"
+    return bridge
+
+
+def _build_experimental_investigator_echo_bridge_from_flags(
+    *,
+    has_visible_continuity: bool,
+) -> dict[str, Any] | None:
+    if not has_visible_continuity:
+        return None
+    return {"public_outcome_note": "used"}
+
+
+def _normalize_experimental_demo_rubric_state(
+    form: Mapping[str, Any],
+) -> dict[str, str]:
+    state: dict[str, str] = {}
+    for field_name in EXPERIMENTAL_DEMO_RUBRIC_FIELD_LABELS:
+        value = _normalize_form_text(form.get(field_name)) or ""
+        if value in EXPERIMENTAL_DEMO_RUBRIC_VALUE_LABELS:
+            state[field_name] = value
+    free_note = _normalize_form_text(form.get("evaluation_note")) or ""
+    if free_note:
+        state["evaluation_note"] = free_note
+    return state
+
+
 def _build_keeper_context_pack_payload(
     *,
     service: SessionService,
@@ -2289,6 +2364,118 @@ def _render_experimental_ai_demo_turn_loop_form(
             <textarea name="visible_turn_outcome_note" rows="3" placeholder="例如：老板回避了 204 房登记，调查员注意到账册缺页和二楼脚步声。">{escape(visible_turn_note_value)}</textarea>
           </label>
           <button class="button-button secondary" type="submit">生成下一轮实验回合</button>
+        </form>
+      </section>
+    """
+
+
+def _render_experimental_ai_demo_evaluation_rubric(
+    *,
+    session_id: str,
+    selected_investigator_id: str,
+    current_turn_index: int,
+    kp_result: LocalLLMAssistantResult | None,
+    investigator_result: LocalLLMAssistantResult | None,
+    kp_turn_bridge: dict[str, Any] | None = None,
+    investigator_turn_bridge: dict[str, Any] | None = None,
+    evaluation_state: Mapping[str, str] | None = None,
+) -> str:
+    if (
+        current_turn_index <= 0
+        or not selected_investigator_id
+        or kp_result is None
+        or investigator_result is None
+    ):
+        return ""
+    evaluation_state = dict(evaluation_state or {})
+    options_html = "".join(
+        f'<option value="{escape(value)}"{{selected}}>{escape(label)}</option>'
+        for value, label in EXPERIMENTAL_DEMO_RUBRIC_VALUE_LABELS.items()
+    )
+    field_html_parts: list[str] = []
+    summary_items: list[str] = []
+    for field_name, field_label in EXPERIMENTAL_DEMO_RUBRIC_FIELD_LABELS.items():
+        selected_value = evaluation_state.get(field_name, "")
+        selected_label = EXPERIMENTAL_DEMO_RUBRIC_VALUE_LABELS.get(selected_value)
+        rendered_options = options_html.replace(
+            "{selected}",
+            "",
+        )
+        if selected_value and selected_label:
+            rendered_options = "".join(
+                (
+                    f'<option value="">未评</option>',
+                    "".join(
+                        f'<option value="{escape(value)}"{" selected" if value == selected_value else ""}>{escape(label)}</option>'
+                        for value, label in EXPERIMENTAL_DEMO_RUBRIC_VALUE_LABELS.items()
+                    ),
+                )
+            )
+            summary_items.append(f"<li>{escape(field_label)}：{escape(selected_label)}</li>")
+        else:
+            rendered_options = "".join(
+                (
+                    '<option value="" selected>未评</option>',
+                    "".join(
+                        f'<option value="{escape(value)}">{escape(label)}</option>'
+                        for value, label in EXPERIMENTAL_DEMO_RUBRIC_VALUE_LABELS.items()
+                    ),
+                )
+            )
+        field_html_parts.append(
+            f"""
+            <label>
+              {escape(field_label)}
+              <select name="{escape(field_name)}">
+                {rendered_options}
+              </select>
+            </label>
+            """
+        )
+    evaluation_note = evaluation_state.get("evaluation_note", "")
+    summary_html = ""
+    if summary_items or evaluation_note:
+        note_html = (
+            f"<p class=\"helper\">备注：{escape(evaluation_note)}</p>"
+            if evaluation_note
+            else ""
+        )
+        summary_html = f"""
+          <div class="card-list">
+            <article class="assistant-source-echo">
+              <div class="list-head">
+                <h3>当前页评估回显</h3>
+                <span class="tag">keeper review</span>
+              </div>
+              <ul class="meta-list">{''.join(summary_items)}</ul>
+              {note_html}
+            </article>
+          </div>
+        """
+    return f"""
+      <section class="surface">
+        <div class="surface-header">
+          <div>
+            <h2>当前页实验评估</h2>
+            <p>只用于 keeper 比较当前轮或当前次实验的质量，不会写入 authoritative state，也不会跨刷新持久化。</p>
+          </div>
+          <span class="tag warn">page-local rubric</span>
+        </div>
+        {summary_html}
+        <form method="post" action="/app/sessions/{escape(session_id)}/experimental-ai-demo/evaluate" class="form-stack">
+          <input type="hidden" name="investigator_id" value="{escape(selected_investigator_id)}">
+          <input type="hidden" name="current_turn_index" value="{current_turn_index}">
+          <input type="hidden" name="current_kp_result_json" value="{escape(_assistant_result_hidden_json(kp_result))}">
+          <input type="hidden" name="current_investigator_result_json" value="{escape(_assistant_result_hidden_json(investigator_result))}">
+          <input type="hidden" name="current_kp_has_keeper_continuity" value="{1 if kp_turn_bridge and _normalize_form_text(kp_turn_bridge.get('keeper_adoption_and_outcome_note')) else 0}">
+          <input type="hidden" name="current_kp_has_visible_continuity" value="{1 if kp_turn_bridge and _normalize_form_text(kp_turn_bridge.get('public_outcome_note')) else 0}">
+          <input type="hidden" name="current_investigator_has_visible_continuity" value="{1 if investigator_turn_bridge and _normalize_form_text(investigator_turn_bridge.get('public_outcome_note')) else 0}">
+          {''.join(field_html_parts)}
+          <label>
+            评估备注（可选）
+            <textarea name="evaluation_note" rows="3" placeholder="例如：KP 开场更稳了，但 investigator 提案第二轮开始略重复。">{escape(evaluation_note)}</textarea>
+          </label>
+          <button class="button-button secondary" type="submit">记录当前页评估</button>
         </form>
       </section>
     """
@@ -5066,6 +5253,7 @@ def _render_experimental_ai_demo_page(
     current_turn_index: int = 0,
     kp_turn_bridge: dict[str, Any] | None = None,
     investigator_turn_bridge: dict[str, Any] | None = None,
+    evaluation_state: Mapping[str, str] | None = None,
     notice: str | None = None,
     detail: dict[str, Any] | str | None = None,
 ) -> HTMLResponse:
@@ -5181,6 +5369,16 @@ def _render_experimental_ai_demo_page(
                 current_turn_index=current_turn_index,
                 kp_payload=kp_turn_payload,
                 investigator_payload=investigator_turn_payload,
+            )}
+            {_render_experimental_ai_demo_evaluation_rubric(
+                session_id=session_id,
+                selected_investigator_id=selected_investigator_id or "",
+                current_turn_index=current_turn_index,
+                kp_result=kp_result,
+                investigator_result=investigator_result,
+                kp_turn_bridge=kp_turn_bridge,
+                investigator_turn_bridge=investigator_turn_bridge,
+                evaluation_state=evaluation_state,
             )}
           </div>
         </section>
@@ -5396,6 +5594,7 @@ def _render_app_experimental_ai_demo_from_service(
     current_turn_index: int = 0,
     kp_turn_bridge: dict[str, Any] | None = None,
     investigator_turn_bridge: dict[str, Any] | None = None,
+    evaluation_state: Mapping[str, str] | None = None,
     notice: str | None = None,
     detail: dict[str, Any] | str | None = None,
     status_code: int = status.HTTP_200_OK,
@@ -5471,6 +5670,7 @@ def _render_app_experimental_ai_demo_from_service(
         current_turn_index=current_turn_index,
         kp_turn_bridge=kp_turn_bridge,
         investigator_turn_bridge=investigator_turn_bridge,
+        evaluation_state=evaluation_state,
         notice=notice,
         detail=detail,
     )
@@ -5755,6 +5955,58 @@ async def web_app_experimental_ai_demo_run(
         kp_turn_bridge=kp_turn_bridge,
         investigator_turn_bridge=investigator_turn_bridge,
         notice=continuation_notice,
+    )
+
+
+@router.post("/sessions/{session_id}/experimental-ai-demo/evaluate", response_class=HTMLResponse)
+async def web_app_experimental_ai_demo_evaluate(
+    session_id: str,
+    request: Request,
+    service: SessionService = Depends(get_session_service),
+    local_llm_service: LocalLLMService = Depends(get_local_llm_service),
+) -> HTMLResponse:
+    form = await _read_form_payload(request)
+    selected_investigator_id = _normalize_form_text(form.get("investigator_id"))
+    current_turn_index = _parse_turn_index(form.get("current_turn_index"))
+    kp_result = _assistant_result_from_hidden_json(form.get("current_kp_result_json"))
+    investigator_result = _assistant_result_from_hidden_json(
+        form.get("current_investigator_result_json")
+    )
+    evaluation_state = _normalize_experimental_demo_rubric_state(form)
+    kp_turn_bridge = _build_experimental_kp_echo_bridge_from_flags(
+        has_keeper_continuity=_form_flag_enabled(
+            form.get("current_kp_has_keeper_continuity")
+        ),
+        has_visible_continuity=_form_flag_enabled(
+            form.get("current_kp_has_visible_continuity")
+        ),
+    )
+    investigator_turn_bridge = _build_experimental_investigator_echo_bridge_from_flags(
+        has_visible_continuity=_form_flag_enabled(
+            form.get("current_investigator_has_visible_continuity")
+        ),
+    )
+    if kp_result is None or investigator_result is None:
+        return _render_app_experimental_ai_demo_from_service(
+            service=service,
+            session_id=session_id,
+            local_llm_service=local_llm_service,
+            selected_investigator_id=selected_investigator_id,
+            detail="当前无法恢复本轮 experimental demo 输出；请重新运行实验回合后再做页内评估。",
+            status_code=status.HTTP_400_BAD_REQUEST,
+        )
+    return _render_app_experimental_ai_demo_from_service(
+        service=service,
+        session_id=session_id,
+        local_llm_service=local_llm_service,
+        selected_investigator_id=selected_investigator_id,
+        kp_result=kp_result,
+        investigator_result=investigator_result,
+        current_turn_index=current_turn_index,
+        kp_turn_bridge=kp_turn_bridge,
+        investigator_turn_bridge=investigator_turn_bridge,
+        evaluation_state=evaluation_state,
+        notice="已记录当前页实验评估；仅用于当前页比较，不会写入主状态，也不会跨刷新保留。",
     )
 
 
