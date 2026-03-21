@@ -328,6 +328,7 @@ def test_web_app_experimental_ai_demo_page_loads_without_breaking_keeper_shell_w
     assert "AI Investigator Demo Output" in html
     assert "Local LLM 未启用" in html
     assert "不会自动写入主状态" in html
+    assert "运行 self-play 预演链" in html
     assert 'action="/app/sessions/' in html
     assert 'name="keeper_turn_outcome_note"' not in html
     assert 'name="visible_turn_outcome_note"' not in html
@@ -519,7 +520,83 @@ def test_web_app_experimental_ai_demo_result_page_can_trigger_continuity_bridge_
     assert 'name="visible_turn_outcome_note"' in html
     assert "keeper draft 起草来源" not in html
     assert "visible draft 起草来源" not in html
+    assert "运行 self-play 预演链" in html
     assert len(fake_service.requests) == 2
+
+
+def test_web_app_experimental_ai_demo_self_play_preview_runs_ordered_chain_and_prefills_dual_drafts(
+    client: TestClient,
+) -> None:
+    session_id = _start_keeper_dashboard_session(client)
+    _advance_keeper_dashboard_session(client, session_id)
+    fake_service = _FakeLocalLLMService()
+    client.app.state.local_llm_service = fake_service
+    before_snapshot = _get_snapshot(client, session_id)
+
+    response = client.post(
+        f"/app/sessions/{session_id}/experimental-ai-demo/self-play-preview",
+        data={
+            "investigator_id": "investigator-1",
+            "current_turn_index": "1",
+            "previous_kp_title": "AI KP 剧情支架提案",
+            "previous_kp_summary": "这是 experimental / non-authoritative 的 AI KP 候选叙事输出。",
+            "previous_kp_draft_excerpt": "KP 可先用潮气、旧账册和老板的短暂失态开场。",
+            "previous_investigator_title": "AI Investigator 行动提案",
+            "previous_investigator_summary": "这是 experimental / non-authoritative 的调查员行动提案。",
+            "previous_investigator_draft_excerpt": "调查员会先盯住账册缺页和住客编号。",
+            "keeper_turn_outcome_note": "Keeper 实际采纳了老板先否认、再对 204 房登记表现回避，并把压力推进到二楼脚步声。",
+            "visible_turn_outcome_note": "老板回避 204 房登记，调查员注意到账册缺页和二楼脚步声。",
+            "evaluation_label": "self-play preview / continuity 写法 2",
+            "evaluation_note": "观察一次点击串联后的连续性是否更顺。",
+        },
+    )
+
+    assert response.status_code == 200
+    html = response.text
+    assert "已串行预演第 2 轮 self-play preview chain，并将 dual continuity drafts 回填到当前页 textarea；仍需 Keeper 人工审阅，不会自动提交或继续下一轮。" in html
+    assert "Self-play Orchestration Preview" in html
+    assert "Step 1 · AI KP preview" in html
+    assert "Step 2 · AI investigator preview" in html
+    assert "Step 3 · keeper continuity draft" in html
+    assert "Step 4 · visible continuity draft" in html
+    assert "keeper draft 起草来源" in html
+    assert "visible draft 起草来源" in html
+    assert "已填入 keeper continuity bridge 草稿；仍需人工审阅、修改或清空。" in html
+    assert "已填入公开 continuity bridge 草稿；仍需人工审阅、修改或清空。" in html
+    assert "Keeper 暂定保留账册缺页、老板回避和二楼脚步声作为下一轮内部 continuity" in html
+    assert "调查员目前只确认了账册缺页、老板回避和二楼脚步声" in html
+    assert 'name="current_turn_index" value="2"' in html
+    assert "生成下一轮实验回合" in html
+    assert len(fake_service.requests) == 4
+    kp_request = fake_service.requests[0]
+    investigator_request = fake_service.requests[1]
+    keeper_draft_request = fake_service.requests[2]
+    visible_draft_request = fake_service.requests[3]
+    assert kp_request.workspace_key == "experimental_ai_kp_demo"
+    assert investigator_request.workspace_key == "experimental_ai_investigator_demo"
+    assert keeper_draft_request.workspace_key == "experimental_ai_keeper_continuity_draft"
+    assert visible_draft_request.workspace_key == "experimental_ai_visible_continuity_draft"
+    assert kp_request.context["turn_bridge"]["previous_turn_index"] == 1
+    assert kp_request.context["turn_bridge"]["keeper_adoption_and_outcome_note"].startswith("Keeper 实际采纳了")
+    assert kp_request.context["turn_bridge"]["public_outcome_note"].startswith("老板回避 204 房登记")
+    assert "compressed_context" not in investigator_request.context
+    serialized_investigator_context = str(investigator_request.context)
+    assert "private_notes" not in serialized_investigator_context
+    assert "secret_state_refs" not in serialized_investigator_context
+    assert "keeper_workflow" not in serialized_investigator_context
+    assert "compressed_context" in keeper_draft_request.context
+    assert "current_ai_kp_output" in keeper_draft_request.context
+    assert "current_ai_investigator_output" in keeper_draft_request.context
+    assert keeper_draft_request.context["evaluation_hint"]["label"] == "self-play preview / continuity 写法 2"
+    assert "compressed_context" not in visible_draft_request.context
+    assert "current_ai_kp_output" not in visible_draft_request.context
+    serialized_visible_context = str(visible_draft_request.context)
+    assert "private_notes" not in serialized_visible_context
+    assert "secret_state_refs" not in serialized_visible_context
+    assert "keeper_workflow" not in serialized_visible_context
+    assert "Keeper 实际采纳了" not in serialized_visible_context
+    after_snapshot = _get_snapshot(client, session_id)
+    assert before_snapshot == after_snapshot
 
 
 def test_web_app_experimental_ai_demo_draft_continuity_prefills_dual_textareas_without_state_mutation(

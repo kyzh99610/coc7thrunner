@@ -2458,6 +2458,91 @@ def _render_experimental_ai_demo_output_block(
     """
 
 
+def _render_experimental_ai_demo_preview_chain(
+    *,
+    current_turn_index: int,
+    kp_result: LocalLLMAssistantResult | None,
+    investigator_result: LocalLLMAssistantResult | None,
+    keeper_draft_result: LocalLLMAssistantResult | None,
+    visible_draft_result: LocalLLMAssistantResult | None,
+) -> str:
+    if (
+        kp_result is None
+        and investigator_result is None
+        and keeper_draft_result is None
+        and visible_draft_result is None
+    ):
+        return ""
+
+    def _step_card(
+        *,
+        step_index: int,
+        title: str,
+        result: LocalLLMAssistantResult | None,
+        summary: str,
+    ) -> str:
+        assistant = result.assistant if result is not None else None
+        step_summary = _normalize_form_text(assistant.summary) if assistant is not None else ""
+        if result is None:
+            status_label = "not-run"
+        elif result.status == "success":
+            status_label = "ready"
+        else:
+            status_label = result.status
+        return f"""
+          <article class="assistant-source-echo">
+            <div class="list-head">
+              <h3>Step {step_index} · {escape(title)}</h3>
+              <span class="tag">{escape(status_label)}</span>
+            </div>
+            <p class="helper">{escape(summary)}</p>
+            {
+                f'<p>{escape(step_summary)}</p>'
+                if step_summary
+                else '<p class="empty">当前没有可显示的结果摘要。</p>'
+            }
+          </article>
+        """
+
+    return f"""
+      <section class="surface">
+        <div class="surface-header">
+          <div>
+            <h2>Self-play Orchestration Preview</h2>
+            <p>本次一次点击串行预演 AI KP、AI investigator、keeper continuity draft 与 visible continuity draft；只是 preview chain，不会自动提交或进入下一轮。当前预演轮次：{escape(str(current_turn_index or "未开始"))}</p>
+          </div>
+          <span class="tag warn">preview chain</span>
+        </div>
+        <div class="card-list">
+          {_step_card(
+              step_index=1,
+              title="AI KP preview",
+              result=kp_result,
+              summary="先产出当前 scene framing / pressure / next beat 候选建议。",
+          )}
+          {_step_card(
+              step_index=2,
+              title="AI investigator preview",
+              result=investigator_result,
+              summary="再产出 investigator visible-side 行动提案。",
+          )}
+          {_step_card(
+              step_index=3,
+              title="keeper continuity draft",
+              result=keeper_draft_result,
+              summary="随后起草 keeper-side continuity bridge，并回填 textarea 供人工审阅。",
+          )}
+          {_step_card(
+              step_index=4,
+              title="visible continuity draft",
+              result=visible_draft_result,
+              summary="最后起草 visible continuity bridge，并回填 textarea，但不会自动提交。",
+          )}
+        </div>
+      </section>
+    """
+
+
 def _render_experimental_ai_demo_turn_loop_form(
     *,
     session_id: str,
@@ -2545,6 +2630,7 @@ def _render_experimental_ai_demo_turn_loop_form(
             <textarea name="visible_turn_outcome_note" rows="3" placeholder="例如：老板回避了 204 房登记，调查员注意到账册缺页和二楼脚步声。">{escape(visible_turn_note_value)}</textarea>
           </label>
           <button class="button-button ghost" type="submit" formaction="/app/sessions/{escape(session_id)}/experimental-ai-demo/draft-continuity">起草 continuity bridge 草稿</button>
+          <button class="button-button ghost" type="submit" formaction="/app/sessions/{escape(session_id)}/experimental-ai-demo/self-play-preview">运行 self-play 预演链</button>
           <button class="button-button secondary" type="submit">生成下一轮实验回合</button>
         </form>
       </section>
@@ -5459,6 +5545,7 @@ def _render_experimental_ai_demo_page(
     visible_turn_note_value: str = "",
     keeper_draft_applied: bool = False,
     visible_draft_applied: bool = False,
+    orchestration_preview_html: str = "",
     notice: str | None = None,
     detail: dict[str, Any] | str | None = None,
 ) -> HTMLResponse:
@@ -5510,7 +5597,10 @@ def _render_experimental_ai_demo_page(
                   Investigator 视角
                   <select name="investigator_id">{options_html}</select>
                 </label>
-                <button class="button-button secondary" type="submit">{initial_run_button_label}</button>
+                <div class="toolbar">
+                  <button class="button-button secondary" type="submit">{initial_run_button_label}</button>
+                  <button class="button-button ghost" type="submit" formaction="/app/sessions/{escape(session_id)}/experimental-ai-demo/self-play-preview">运行 self-play 预演链</button>
+                </div>
               </form>
               '''
               if options_html
@@ -5529,6 +5619,7 @@ def _render_experimental_ai_demo_page(
             )}
           </div>
           <div class="card-list">
+            {orchestration_preview_html}
             {_render_experimental_ai_demo_output_block(
                 title="AI KP Demo Output",
                 summary="候选的 scene framing / pressure / next beat / NPC reaction 草稿，仅供 Keeper 比较。",
@@ -5817,6 +5908,7 @@ def _render_app_experimental_ai_demo_from_service(
     visible_turn_note_value: str = "",
     keeper_draft_applied: bool = False,
     visible_draft_applied: bool = False,
+    orchestration_preview_html: str = "",
     notice: str | None = None,
     detail: dict[str, Any] | str | None = None,
     status_code: int = status.HTTP_200_OK,
@@ -5897,6 +5989,7 @@ def _render_app_experimental_ai_demo_from_service(
         visible_turn_note_value=visible_turn_note_value,
         keeper_draft_applied=keeper_draft_applied,
         visible_draft_applied=visible_draft_applied,
+        orchestration_preview_html=orchestration_preview_html,
         notice=notice,
         detail=detail,
     )
@@ -6183,6 +6276,186 @@ async def web_app_experimental_ai_demo_run(
         investigator_turn_bridge=investigator_turn_bridge,
         evaluation_state=evaluation_state,
         notice=continuation_notice,
+    )
+
+
+@router.post("/sessions/{session_id}/experimental-ai-demo/self-play-preview", response_class=HTMLResponse)
+async def web_app_experimental_ai_demo_self_play_preview(
+    session_id: str,
+    request: Request,
+    service: SessionService = Depends(get_session_service),
+    local_llm_service: LocalLLMService = Depends(get_local_llm_service),
+) -> HTMLResponse:
+    form = await _read_form_payload(request)
+    selected_investigator_id = _normalize_form_text(form.get("investigator_id"))
+    previous_turn_index = _parse_turn_index(form.get("current_turn_index"))
+    evaluation_state = _normalize_experimental_demo_rubric_state(form)
+    previous_kp_payload = _turn_bridge_payload_from_form(form, prefix="previous_kp")
+    previous_investigator_payload = _turn_bridge_payload_from_form(
+        form,
+        prefix="previous_investigator",
+    )
+    existing_keeper_turn_note = (
+        _normalize_form_text(form.get("keeper_turn_outcome_note")) or ""
+    )
+    existing_visible_turn_note = (
+        _normalize_form_text(form.get("visible_turn_outcome_note")) or ""
+    )
+    try:
+        session, keeper_view, _, _ = service.get_keeper_workspace(session_id)
+    except LookupError as exc:
+        body = _detail_block(extract_error_detail(exc)) + _page_head(
+            eyebrow="Experimental AI Demo",
+            title="Experimental AI Demo 不可用",
+            summary="当前无法加载实验 harness 所需的 keeper workspace。",
+            actions=[("返回 Sessions", "/app/sessions", "ghost")],
+        )
+        return render_web_app_shell(
+            title=f"Session {session_id} Experimental AI Demo Missing",
+            sidebar_html=_render_sidebar(active_section="keeper"),
+            body_html=body,
+            status_code=status.HTTP_404_NOT_FOUND,
+        )
+    snapshot = session.model_dump(mode="json")
+    participants = [
+        participant
+        for participant in snapshot.get("participants") or []
+        if isinstance(participant, dict)
+    ]
+    candidates = _demo_investigator_candidates(
+        participants,
+        keeper_id=snapshot.get("keeper_id"),
+    )
+    candidate_ids = {
+        str(item.get("actor_id") or "")
+        for item in candidates
+        if str(item.get("actor_id") or "")
+    }
+    resolved_investigator_id = selected_investigator_id
+    if not resolved_investigator_id and candidates:
+        resolved_investigator_id = str(candidates[0].get("actor_id") or "")
+    if not resolved_investigator_id or resolved_investigator_id not in candidate_ids:
+        return _render_app_experimental_ai_demo_from_service(
+            service=service,
+            session_id=session_id,
+            local_llm_service=local_llm_service,
+            selected_investigator_id=resolved_investigator_id,
+            detail="当前无法建立可用的 investigator visible summary；请先选择一个有效调查员视角。",
+            status_code=status.HTTP_404_NOT_FOUND,
+        )
+    investigator_view = service.get_session_view(
+        session_id,
+        viewer_id=resolved_investigator_id,
+        viewer_role=ViewerRole.INVESTIGATOR,
+    ).model_dump(mode="json")
+    context_pack = service.build_keeper_context_pack_from_workspace(
+        session=session,
+        keeper_view=keeper_view,
+    ).model_dump(mode="json")
+    compressed_context = _build_keeper_compressed_context_payload(
+        service=service,
+        context_pack=context_pack,
+    )
+    kp_turn_bridge = _build_experimental_ai_kp_turn_bridge(
+        previous_turn_index=previous_turn_index,
+        prior_kp_payload=previous_kp_payload,
+        prior_investigator_payload=previous_investigator_payload,
+        keeper_turn_note=existing_keeper_turn_note,
+        visible_turn_note=existing_visible_turn_note,
+    )
+    investigator_turn_bridge = _build_experimental_ai_investigator_turn_bridge(
+        previous_turn_index=previous_turn_index,
+        prior_investigator_payload=previous_investigator_payload,
+        visible_turn_note=existing_visible_turn_note,
+    )
+    next_turn_index = previous_turn_index + 1
+    kp_result = _generate_local_llm_assistant(
+        local_llm_service=local_llm_service,
+        workspace_key="experimental_ai_kp_demo",
+        task_key="demo_loop",
+        task_label=EXPERIMENTAL_AI_KP_DEMO_TASKS["demo_loop"],
+        context=_build_experimental_ai_kp_demo_context(
+            snapshot=snapshot,
+            context_pack=context_pack,
+            compressed_context=compressed_context,
+            turn_bridge=kp_turn_bridge,
+        ),
+    )
+    investigator_result = _generate_local_llm_assistant(
+        local_llm_service=local_llm_service,
+        workspace_key="experimental_ai_investigator_demo",
+        task_key="demo_loop",
+        task_label=EXPERIMENTAL_AI_INVESTIGATOR_DEMO_TASKS["demo_loop"],
+        context=_build_experimental_ai_investigator_demo_context(
+            viewer_id=resolved_investigator_id,
+            view=investigator_view,
+            turn_bridge=investigator_turn_bridge,
+        ),
+    )
+    keeper_draft_result = _generate_local_llm_assistant(
+        local_llm_service=local_llm_service,
+        workspace_key="experimental_ai_keeper_continuity_draft",
+        task_key="draft_bridge",
+        task_label=EXPERIMENTAL_AI_KEEPER_CONTINUITY_DRAFT_TASKS["draft_bridge"],
+        context=_build_experimental_keeper_continuity_draft_context(
+            snapshot=snapshot,
+            compressed_context=compressed_context,
+            kp_result=kp_result,
+            investigator_result=investigator_result,
+            evaluation_state=evaluation_state,
+        ),
+    )
+    visible_draft_result = _generate_local_llm_assistant(
+        local_llm_service=local_llm_service,
+        workspace_key="experimental_ai_visible_continuity_draft",
+        task_key="draft_bridge",
+        task_label=EXPERIMENTAL_AI_VISIBLE_CONTINUITY_DRAFT_TASKS["draft_bridge"],
+        context=_build_experimental_visible_continuity_draft_context(
+            viewer_id=resolved_investigator_id,
+            view=investigator_view,
+            investigator_result=investigator_result,
+        ),
+    )
+    keeper_draft_text = _normalize_form_text(
+        ((keeper_draft_result.assistant or None) and (keeper_draft_result.assistant or None).draft_text)
+    ) or existing_keeper_turn_note
+    visible_draft_text = _normalize_form_text(
+        ((visible_draft_result.assistant or None) and (visible_draft_result.assistant or None).draft_text)
+    ) or existing_visible_turn_note
+    keeper_draft_applied = bool(
+        keeper_draft_result.assistant
+        and _normalize_form_text(keeper_draft_result.assistant.draft_text)
+    )
+    visible_draft_applied = bool(
+        visible_draft_result.assistant
+        and _normalize_form_text(visible_draft_result.assistant.draft_text)
+    )
+    notice = (
+        f"已串行预演第 {next_turn_index} 轮 self-play preview chain，并将 dual continuity drafts 回填到当前页 textarea；仍需 Keeper 人工审阅，不会自动提交或继续下一轮。"
+    )
+    return _render_app_experimental_ai_demo_from_service(
+        service=service,
+        session_id=session_id,
+        local_llm_service=local_llm_service,
+        selected_investigator_id=resolved_investigator_id,
+        kp_result=kp_result,
+        investigator_result=investigator_result,
+        current_turn_index=next_turn_index,
+        kp_turn_bridge=kp_turn_bridge,
+        investigator_turn_bridge=investigator_turn_bridge,
+        evaluation_state=evaluation_state,
+        keeper_turn_note_value=keeper_draft_text,
+        visible_turn_note_value=visible_draft_text,
+        keeper_draft_applied=keeper_draft_applied,
+        visible_draft_applied=visible_draft_applied,
+        orchestration_preview_html=_render_experimental_ai_demo_preview_chain(
+            current_turn_index=next_turn_index,
+            kp_result=kp_result,
+            investigator_result=investigator_result,
+            keeper_draft_result=keeper_draft_result,
+            visible_draft_result=visible_draft_result,
+        ),
+        notice=notice,
     )
 
 
