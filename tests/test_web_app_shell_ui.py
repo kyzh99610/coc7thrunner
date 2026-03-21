@@ -559,6 +559,11 @@ def test_web_app_experimental_ai_demo_self_play_preview_runs_ordered_chain_and_p
     assert "Step 2 · AI investigator preview" in html
     assert "Step 3 · keeper continuity draft" in html
     assert "Step 4 · visible continuity draft" in html
+    assert "来源：直接运行自 experimental AI KP demo block。" in html
+    assert "来源：直接运行自 experimental AI investigator demo block。" in html
+    assert "来源：直接运行自 experimental keeper continuity drafting block。" in html
+    assert "来源：直接运行自 experimental visible continuity drafting block。" in html
+    assert html.count("说明：这是当前页 orchestration preview step，不是已执行结果。") == 4
     assert "keeper draft 起草来源" in html
     assert "visible draft 起草来源" in html
     assert "已填入 keeper continuity bridge 草稿；仍需人工审阅、修改或清空。" in html
@@ -595,6 +600,8 @@ def test_web_app_experimental_ai_demo_self_play_preview_runs_ordered_chain_and_p
     assert "secret_state_refs" not in serialized_visible_context
     assert "keeper_workflow" not in serialized_visible_context
     assert "Keeper 实际采纳了" not in serialized_visible_context
+    assert "private_notes" not in html
+    assert "secret_state_refs" not in html
     after_snapshot = _get_snapshot(client, session_id)
     assert before_snapshot == after_snapshot
 

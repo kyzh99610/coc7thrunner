@@ -2480,6 +2480,7 @@ def _render_experimental_ai_demo_preview_chain(
         title: str,
         result: LocalLLMAssistantResult | None,
         summary: str,
+        source_label: str,
     ) -> str:
         assistant = result.assistant if result is not None else None
         step_summary = _normalize_form_text(assistant.summary) if assistant is not None else ""
@@ -2496,6 +2497,8 @@ def _render_experimental_ai_demo_preview_chain(
               <span class="tag">{escape(status_label)}</span>
             </div>
             <p class="helper">{escape(summary)}</p>
+            <p class="meta-line">来源：直接运行自 {escape(source_label)}。</p>
+            <p class="helper">说明：这是当前页 orchestration preview step，不是已执行结果。</p>
             {
                 f'<p>{escape(step_summary)}</p>'
                 if step_summary
@@ -2519,24 +2522,28 @@ def _render_experimental_ai_demo_preview_chain(
               title="AI KP preview",
               result=kp_result,
               summary="先产出当前 scene framing / pressure / next beat 候选建议。",
+              source_label="experimental AI KP demo block",
           )}
           {_step_card(
               step_index=2,
               title="AI investigator preview",
               result=investigator_result,
               summary="再产出 investigator visible-side 行动提案。",
+              source_label="experimental AI investigator demo block",
           )}
           {_step_card(
               step_index=3,
               title="keeper continuity draft",
               result=keeper_draft_result,
               summary="随后起草 keeper-side continuity bridge，并回填 textarea 供人工审阅。",
+              source_label="experimental keeper continuity drafting block",
           )}
           {_step_card(
               step_index=4,
               title="visible continuity draft",
               result=visible_draft_result,
               summary="最后起草 visible continuity bridge，并回填 textarea，但不会自动提交。",
+              source_label="experimental visible continuity drafting block",
           )}
         </div>
       </section>
