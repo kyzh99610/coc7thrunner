@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import json
 import os
 import shutil
 import socket
+import subprocess
 import sys
 from pathlib import Path
 from uuid import uuid4
@@ -13,6 +15,8 @@ from coc_runner.internal_local_launcher import (
     build_service_command,
     collect_environment_snapshot,
     probe_healthz,
+    resolve_project_root,
+    run_headless_smoke,
 )
 
 
@@ -92,6 +96,31 @@ def test_collect_environment_snapshot_returns_clear_error_when_service_python_mi
         shutil.rmtree(run_dir, ignore_errors=True)
 
 
+def test_resolve_project_root_supports_frozen_dist_layout() -> None:
+    run_dir = _make_run_dir()
+    fake_root = run_dir / "fake-repo"
+    fake_exe = fake_root / "build-artifacts" / "internal-launcher-exe" / "dist" / "CoCRunnerInternalLauncher.exe"
+    fake_module = fake_root / "src" / "coc_runner" / "internal_local_launcher.py"
+    try:
+        (fake_root / "src" / "coc_runner").mkdir(parents=True)
+        (fake_root / "pyproject.toml").write_text("[project]\nname='fake'\n", encoding="utf-8")
+        (fake_root / "src" / "coc_runner" / "main.py").write_text("def create_app():\n    return None\n", encoding="utf-8")
+        fake_exe.parent.mkdir(parents=True)
+        fake_exe.write_text("", encoding="utf-8")
+        fake_module.write_text("", encoding="utf-8")
+
+        resolved = resolve_project_root(
+            executable_path=fake_exe,
+            module_path=fake_module,
+            cwd=run_dir,
+            frozen=True,
+        )
+
+        assert resolved == fake_root
+    finally:
+        shutil.rmtree(run_dir, ignore_errors=True)
+
+
 def test_local_service_manager_can_start_probe_and_stop_real_service() -> None:
     run_dir = _make_run_dir()
     port = _find_free_port()
@@ -121,6 +150,33 @@ def test_local_service_manager_can_start_probe_and_stop_real_service() -> None:
         shutil.rmtree(run_dir, ignore_errors=True)
 
 
+def test_run_headless_smoke_can_start_open_browser_and_stop_real_service() -> None:
+    run_dir = _make_run_dir()
+    port = _find_free_port()
+    db_path = run_dir / "launcher-headless-smoke.db"
+    env = os.environ.copy()
+    env["COC_RUNNER_DB_URL"] = f"sqlite:///{db_path.as_posix()}"
+    try:
+        exit_code, payload = run_headless_smoke(
+            project_root=PROJECT_ROOT,
+            service_python=Path(sys.executable),
+            port=port,
+            base_env=env,
+        )
+
+        assert exit_code == 0
+        assert payload["success"] is True
+        assert payload["start_called"] is True
+        assert payload["wait_until_running"] is True
+        assert payload["browser_opened"] is True
+        assert payload["stop_called"] is True
+        assert payload["status_after_start"] == "running"
+        assert payload["status_after_stop"] == "not_running"
+        assert payload["browser_urls"] == [payload["web_url"]]
+    finally:
+        shutil.rmtree(run_dir, ignore_errors=True)
+
+
 def test_local_service_manager_open_browser_uses_target_url() -> None:
     opened_urls: list[str] = []
 
@@ -136,6 +192,47 @@ def test_local_service_manager_open_browser_uses_target_url() -> None:
 
     assert manager.open_browser() is True
     assert opened_urls == [manager.web_url]
+
+
+def test_launcher_cli_smoke_json_uses_real_entry() -> None:
+    run_dir = _make_run_dir()
+    port = _find_free_port()
+    db_path = run_dir / "launcher-cli-smoke.db"
+    env = os.environ.copy()
+    env["COC_RUNNER_DB_URL"] = f"sqlite:///{db_path.as_posix()}"
+    try:
+        result = subprocess.run(
+            [
+                str(Path(sys.executable)),
+                "-m",
+                "coc_runner.internal_local_launcher",
+                "--smoke-json",
+                "--project-root",
+                str(PROJECT_ROOT),
+                "--service-python",
+                str(Path(sys.executable)),
+                "--port",
+                str(port),
+            ],
+            cwd=PROJECT_ROOT,
+            env=env,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            check=False,
+            timeout=30,
+        )
+
+        assert result.returncode == 0, result.stderr or result.stdout
+        payload = json.loads(result.stdout)
+        assert payload["mode"] == "smoke-json"
+        assert payload["success"] is True
+        assert payload["status_after_start"] == "running"
+        assert payload["status_after_stop"] == "not_running"
+        assert payload["browser_urls"] == [payload["web_url"]]
+    finally:
+        shutil.rmtree(run_dir, ignore_errors=True)
 
 
 def test_local_service_manager_start_failure_surfaces_error() -> None:

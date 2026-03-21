@@ -1,9 +1,12 @@
 from __future__ import annotations
 
+import argparse
 import json
 import os
 import queue
+import socket
 import subprocess
+import sys
 import threading
 import time
 import urllib.error
@@ -22,6 +25,7 @@ MAX_LOG_LINES = 200
 ENV_PROBE_TIMEOUT_SECONDS = 15.0
 HEALTHCHECK_TIMEOUT_SECONDS = 0.5
 STARTUP_TIMEOUT_SECONDS = 15.0
+PROJECT_ROOT_SENTINEL = Path("src") / "coc_runner" / "main.py"
 
 _PYTHON_INFO_SCRIPT = """
 import json
@@ -94,7 +98,45 @@ class LauncherSnapshot:
 
 
 def project_root_from_module() -> Path:
-    return Path(__file__).resolve().parents[2]
+    return resolve_project_root()
+
+
+def _looks_like_project_root(candidate: Path) -> bool:
+    return (candidate / "pyproject.toml").exists() and (candidate / PROJECT_ROOT_SENTINEL).exists()
+
+
+def resolve_project_root(
+    *,
+    env_project_root: str | None = None,
+    executable_path: Path | None = None,
+    module_path: Path | None = None,
+    cwd: Path | None = None,
+    frozen: bool | None = None,
+) -> Path:
+    resolved_frozen = getattr(sys, "frozen", False) if frozen is None else frozen
+    runtime_executable = (executable_path or Path(sys.executable)).resolve()
+    runtime_module = (module_path or Path(__file__)).resolve()
+    runtime_cwd = (cwd or Path.cwd()).resolve()
+    candidates: list[Path] = []
+    if env_project_root:
+        candidates.append(Path(env_project_root).resolve())
+    if resolved_frozen:
+        executable_dir = runtime_executable.parent
+        candidates.append(executable_dir)
+        candidates.extend(parent for parent in executable_dir.parents)
+    if len(runtime_module.parents) >= 3:
+        candidates.append(runtime_module.parents[2])
+    candidates.append(runtime_cwd)
+    seen: set[Path] = set()
+    for candidate in candidates:
+        if candidate in seen:
+            continue
+        seen.add(candidate)
+        if _looks_like_project_root(candidate):
+            return candidate
+    if len(runtime_module.parents) >= 3:
+        return runtime_module.parents[2]
+    return runtime_cwd
 
 
 def default_service_python(project_root: Path) -> Path:
@@ -257,6 +299,33 @@ def _tail_error_text(stderr_text: str, stdout_text: str, *, line_limit: int = 8)
         return ""
     lines = combined.splitlines()
     return "\n".join(lines[-line_limit:])
+
+
+def _find_free_port(host: str = DEFAULT_HOST) -> int:
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+        sock.bind((host, 0))
+        return int(sock.getsockname()[1])
+
+
+def _environment_snapshot_payload(snapshot: EnvironmentSnapshot | None) -> dict[str, object]:
+    if snapshot is None:
+        return {}
+    return {
+        "project_root": str(snapshot.project_root),
+        "service_python": str(snapshot.service_python),
+        "bundled_python": str(snapshot.bundled_python),
+        "python_available": snapshot.python_available,
+        "python_version": snapshot.python_version,
+        "python_executable": snapshot.python_executable,
+        "app_entry": snapshot.app_entry,
+        "app_importable": snapshot.app_importable,
+        "uvicorn_available": snapshot.uvicorn_available,
+        "local_llm_enabled": snapshot.local_llm_enabled,
+        "local_llm_base_url": snapshot.local_llm_base_url,
+        "local_llm_model": snapshot.local_llm_model,
+        "dice_backend_mode": snapshot.dice_backend_mode,
+        "error": snapshot.error,
+    }
 
 
 class LocalServiceManager:
@@ -474,6 +543,84 @@ class LocalServiceManager:
             self._log_lines = self._log_lines[-MAX_LOG_LINES:]
 
 
+def run_headless_smoke(
+    *,
+    project_root: Path | None = None,
+    service_python: Path | None = None,
+    host: str = DEFAULT_HOST,
+    port: int = DEFAULT_PORT,
+    base_env: Mapping[str, str] | None = None,
+) -> tuple[int, dict[str, object]]:
+    selected_port = port if port > 0 else _find_free_port(host)
+    opened_urls: list[str] = []
+
+    def _capture_browser(url: str) -> bool:
+        opened_urls.append(url)
+        return True
+
+    manager = LocalServiceManager(
+        project_root=project_root,
+        host=host,
+        port=selected_port,
+        service_python=service_python,
+        base_env=base_env,
+        browser_opener=_capture_browser,
+    )
+    initial_snapshot = manager.snapshot()
+    payload: dict[str, object] = {
+        "mode": "smoke-json",
+        "project_root": str(manager.project_root),
+        "service_python": str(manager.service_python),
+        "host": manager.host,
+        "port": manager.port,
+        "web_url": manager.web_url,
+        "health_url": manager.health_url,
+        "status_before": initial_snapshot.status,
+        "status_before_text": initial_snapshot.status_text,
+        "environment": _environment_snapshot_payload(initial_snapshot.environment),
+        "start_called": False,
+        "wait_until_running": False,
+        "browser_opened": False,
+        "browser_urls": [],
+        "stop_called": False,
+        "status_after_start": initial_snapshot.status,
+        "status_after_start_text": initial_snapshot.status_text,
+        "status_after_stop": initial_snapshot.status,
+        "status_after_stop_text": initial_snapshot.status_text,
+        "last_error": initial_snapshot.last_error,
+    }
+    try:
+        start_called = manager.start()
+        payload["start_called"] = start_called
+        wait_result = manager.wait_until_running(timeout_seconds=STARTUP_TIMEOUT_SECONDS) if start_called else False
+        payload["wait_until_running"] = wait_result
+        running_snapshot = manager.poll()
+        payload["status_after_start"] = running_snapshot.status
+        payload["status_after_start_text"] = running_snapshot.status_text
+        payload["last_error"] = running_snapshot.last_error
+        if running_snapshot.status == "running":
+            payload["browser_opened"] = manager.open_browser()
+            payload["browser_urls"] = list(opened_urls)
+        if manager.snapshot().owns_process:
+            payload["stop_called"] = manager.stop()
+        final_snapshot = manager.poll()
+        payload["status_after_stop"] = final_snapshot.status
+        payload["status_after_stop_text"] = final_snapshot.status_text
+        payload["last_error"] = final_snapshot.last_error or str(payload["last_error"])
+        success = bool(
+            payload["start_called"]
+            and payload["wait_until_running"]
+            and payload["browser_opened"]
+            and payload["stop_called"]
+            and final_snapshot.status == "not_running"
+        )
+        payload["success"] = success
+        return (0 if success else 1), payload
+    finally:
+        if manager.snapshot().owns_process:
+            manager.stop()
+
+
 def _environment_display_text(snapshot: EnvironmentSnapshot | None) -> str:
     if snapshot is None:
         return "环境检查尚未执行。"
@@ -493,14 +640,25 @@ def _environment_display_text(snapshot: EnvironmentSnapshot | None) -> str:
     return "\n".join(lines)
 
 
-def run_launcher_window(*, project_root: Path | None = None) -> None:
+def run_launcher_window(
+    *,
+    project_root: Path | None = None,
+    service_python: Path | None = None,
+    host: str = DEFAULT_HOST,
+    port: int = DEFAULT_PORT,
+) -> None:
     try:
         import tkinter as tk
         from tkinter import scrolledtext, ttk
     except ImportError as exc:  # pragma: no cover - depends on interpreter build
         raise RuntimeError("当前 Python 缺少 Tkinter，无法启动 internal local launcher。") from exc
 
-    manager = LocalServiceManager(project_root=project_root)
+    manager = LocalServiceManager(
+        project_root=project_root,
+        service_python=service_python,
+        host=host,
+        port=port,
+    )
     root = tk.Tk()
     root.title("CoC Runner Internal Local Launcher")
     root.geometry("760x620")
@@ -611,9 +769,38 @@ def run_launcher_window(*, project_root: Path | None = None) -> None:
     root.mainloop()
 
 
-def main() -> None:
-    run_launcher_window()
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(
+        description="CoC Runner internal local launcher",
+    )
+    parser.add_argument("--project-root", type=Path, default=None)
+    parser.add_argument("--service-python", type=Path, default=None)
+    parser.add_argument("--host", default=DEFAULT_HOST)
+    parser.add_argument("--port", type=int, default=DEFAULT_PORT)
+    parser.add_argument(
+        "--smoke-json",
+        action="store_true",
+        help="Run the internal exe smoke path without opening the GUI window.",
+    )
+    args = parser.parse_args(argv)
+    if args.smoke_json:
+        exit_code, payload = run_headless_smoke(
+            project_root=args.project_root,
+            service_python=args.service_python,
+            host=args.host,
+            port=args.port,
+            base_env=os.environ,
+        )
+        print(json.dumps(payload, ensure_ascii=True))
+        return exit_code
+    run_launcher_window(
+        project_root=args.project_root,
+        service_python=args.service_python,
+        host=args.host,
+        port=args.port,
+    )
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())

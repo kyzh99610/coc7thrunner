@@ -6,8 +6,8 @@ set "PYTHONPATH=%PROJECT_ROOT%\src"
 set "LAUNCHER_MODULE=coc_runner.internal_local_launcher"
 set "PYTHON_EXE="
 
-if exist "%PROJECT_ROOT%\.venv\Scripts\pythonw.exe" set "PYTHON_EXE=%PROJECT_ROOT%\.venv\Scripts\pythonw.exe"
-if not defined PYTHON_EXE if exist "%PROJECT_ROOT%\.tools\python312\pythonw.exe" set "PYTHON_EXE=%PROJECT_ROOT%\.tools\python312\pythonw.exe"
+if exist "%PROJECT_ROOT%\.tools\python312\pythonw.exe" set "PYTHON_EXE=%PROJECT_ROOT%\.tools\python312\pythonw.exe"
+if not defined PYTHON_EXE if exist "%PROJECT_ROOT%\.venv\Scripts\pythonw.exe" set "PYTHON_EXE=%PROJECT_ROOT%\.venv\Scripts\pythonw.exe"
 if not defined PYTHON_EXE if exist "%PROJECT_ROOT%\.venv\Scripts\python.exe" set "PYTHON_EXE=%PROJECT_ROOT%\.venv\Scripts\python.exe"
 if not defined PYTHON_EXE if exist "%PROJECT_ROOT%\.tools\python312\python.exe" set "PYTHON_EXE=%PROJECT_ROOT%\.tools\python312\python.exe"
 
