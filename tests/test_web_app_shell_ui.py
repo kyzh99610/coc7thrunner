@@ -396,6 +396,7 @@ def test_web_app_experimental_ai_demo_run_keeps_kp_and_investigator_inputs_isola
     assert "当前页实验评估" in html
     assert "AI KP：scene framing 连贯性" in html
     assert 'action="/app/sessions/' in html
+    assert 'name="narrative_work_note"' in html
     assert 'name="evaluation_label"' in html
     assert 'name="evaluation_note"' in html
     assert 'name="keeper_turn_outcome_note"' in html
@@ -516,6 +517,7 @@ def test_web_app_experimental_ai_demo_result_page_can_trigger_continuity_bridge_
     assert "起草 continuity bridge 草稿" in html
     assert 'name="current_kp_result_json"' in html
     assert 'name="current_investigator_result_json"' in html
+    assert 'name="narrative_work_note"' in html
     assert 'name="keeper_turn_outcome_note"' in html
     assert 'name="visible_turn_outcome_note"' in html
     assert "keeper draft 起草来源" not in html
@@ -564,12 +566,18 @@ def test_web_app_experimental_ai_demo_self_play_preview_runs_ordered_chain_and_p
     assert "来源：直接运行自 experimental keeper continuity drafting block。" in html
     assert "来源：直接运行自 experimental visible continuity drafting block。" in html
     assert html.count("说明：这是当前页 orchestration preview step，不是已执行结果。") == 4
+    assert f'data-adopt-target="experimental-narrative-work-note-{session_id}"' in html
+    assert f'data-adopt-target="experimental-keeper-turn-outcome-note-{session_id}"' in html
+    assert f'data-adopt-target="experimental-visible-turn-outcome-note-{session_id}"' in html
+    assert "当前 handoff 目标：当前页 narrative_work_note。" in html
+    assert "preview 完成后已回填该 textarea；如需用当前预演版本覆盖 working text，可重新带入。" in html
     assert "keeper draft 起草来源" in html
     assert "visible draft 起草来源" in html
     assert "已填入 keeper continuity bridge 草稿；仍需人工审阅、修改或清空。" in html
     assert "已填入公开 continuity bridge 草稿；仍需人工审阅、修改或清空。" in html
     assert "Keeper 暂定保留账册缺页、老板回避和二楼脚步声作为下一轮内部 continuity" in html
     assert "调查员目前只确认了账册缺页、老板回避和二楼脚步声" in html
+    assert 'name="current_narrative_work_note" value=""' in html
     assert 'name="current_turn_index" value="2"' in html
     assert "生成下一轮实验回合" in html
     assert len(fake_service.requests) == 4
@@ -602,6 +610,45 @@ def test_web_app_experimental_ai_demo_self_play_preview_runs_ordered_chain_and_p
     assert "Keeper 实际采纳了" not in serialized_visible_context
     assert "private_notes" not in html
     assert "secret_state_refs" not in html
+    after_snapshot = _get_snapshot(client, session_id)
+    assert before_snapshot == after_snapshot
+
+
+def test_web_app_experimental_ai_demo_preview_narrative_handoff_stays_manual_and_page_local(
+    client: TestClient,
+) -> None:
+    session_id = _start_keeper_dashboard_session(client)
+    _advance_keeper_dashboard_session(client, session_id)
+    fake_service = _FakeLocalLLMService()
+    client.app.state.local_llm_service = fake_service
+    before_snapshot = _get_snapshot(client, session_id)
+    manual_note = "手工 narrative 备注：先压潮气和旧账册，再把压力推向 204 房。"
+
+    response = client.post(
+        f"/app/sessions/{session_id}/experimental-ai-demo/self-play-preview",
+        data={
+            "investigator_id": "investigator-1",
+            "narrative_work_note": manual_note,
+        },
+    )
+
+    assert response.status_code == 200
+    html = response.text
+    assert 'name="narrative_work_note"' in html
+    narrative_section = html.split(
+        f'id="experimental-narrative-work-note-{session_id}"',
+        1,
+    )[1].split("</textarea>", 1)[0]
+    assert manual_note in narrative_section
+    assert "KP 可先用潮气、旧账册和老板的短暂失态开场，再把压力推向缺页登记。" not in narrative_section
+    assert "KP 可先用潮气、旧账册和老板的短暂失态开场，再把压力推向缺页登记。" in html
+    assert (
+        f'name="current_narrative_work_note" value="{manual_note}"'
+        in html
+    )
+    assert f'data-adopt-target="experimental-narrative-work-note-{session_id}"' in html
+    for llm_request in fake_service.requests:
+        assert manual_note not in str(llm_request.context)
     after_snapshot = _get_snapshot(client, session_id)
     assert before_snapshot == after_snapshot
 

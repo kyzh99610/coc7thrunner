@@ -173,6 +173,18 @@ EXPERIMENTAL_DEMO_RUBRIC_VALUE_LABELS: dict[str, str] = {
 }
 
 
+def _experimental_ai_demo_narrative_work_note_target_id(session_id: str) -> str:
+    return f"experimental-narrative-work-note-{session_id}"
+
+
+def _experimental_ai_demo_keeper_continuity_target_id(session_id: str) -> str:
+    return f"experimental-keeper-turn-outcome-note-{session_id}"
+
+
+def _experimental_ai_demo_visible_continuity_target_id(session_id: str) -> str:
+    return f"experimental-visible-turn-outcome-note-{session_id}"
+
+
 def _status_label(status_value: Any) -> str:
     return {
         SessionStatus.PLANNED.value: "计划中",
@@ -910,6 +922,57 @@ def _knowledge_assistant_adoption(
         if value:
             adoption[key] = value
     return adoption
+
+
+def _experimental_preview_handoff_fallback_text(
+    result: LocalLLMAssistantResult,
+) -> str | None:
+    assistant = result.assistant
+    if assistant is None:
+        return None
+    lines: list[str] = []
+    summary = _normalize_form_text(assistant.summary)
+    if summary:
+        lines.append(summary)
+    bullets = [item for item in assistant.bullets if item][:3]
+    if bullets:
+        lines.extend(f"- {item}" for item in bullets)
+    return "\n".join(lines).strip() or None
+
+
+def _render_experimental_preview_handoff(
+    *,
+    session_id: str,
+    step_key: str,
+    result: LocalLLMAssistantResult | None,
+    button_label: str,
+    target_id: str,
+    helper_text: str,
+    adopted_status_text: str,
+) -> str:
+    if result is None or result.status != "success" or result.assistant is None:
+        return ""
+    draft_text = _normalize_form_text(
+        result.assistant.draft_text
+    ) or _experimental_preview_handoff_fallback_text(result)
+    if not draft_text:
+        return ""
+    source_id = f"experimental-preview-handoff-source-{step_key}-{session_id}"
+    status_id = f"experimental-preview-handoff-status-{step_key}-{session_id}"
+    return f"""
+      <textarea id="{escape(source_id)}" class="assistant-draft-source" aria-hidden="true" tabindex="-1">{escape(draft_text)}</textarea>
+      <div class="adoption-toolbar">
+        <button
+          class="button-button ghost"
+          type="button"
+          data-adopt-source="{escape(source_id)}"
+          data-adopt-target="{escape(target_id)}"
+          data-adopt-status="{escape(status_id)}"
+          data-adopt-status-text="{escape(adopted_status_text, quote=True)}"
+        >{escape(button_label)}</button>
+      </div>
+      <p id="{escape(status_id)}" class="helper adoption-status">{escape(helper_text)}</p>
+    """
 
 
 def _render_local_llm_assistant_panel(
@@ -2460,6 +2523,7 @@ def _render_experimental_ai_demo_output_block(
 
 def _render_experimental_ai_demo_preview_chain(
     *,
+    session_id: str,
     current_turn_index: int,
     kp_result: LocalLLMAssistantResult | None,
     investigator_result: LocalLLMAssistantResult | None,
@@ -2481,6 +2545,7 @@ def _render_experimental_ai_demo_preview_chain(
         result: LocalLLMAssistantResult | None,
         summary: str,
         source_label: str,
+        handoff_html: str = "",
     ) -> str:
         assistant = result.assistant if result is not None else None
         step_summary = _normalize_form_text(assistant.summary) if assistant is not None else ""
@@ -2504,6 +2569,7 @@ def _render_experimental_ai_demo_preview_chain(
                 if step_summary
                 else '<p class="empty">当前没有可显示的结果摘要。</p>'
             }
+            {handoff_html}
           </article>
         """
 
@@ -2523,6 +2589,17 @@ def _render_experimental_ai_demo_preview_chain(
               result=kp_result,
               summary="先产出当前 scene framing / pressure / next beat 候选建议。",
               source_label="experimental AI KP demo block",
+              handoff_html=_render_experimental_preview_handoff(
+                  session_id=session_id,
+                  step_key="ai-kp-preview",
+                  result=kp_result,
+                  button_label="带入 narrative_work_note",
+                  target_id=_experimental_ai_demo_narrative_work_note_target_id(
+                      session_id
+                  ),
+                  helper_text="当前 handoff 目标：当前页 narrative_work_note。点击后只带入文本，不会自动提交，也不会写入 authoritative state。",
+                  adopted_status_text="已带入 preview narrative handoff 草稿。来源：self-play orchestration preview / AI KP preview。当前仍需 Keeper 人工编辑；这只是当前页 working text，不会自动提交或写入 authoritative state。",
+              ),
           )}
           {_step_card(
               step_index=2,
@@ -2537,6 +2614,17 @@ def _render_experimental_ai_demo_preview_chain(
               result=keeper_draft_result,
               summary="随后起草 keeper-side continuity bridge，并回填 textarea 供人工审阅。",
               source_label="experimental keeper continuity drafting block",
+              handoff_html=_render_experimental_preview_handoff(
+                  session_id=session_id,
+                  step_key="keeper-continuity-draft",
+                  result=keeper_draft_result,
+                  button_label="重新带入 keeper continuity textarea",
+                  target_id=_experimental_ai_demo_keeper_continuity_target_id(
+                      session_id
+                  ),
+                  helper_text="当前 handoff 目标：当前页 keeper continuity textarea。preview 完成后已回填该 textarea；如需用当前预演版本覆盖 working text，可重新带入。不会自动提交，也不会写入 authoritative state。",
+                  adopted_status_text="已重新带入 keeper continuity handoff 草稿。来源：self-play orchestration preview / keeper continuity draft。当前仍需 Keeper 人工编辑；这只是当前页 working text，不会自动提交或写入 authoritative state。",
+              ),
           )}
           {_step_card(
               step_index=4,
@@ -2544,6 +2632,17 @@ def _render_experimental_ai_demo_preview_chain(
               result=visible_draft_result,
               summary="最后起草 visible continuity bridge，并回填 textarea，但不会自动提交。",
               source_label="experimental visible continuity drafting block",
+              handoff_html=_render_experimental_preview_handoff(
+                  session_id=session_id,
+                  step_key="visible-continuity-draft",
+                  result=visible_draft_result,
+                  button_label="重新带入 visible continuity textarea",
+                  target_id=_experimental_ai_demo_visible_continuity_target_id(
+                      session_id
+                  ),
+                  helper_text="当前 handoff 目标：当前页 visible continuity textarea。preview 完成后已回填该 textarea；如需用当前预演版本覆盖 working text，可重新带入。不会自动提交，也不会写入 authoritative state。",
+                  adopted_status_text="已重新带入 visible continuity handoff 草稿。来源：self-play orchestration preview / visible continuity draft。当前仍需 Keeper 人工编辑；这只是当前页 working text，不会自动提交或写入 authoritative state。",
+              ),
           )}
         </div>
       </section>
@@ -2562,6 +2661,7 @@ def _render_experimental_ai_demo_turn_loop_form(
     kp_turn_bridge: dict[str, Any] | None = None,
     investigator_turn_bridge: dict[str, Any] | None = None,
     evaluation_state: Mapping[str, str] | None = None,
+    narrative_work_note_value: str = "",
     keeper_turn_note_value: str = "",
     visible_turn_note_value: str = "",
     keeper_draft_applied: bool = False,
@@ -2581,6 +2681,11 @@ def _render_experimental_ai_demo_turn_loop_form(
         _normalize_form_text(investigator_payload.get("summary"))
         or "上一轮 AI investigator 摘要暂缺。"
     )
+    narrative_note_target_id = _experimental_ai_demo_narrative_work_note_target_id(
+        session_id
+    )
+    keeper_note_target_id = _experimental_ai_demo_keeper_continuity_target_id(session_id)
+    visible_note_target_id = _experimental_ai_demo_visible_continuity_target_id(session_id)
     draft_echo_lines: list[str] = []
     if keeper_draft_applied:
         draft_echo_lines.append("已填入 keeper continuity bridge 草稿；仍需人工审阅、修改或清空。")
@@ -2629,13 +2734,20 @@ def _render_experimental_ai_demo_turn_loop_form(
           <input type="hidden" name="previous_investigator_draft_excerpt" value="{escape(investigator_payload.get('draft_excerpt') or '')}">
           {_render_hidden_experimental_demo_evaluation_state_inputs(evaluation_state)}
           <label>
-            上一轮实际结果 / Keeper 采纳情况（仅 AI KP 可见）
-            <textarea name="keeper_turn_outcome_note" rows="4" placeholder="例如：实际让秦老板先否认，再露出对 204 房登记的回避；当前压力从缺页账册转到二楼动静。">{escape(keeper_turn_note_value)}</textarea>
+            当前页 narrative_work_note
+            <textarea id="{escape(narrative_note_target_id)}" name="narrative_work_note" rows="4" placeholder="例如：先用潮气、旧账册和老板的短暂失态起场，再把压力推向 204 房登记与二楼动静。">{escape(narrative_work_note_value)}</textarea>
           </label>
+          <p class="helper">只用于 Keeper 在当前 experimental 页整理 preview narrative handoff；这是 page-local working text，不是已执行结果，也不会写入 authoritative state。</p>
+          <label>
+            上一轮实际结果 / Keeper 采纳情况（仅 AI KP 可见）
+            <textarea id="{escape(keeper_note_target_id)}" name="keeper_turn_outcome_note" rows="4" placeholder="例如：实际让秦老板先否认，再露出对 204 房登记的回避；当前压力从缺页账册转到二楼动静。">{escape(keeper_turn_note_value)}</textarea>
+          </label>
+          <p class="helper">这是当前页 keeper continuity working text，只供 Keeper 人工补充、覆写与下一轮实验输入使用；不会自动提交，也不会写入 authoritative state。</p>
           <label>
             上一轮公开可见结果摘要（供 AI Investigator 下一轮使用）
-            <textarea name="visible_turn_outcome_note" rows="3" placeholder="例如：老板回避了 204 房登记，调查员注意到账册缺页和二楼脚步声。">{escape(visible_turn_note_value)}</textarea>
+            <textarea id="{escape(visible_note_target_id)}" name="visible_turn_outcome_note" rows="3" placeholder="例如：老板回避了 204 房登记，调查员注意到账册缺页和二楼脚步声。">{escape(visible_turn_note_value)}</textarea>
           </label>
+          <p class="helper">这是当前页 visible continuity working text，只能带入公开可见内容；仍需 Keeper 人工编辑，且不会自动提交或写入 authoritative state。</p>
           <button class="button-button ghost" type="submit" formaction="/app/sessions/{escape(session_id)}/experimental-ai-demo/draft-continuity">起草 continuity bridge 草稿</button>
           <button class="button-button ghost" type="submit" formaction="/app/sessions/{escape(session_id)}/experimental-ai-demo/self-play-preview">运行 self-play 预演链</button>
           <button class="button-button secondary" type="submit">生成下一轮实验回合</button>
@@ -2654,6 +2766,7 @@ def _render_experimental_ai_demo_evaluation_rubric(
     kp_turn_bridge: dict[str, Any] | None = None,
     investigator_turn_bridge: dict[str, Any] | None = None,
     evaluation_state: Mapping[str, str] | None = None,
+    narrative_work_note_value: str = "",
     keeper_turn_note_value: str = "",
     visible_turn_note_value: str = "",
     keeper_draft_applied: bool = False,
@@ -2756,6 +2869,7 @@ def _render_experimental_ai_demo_evaluation_rubric(
           <input type="hidden" name="current_kp_has_keeper_continuity" value="{1 if kp_turn_bridge and _normalize_form_text(kp_turn_bridge.get('keeper_adoption_and_outcome_note')) else 0}">
           <input type="hidden" name="current_kp_has_visible_continuity" value="{1 if kp_turn_bridge and _normalize_form_text(kp_turn_bridge.get('public_outcome_note')) else 0}">
           <input type="hidden" name="current_investigator_has_visible_continuity" value="{1 if investigator_turn_bridge and _normalize_form_text(investigator_turn_bridge.get('public_outcome_note')) else 0}">
+          <input type="hidden" name="current_narrative_work_note" value="{escape(narrative_work_note_value)}">
           <input type="hidden" name="current_keeper_turn_outcome_note" value="{escape(keeper_turn_note_value)}">
           <input type="hidden" name="current_visible_turn_outcome_note" value="{escape(visible_turn_note_value)}">
           <input type="hidden" name="current_keeper_draft_applied" value="{1 if keeper_draft_applied else 0}">
@@ -5548,6 +5662,7 @@ def _render_experimental_ai_demo_page(
     kp_turn_bridge: dict[str, Any] | None = None,
     investigator_turn_bridge: dict[str, Any] | None = None,
     evaluation_state: Mapping[str, str] | None = None,
+    narrative_work_note_value: str = "",
     keeper_turn_note_value: str = "",
     visible_turn_note_value: str = "",
     keeper_draft_applied: bool = False,
@@ -5677,6 +5792,7 @@ def _render_experimental_ai_demo_page(
                 kp_turn_bridge=kp_turn_bridge,
                 investigator_turn_bridge=investigator_turn_bridge,
                 evaluation_state=evaluation_state,
+                narrative_work_note_value=narrative_work_note_value,
                 keeper_turn_note_value=keeper_turn_note_value,
                 visible_turn_note_value=visible_turn_note_value,
                 keeper_draft_applied=keeper_draft_applied,
@@ -5691,6 +5807,7 @@ def _render_experimental_ai_demo_page(
                 kp_turn_bridge=kp_turn_bridge,
                 investigator_turn_bridge=investigator_turn_bridge,
                 evaluation_state=evaluation_state,
+                narrative_work_note_value=narrative_work_note_value,
                 keeper_turn_note_value=keeper_turn_note_value,
                 visible_turn_note_value=visible_turn_note_value,
                 keeper_draft_applied=keeper_draft_applied,
@@ -5911,6 +6028,7 @@ def _render_app_experimental_ai_demo_from_service(
     kp_turn_bridge: dict[str, Any] | None = None,
     investigator_turn_bridge: dict[str, Any] | None = None,
     evaluation_state: Mapping[str, str] | None = None,
+    narrative_work_note_value: str = "",
     keeper_turn_note_value: str = "",
     visible_turn_note_value: str = "",
     keeper_draft_applied: bool = False,
@@ -5992,6 +6110,7 @@ def _render_app_experimental_ai_demo_from_service(
         kp_turn_bridge=kp_turn_bridge,
         investigator_turn_bridge=investigator_turn_bridge,
         evaluation_state=evaluation_state,
+        narrative_work_note_value=narrative_work_note_value,
         keeper_turn_note_value=keeper_turn_note_value,
         visible_turn_note_value=visible_turn_note_value,
         keeper_draft_applied=keeper_draft_applied,
@@ -6171,6 +6290,7 @@ async def web_app_experimental_ai_demo_run(
         form,
         prefix="previous_investigator",
     )
+    narrative_work_note_value = _normalize_form_text(form.get("narrative_work_note")) or ""
     keeper_turn_outcome_note = _normalize_form_text(form.get("keeper_turn_outcome_note")) or ""
     visible_turn_outcome_note = _normalize_form_text(form.get("visible_turn_outcome_note")) or ""
     try:
@@ -6212,6 +6332,7 @@ async def web_app_experimental_ai_demo_run(
             session_id=session_id,
             local_llm_service=local_llm_service,
             selected_investigator_id=resolved_investigator_id,
+            narrative_work_note_value=narrative_work_note_value,
             detail="当前无法建立可用的 investigator visible summary；请先选择一个有效调查员视角。",
             status_code=status.HTTP_404_NOT_FOUND,
         )
@@ -6282,6 +6403,7 @@ async def web_app_experimental_ai_demo_run(
         kp_turn_bridge=kp_turn_bridge,
         investigator_turn_bridge=investigator_turn_bridge,
         evaluation_state=evaluation_state,
+        narrative_work_note_value=narrative_work_note_value,
         notice=continuation_notice,
     )
 
@@ -6302,6 +6424,7 @@ async def web_app_experimental_ai_demo_self_play_preview(
         form,
         prefix="previous_investigator",
     )
+    narrative_work_note_value = _normalize_form_text(form.get("narrative_work_note")) or ""
     existing_keeper_turn_note = (
         _normalize_form_text(form.get("keeper_turn_outcome_note")) or ""
     )
@@ -6347,6 +6470,7 @@ async def web_app_experimental_ai_demo_self_play_preview(
             session_id=session_id,
             local_llm_service=local_llm_service,
             selected_investigator_id=resolved_investigator_id,
+            narrative_work_note_value=narrative_work_note_value,
             detail="当前无法建立可用的 investigator visible summary；请先选择一个有效调查员视角。",
             status_code=status.HTTP_404_NOT_FOUND,
         )
@@ -6451,11 +6575,13 @@ async def web_app_experimental_ai_demo_self_play_preview(
         kp_turn_bridge=kp_turn_bridge,
         investigator_turn_bridge=investigator_turn_bridge,
         evaluation_state=evaluation_state,
+        narrative_work_note_value=narrative_work_note_value,
         keeper_turn_note_value=keeper_draft_text,
         visible_turn_note_value=visible_draft_text,
         keeper_draft_applied=keeper_draft_applied,
         visible_draft_applied=visible_draft_applied,
         orchestration_preview_html=_render_experimental_ai_demo_preview_chain(
+            session_id=session_id,
             current_turn_index=next_turn_index,
             kp_result=kp_result,
             investigator_result=investigator_result,
@@ -6481,6 +6607,7 @@ async def web_app_experimental_ai_demo_draft_continuity(
         form.get("current_investigator_result_json")
     )
     evaluation_state = _normalize_experimental_demo_rubric_state(form)
+    narrative_work_note_value = _normalize_form_text(form.get("narrative_work_note")) or ""
     existing_keeper_turn_note = (
         _normalize_form_text(form.get("keeper_turn_outcome_note")) or ""
     )
@@ -6506,6 +6633,7 @@ async def web_app_experimental_ai_demo_draft_continuity(
             session_id=session_id,
             local_llm_service=local_llm_service,
             selected_investigator_id=selected_investigator_id,
+            narrative_work_note_value=narrative_work_note_value,
             detail="当前无法恢复本轮 experimental demo 输出；请重新运行实验回合后再起草 continuity bridge。",
             status_code=status.HTTP_400_BAD_REQUEST,
         )
@@ -6554,6 +6682,7 @@ async def web_app_experimental_ai_demo_draft_continuity(
             kp_turn_bridge=kp_turn_bridge,
             investigator_turn_bridge=investigator_turn_bridge,
             evaluation_state=evaluation_state,
+            narrative_work_note_value=narrative_work_note_value,
             keeper_turn_note_value=existing_keeper_turn_note,
             visible_turn_note_value=existing_visible_turn_note,
             detail="当前无法建立可用的 investigator visible summary；请先选择一个有效调查员视角。",
@@ -6624,6 +6753,7 @@ async def web_app_experimental_ai_demo_draft_continuity(
         kp_turn_bridge=kp_turn_bridge,
         investigator_turn_bridge=investigator_turn_bridge,
         evaluation_state=evaluation_state,
+        narrative_work_note_value=narrative_work_note_value,
         keeper_turn_note_value=keeper_draft_text,
         visible_turn_note_value=visible_draft_text,
         keeper_draft_applied=keeper_draft_applied,
@@ -6647,6 +6777,9 @@ async def web_app_experimental_ai_demo_evaluate(
         form.get("current_investigator_result_json")
     )
     evaluation_state = _normalize_experimental_demo_rubric_state(form)
+    narrative_work_note_value = (
+        _normalize_form_text(form.get("current_narrative_work_note")) or ""
+    )
     keeper_turn_note_value = (
         _normalize_form_text(form.get("current_keeper_turn_outcome_note")) or ""
     )
@@ -6674,6 +6807,7 @@ async def web_app_experimental_ai_demo_evaluate(
             session_id=session_id,
             local_llm_service=local_llm_service,
             selected_investigator_id=selected_investigator_id,
+            narrative_work_note_value=narrative_work_note_value,
             detail="当前无法恢复本轮 experimental demo 输出；请重新运行实验回合后再做页内评估。",
             status_code=status.HTTP_400_BAD_REQUEST,
         )
@@ -6688,6 +6822,7 @@ async def web_app_experimental_ai_demo_evaluate(
         kp_turn_bridge=kp_turn_bridge,
         investigator_turn_bridge=investigator_turn_bridge,
         evaluation_state=evaluation_state,
+        narrative_work_note_value=narrative_work_note_value,
         keeper_turn_note_value=keeper_turn_note_value,
         visible_turn_note_value=visible_turn_note_value,
         keeper_draft_applied=keeper_draft_applied,
