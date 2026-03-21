@@ -375,6 +375,7 @@ def test_web_app_experimental_ai_demo_run_keeps_kp_and_investigator_inputs_isola
     assert "当前页实验评估" in html
     assert "AI KP：scene framing 连贯性" in html
     assert 'action="/app/sessions/' in html
+    assert 'name="evaluation_label"' in html
     assert 'name="evaluation_note"' in html
     assert 'name="keeper_turn_outcome_note"' in html
     assert 'name="visible_turn_outcome_note"' in html
@@ -503,6 +504,7 @@ def test_web_app_experimental_ai_demo_evaluation_rubric_stays_page_local_and_non
             "current_kp_has_keeper_continuity": "1",
             "current_kp_has_visible_continuity": "1",
             "current_investigator_has_visible_continuity": "1",
+            "evaluation_label": "continuity 写法 2 / 更激进的 KP framing",
             "kp_scene_coherence": "good",
             "kp_pressure_reasonableness": "mixed",
             "investigator_visible_fit": "good",
@@ -517,6 +519,7 @@ def test_web_app_experimental_ai_demo_evaluation_rubric_stays_page_local_and_non
     html = response.text
     assert "已记录当前页实验评估" in html
     assert "当前页评估回显" in html
+    assert "当前实验标签：continuity 写法 2 / 更激进的 KP framing" in html
     assert "AI KP：scene framing 连贯性：好" in html
     assert "AI KP：pressure / next beat 合理性：一般" in html
     assert "第二轮连续性更稳，但调查员提案略有重复。" in html
@@ -530,6 +533,7 @@ def test_web_app_experimental_ai_demo_evaluation_rubric_stays_page_local_and_non
     refresh_html = refresh_response.text
     assert "已记录当前页实验评估" not in refresh_html
     assert "当前页评估回显" not in refresh_html
+    assert "continuity 写法 2 / 更激进的 KP framing" not in refresh_html
     assert "第二轮连续性更稳，但调查员提案略有重复。" not in refresh_html
 
 

@@ -1956,6 +1956,9 @@ def _normalize_experimental_demo_rubric_state(
     form: Mapping[str, Any],
 ) -> dict[str, str]:
     state: dict[str, str] = {}
+    evaluation_label = _normalize_form_text(form.get("evaluation_label")) or ""
+    if evaluation_label:
+        state["evaluation_label"] = evaluation_label
     for field_name in EXPERIMENTAL_DEMO_RUBRIC_FIELD_LABELS:
         value = _normalize_form_text(form.get(field_name)) or ""
         if value in EXPERIMENTAL_DEMO_RUBRIC_VALUE_LABELS:
@@ -2432,9 +2435,15 @@ def _render_experimental_ai_demo_evaluation_rubric(
             </label>
             """
         )
+    evaluation_label = evaluation_state.get("evaluation_label", "")
     evaluation_note = evaluation_state.get("evaluation_note", "")
     summary_html = ""
-    if summary_items or evaluation_note:
+    if summary_items or evaluation_note or evaluation_label:
+        label_html = (
+            f"<p class=\"helper\">当前实验标签：{escape(evaluation_label)}</p>"
+            if evaluation_label
+            else ""
+        )
         note_html = (
             f"<p class=\"helper\">备注：{escape(evaluation_note)}</p>"
             if evaluation_note
@@ -2447,6 +2456,7 @@ def _render_experimental_ai_demo_evaluation_rubric(
                 <h3>当前页评估回显</h3>
                 <span class="tag">keeper review</span>
               </div>
+              {label_html}
               <ul class="meta-list">{''.join(summary_items)}</ul>
               {note_html}
             </article>
@@ -2470,6 +2480,10 @@ def _render_experimental_ai_demo_evaluation_rubric(
           <input type="hidden" name="current_kp_has_keeper_continuity" value="{1 if kp_turn_bridge and _normalize_form_text(kp_turn_bridge.get('keeper_adoption_and_outcome_note')) else 0}">
           <input type="hidden" name="current_kp_has_visible_continuity" value="{1 if kp_turn_bridge and _normalize_form_text(kp_turn_bridge.get('public_outcome_note')) else 0}">
           <input type="hidden" name="current_investigator_has_visible_continuity" value="{1 if investigator_turn_bridge and _normalize_form_text(investigator_turn_bridge.get('public_outcome_note')) else 0}">
+          <label>
+            当前实验标签 / 比较说明（可选）
+            <input type="text" name="evaluation_label" value="{escape(evaluation_label)}" maxlength="120" placeholder="例如：continuity 写法 2 / 更激进的 KP framing / temp 低">
+          </label>
           {''.join(field_html_parts)}
           <label>
             评估备注（可选）
