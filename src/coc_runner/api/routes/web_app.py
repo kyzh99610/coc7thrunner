@@ -252,6 +252,13 @@ class ExperimentalScenarioPresetInternalDiagnostic(TypedDict):
     keeper_only_explanatory_text: str
 
 
+class ExperimentalOneShotInternalAutopilotSeedContext(TypedDict):
+    ending_status: str
+    preset_id: str
+    preset_label: str
+    keeper_only_explanatory_text: str
+
+
 @dataclass(slots=True)
 class ExperimentalOneShotTurnRecord:
     turn_index: int
@@ -3010,6 +3017,25 @@ def _read_experimental_one_shot_internal_diagnostic_for_internal_helper(
     return _read_experimental_one_shot_run_result_internal_diagnostic_snapshot(
         run_result
     )
+
+
+def _build_experimental_one_shot_internal_autopilot_seed_context(
+    *,
+    run_result: ExperimentalOneShotRunResult,
+) -> ExperimentalOneShotInternalAutopilotSeedContext | None:
+    internal_diagnostic = _read_experimental_one_shot_internal_diagnostic_for_internal_helper(
+        run_result=run_result,
+    )
+    if internal_diagnostic is None:
+        return None
+    return {
+        "ending_status": run_result.ending_status,
+        "preset_id": internal_diagnostic["preset_id"],
+        "preset_label": internal_diagnostic["preset_label"],
+        "keeper_only_explanatory_text": internal_diagnostic[
+            "keeper_only_explanatory_text"
+        ],
+    }
 
 
 def _finalize_experimental_one_shot_run_result_internal_tooling(
