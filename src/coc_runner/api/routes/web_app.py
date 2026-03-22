@@ -246,6 +246,13 @@ class ExperimentalScenarioPresetJudgeConfig:
     keeper_only_explanatory_text: str = ""
 
 
+@dataclass(frozen=True, slots=True)
+class ExperimentalScenarioPresetInternalDiagnostic:
+    preset_id: str
+    label: str
+    keeper_only_explanatory_text: str
+
+
 @dataclass(slots=True)
 class ExperimentalOneShotTurnRecord:
     turn_index: int
@@ -276,6 +283,9 @@ class ExperimentalOneShotRunResult:
     keeper_draft_applied: bool
     visible_draft_applied: bool
     scenario_preset_ending: ExperimentalScenarioPresetEnding | None = None
+    scenario_preset_internal_diagnostic: (
+        ExperimentalScenarioPresetInternalDiagnostic | None
+    ) = None
     error_message: str = ""
     secret_breach_term: str = ""
 
@@ -351,6 +361,11 @@ EXPERIMENTAL_ONE_SHOT_PRESET_ENDING_CONFIGS: dict[
                 recap="这次雾港旅店 demo 虽然跑完了，但没有形成足够清晰的场景收尾锚点。",
             ),
         ),
+        keeper_only_explanatory_text=(
+            "Keeper 内部说明：可把“旅店旧图纸”“储物间账本残页”“地窖门槛符号”"
+            "视作旅店调查弧线的内部锚点；visible 侧只应落到账册缺页、204 房异常与"
+            "地窖门前异味等外显表述。"
+        ),
     ),
     "scenario.midnight_archive": ExperimentalScenarioPresetJudgeConfig(
         preset_id="scenario.midnight_archive",
@@ -409,6 +424,10 @@ EXPERIMENTAL_ONE_SHOT_PRESET_ENDING_CONFIGS: dict[
                 reason="当前 demo run 虽已结束，但 transcript 中没有足够的档案馆 preset 进展锚点，只能按未决解释。",
                 recap="这次雨夜档案馆 demo 虽然跑完了，但没有形成足够清晰的场景收尾锚点。",
             ),
+        ),
+        keeper_only_explanatory_text=(
+            "Keeper 内部说明：可把“烧焦便笺”“楼梯灼痕”视作档案馆调查弧线的内部锚点；"
+            "visible 侧只应落到借阅目录、守夜人口供、扶手余温与焦味等外显表述。"
         ),
     ),
 }
@@ -2898,6 +2917,25 @@ def _experimental_scenario_preset_label(preset_id: str) -> str:
     if config is not None:
         return config.label
     return preset_id
+
+
+def _build_experimental_one_shot_scenario_preset_internal_diagnostic(
+    *,
+    snapshot: Mapping[str, Any],
+) -> ExperimentalScenarioPresetInternalDiagnostic | None:
+    scenario = snapshot.get("scenario") or {}
+    scenario_id = _normalize_form_text(scenario.get("scenario_id"))
+    config = EXPERIMENTAL_ONE_SHOT_PRESET_ENDING_CONFIGS.get(scenario_id)
+    if config is None:
+        return None
+    explanatory_text = _normalize_form_text(config.keeper_only_explanatory_text)
+    if not explanatory_text:
+        return None
+    return ExperimentalScenarioPresetInternalDiagnostic(
+        preset_id=config.preset_id,
+        label=config.label,
+        keeper_only_explanatory_text=explanatory_text,
+    )
 
 
 def _judge_generic_experimental_one_shot_scenario_preset_ending(
@@ -7856,6 +7894,11 @@ async def web_app_experimental_ai_demo_one_shot_run(
     run_result.scenario_preset_ending = _judge_experimental_one_shot_scenario_preset_ending(
         snapshot=snapshot,
         run_result=run_result,
+    )
+    run_result.scenario_preset_internal_diagnostic = (
+        _build_experimental_one_shot_scenario_preset_internal_diagnostic(
+            snapshot=snapshot,
+        )
     )
     ending_status_label = EXPERIMENTAL_ONE_SHOT_ENDING_STATUS_LABELS.get(
         run_result.ending_status,

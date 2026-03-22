@@ -1166,8 +1166,10 @@ def test_experimental_one_shot_preset_config_contract_stays_small_and_bounded() 
     assert archive.visible_safe_cues.progress
     assert whispering.visible_safe_endings.success_decisive.reason
     assert archive.visible_safe_endings.max_turns_partial.recap
-    assert whispering.keeper_only_explanatory_text == ""
-    assert archive.keeper_only_explanatory_text == ""
+    assert "旅店旧图纸" in whispering.keeper_only_explanatory_text
+    assert "储物间账本残页" in whispering.keeper_only_explanatory_text
+    assert "烧焦便笺" in archive.keeper_only_explanatory_text
+    assert "楼梯灼痕" in archive.keeper_only_explanatory_text
 
 
 def test_experimental_one_shot_preset_config_visible_safe_lint_rejects_keeper_only_clue_title() -> None:
@@ -1209,6 +1211,48 @@ def test_experimental_one_shot_preset_config_keeper_only_explanatory_text_is_not
         config=keeper_only_config,
         forbidden_terms=forbidden_terms,
     )
+
+
+def test_experimental_one_shot_preset_internal_diagnostic_exposes_keeper_only_text_without_public_render(
+    client: TestClient,
+) -> None:
+    session_id = _start_midnight_archive_dashboard_session(client)
+    _advance_midnight_archive_session(client, session_id)
+    snapshot = _get_snapshot(client, session_id)
+    internal_diagnostic = (
+        web_app_route._build_experimental_one_shot_scenario_preset_internal_diagnostic(
+            snapshot=snapshot
+        )
+    )
+    assert internal_diagnostic is not None
+    assert internal_diagnostic.preset_id == "scenario.midnight_archive"
+    assert internal_diagnostic.label == "雨夜档案馆"
+    assert "烧焦便笺" in internal_diagnostic.keeper_only_explanatory_text
+    assert "楼梯灼痕" in internal_diagnostic.keeper_only_explanatory_text
+
+    fake_service = _SequencedOneShotLocalLLMService(
+        focus_by_turn={
+            1: "夜间借阅目录",
+            2: "守夜人低声回避",
+            3: "扶手余温与焦味",
+            4: "地下保管柜方向的金属摩擦声",
+        }
+    )
+    client.app.state.local_llm_service = fake_service
+
+    response = client.post(
+        f"/app/sessions/{session_id}/experimental-ai-demo/one-shot-run",
+        data={
+            "investigator_id": "investigator-1",
+            "max_turns": "6",
+        },
+    )
+
+    assert response.status_code == 200
+    html = response.text
+    assert "烧焦便笺" not in html
+    assert "楼梯灼痕" not in html
+    assert internal_diagnostic.keeper_only_explanatory_text not in html
 
 
 def test_web_app_experimental_ai_demo_draft_continuity_prefills_dual_textareas_without_state_mutation(
