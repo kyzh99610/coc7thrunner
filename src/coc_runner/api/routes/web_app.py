@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass
 from html import escape
-from typing import Any, Callable, Mapping
+from typing import Any, Callable, Mapping, TypedDict
 from urllib.parse import quote, urlencode
 
 from fastapi import APIRouter, Depends, Request, status
@@ -246,10 +246,9 @@ class ExperimentalScenarioPresetJudgeConfig:
     keeper_only_explanatory_text: str = ""
 
 
-@dataclass(frozen=True, slots=True)
-class ExperimentalScenarioPresetInternalDiagnostic:
+class ExperimentalScenarioPresetInternalDiagnostic(TypedDict):
     preset_id: str
-    label: str
+    preset_label: str
     keeper_only_explanatory_text: str
 
 
@@ -2919,7 +2918,7 @@ def _experimental_scenario_preset_label(preset_id: str) -> str:
     return preset_id
 
 
-def _build_experimental_one_shot_scenario_preset_internal_diagnostic(
+def _serialize_experimental_one_shot_scenario_preset_internal_diagnostic(
     *,
     snapshot: Mapping[str, Any],
 ) -> ExperimentalScenarioPresetInternalDiagnostic | None:
@@ -2931,11 +2930,11 @@ def _build_experimental_one_shot_scenario_preset_internal_diagnostic(
     explanatory_text = _normalize_form_text(config.keeper_only_explanatory_text)
     if not explanatory_text:
         return None
-    return ExperimentalScenarioPresetInternalDiagnostic(
-        preset_id=config.preset_id,
-        label=config.label,
-        keeper_only_explanatory_text=explanatory_text,
-    )
+    return {
+        "preset_id": config.preset_id,
+        "preset_label": config.label,
+        "keeper_only_explanatory_text": explanatory_text,
+    }
 
 
 def _judge_generic_experimental_one_shot_scenario_preset_ending(
@@ -7896,7 +7895,7 @@ async def web_app_experimental_ai_demo_one_shot_run(
         run_result=run_result,
     )
     run_result.scenario_preset_internal_diagnostic = (
-        _build_experimental_one_shot_scenario_preset_internal_diagnostic(
+        _serialize_experimental_one_shot_scenario_preset_internal_diagnostic(
             snapshot=snapshot,
         )
     )

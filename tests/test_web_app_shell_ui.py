@@ -1220,15 +1220,19 @@ def test_experimental_one_shot_preset_internal_diagnostic_exposes_keeper_only_te
     _advance_midnight_archive_session(client, session_id)
     snapshot = _get_snapshot(client, session_id)
     internal_diagnostic = (
-        web_app_route._build_experimental_one_shot_scenario_preset_internal_diagnostic(
+        web_app_route._serialize_experimental_one_shot_scenario_preset_internal_diagnostic(
             snapshot=snapshot
         )
     )
     assert internal_diagnostic is not None
-    assert internal_diagnostic.preset_id == "scenario.midnight_archive"
-    assert internal_diagnostic.label == "雨夜档案馆"
-    assert "烧焦便笺" in internal_diagnostic.keeper_only_explanatory_text
-    assert "楼梯灼痕" in internal_diagnostic.keeper_only_explanatory_text
+    assert internal_diagnostic == {
+        "preset_id": "scenario.midnight_archive",
+        "preset_label": "雨夜档案馆",
+        "keeper_only_explanatory_text": (
+            "Keeper 内部说明：可把“烧焦便笺”“楼梯灼痕”视作档案馆调查弧线的内部锚点；"
+            "visible 侧只应落到借阅目录、守夜人口供、扶手余温与焦味等外显表述。"
+        ),
+    }
 
     fake_service = _SequencedOneShotLocalLLMService(
         focus_by_turn={
@@ -1252,7 +1256,7 @@ def test_experimental_one_shot_preset_internal_diagnostic_exposes_keeper_only_te
     html = response.text
     assert "烧焦便笺" not in html
     assert "楼梯灼痕" not in html
-    assert internal_diagnostic.keeper_only_explanatory_text not in html
+    assert internal_diagnostic["keeper_only_explanatory_text"] not in html
 
 
 def test_web_app_experimental_ai_demo_draft_continuity_prefills_dual_textareas_without_state_mutation(
