@@ -1241,6 +1241,12 @@ def test_experimental_one_shot_preset_internal_diagnostic_exposes_keeper_only_te
     )
     assert json.loads(internal_diagnostic_json) == internal_diagnostic
     assert (
+        web_app_route._roundtrip_experimental_one_shot_scenario_preset_internal_diagnostic(
+            internal_diagnostic
+        )
+        == internal_diagnostic
+    )
+    assert (
         web_app_route._parse_experimental_one_shot_scenario_preset_internal_diagnostic_json(
             internal_diagnostic_json
         )
@@ -1291,6 +1297,15 @@ def test_experimental_one_shot_preset_internal_diagnostic_json_serializer_return
     )
 
 
+def test_experimental_one_shot_preset_internal_diagnostic_roundtrip_returns_none_without_payload() -> None:
+    assert (
+        web_app_route._roundtrip_experimental_one_shot_scenario_preset_internal_diagnostic(
+            None
+        )
+        is None
+    )
+
+
 def test_experimental_one_shot_preset_internal_diagnostic_json_parser_returns_none_for_empty_or_malformed_payload() -> None:
     assert (
         web_app_route._parse_experimental_one_shot_scenario_preset_internal_diagnostic_json(
@@ -1298,6 +1313,48 @@ def test_experimental_one_shot_preset_internal_diagnostic_json_parser_returns_no
         )
         is None
     )
+
+
+def test_experimental_one_shot_preset_internal_diagnostic_roundtrip_preserves_small_contract_for_supported_presets() -> None:
+    for scenario_payload, expected in (
+        (
+            whispering_guesthouse_payload(),
+            {
+                "preset_id": "scenario.whispering_guesthouse",
+                "preset_label": "雾港旅店的低语",
+                "keeper_only_explanatory_text": (
+                    "Keeper 内部说明：可把“旅店旧图纸”“储物间账本残页”“地窖门槛符号”"
+                    "视作旅店调查弧线的内部锚点；visible 侧只应落到账册缺页、204 房异常与"
+                    "地窖门前异味等外显表述。"
+                ),
+            },
+        ),
+        (
+            midnight_archive_payload(),
+            {
+                "preset_id": "scenario.midnight_archive",
+                "preset_label": "雨夜档案馆",
+                "keeper_only_explanatory_text": (
+                    "Keeper 内部说明：可把“烧焦便笺”“楼梯灼痕”视作档案馆调查弧线的内部锚点；"
+                    "visible 侧只应落到借阅目录、守夜人口供、扶手余温与焦味等外显表述。"
+                ),
+            },
+        ),
+    ):
+        internal_diagnostic = (
+            web_app_route._serialize_experimental_one_shot_scenario_preset_internal_diagnostic(
+                snapshot={"scenario": scenario_payload}
+            )
+        )
+
+        assert internal_diagnostic == expected
+        assert (
+            web_app_route._roundtrip_experimental_one_shot_scenario_preset_internal_diagnostic(
+                internal_diagnostic
+            )
+            == expected
+        )
+
     assert (
         web_app_route._parse_experimental_one_shot_scenario_preset_internal_diagnostic_json(
             ""
