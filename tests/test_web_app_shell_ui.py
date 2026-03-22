@@ -1367,8 +1367,8 @@ def test_experimental_one_shot_preset_internal_diagnostic_exposes_keeper_only_te
     )
     assert before_snapshot == _get_snapshot(client, session_id)
     internal_diagnostic = (
-        web_app_route._read_experimental_one_shot_run_result_internal_diagnostic_snapshot(
-            run_result
+        web_app_route._read_experimental_one_shot_internal_diagnostic_for_internal_helper(
+            run_result=run_result
         )
     )
     assert internal_diagnostic is not None
@@ -1491,8 +1491,8 @@ def test_experimental_one_shot_run_result_internal_diagnostic_snapshot_accessor_
         local_llm_service=fake_service,
     )
     internal_snapshot = (
-        web_app_route._read_experimental_one_shot_run_result_internal_diagnostic_snapshot(
-            run_result
+        web_app_route._read_experimental_one_shot_internal_diagnostic_for_internal_helper(
+            run_result=run_result
         )
     )
 
@@ -1554,6 +1554,38 @@ def test_experimental_one_shot_run_result_internal_diagnostic_snapshot_accessor_
         )
         is None
     )
+
+
+def test_experimental_one_shot_internal_helper_onboarding_template_delegates_to_snapshot_accessor(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    sentinel = {
+        "preset_id": "scenario.midnight_archive",
+        "preset_label": "雨夜档案馆",
+        "keeper_only_explanatory_text": "onboarding sentinel",
+    }
+    accessor_calls: list[web_app_route.ExperimentalOneShotRunResult] = []
+    run_result = _make_empty_experimental_one_shot_run_result()
+
+    def _fake_accessor(
+        patched_run_result: web_app_route.ExperimentalOneShotRunResult,
+    ) -> web_app_route.ExperimentalScenarioPresetInternalDiagnostic:
+        accessor_calls.append(patched_run_result)
+        return sentinel
+
+    monkeypatch.setattr(
+        web_app_route,
+        "_read_experimental_one_shot_run_result_internal_diagnostic_snapshot",
+        _fake_accessor,
+    )
+
+    assert (
+        web_app_route._read_experimental_one_shot_internal_diagnostic_for_internal_helper(
+            run_result=run_result
+        )
+        == sentinel
+    )
+    assert accessor_calls == [run_result]
 
 
 def test_experimental_one_shot_runtime_internal_diagnostic_snapshot_builder_is_confined_to_finalize_helper() -> None:

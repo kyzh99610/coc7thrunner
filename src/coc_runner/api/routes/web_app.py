@@ -3003,6 +3003,15 @@ def _read_experimental_one_shot_run_result_internal_diagnostic_snapshot(
     )
 
 
+def _read_experimental_one_shot_internal_diagnostic_for_internal_helper(
+    *,
+    run_result: ExperimentalOneShotRunResult,
+) -> ExperimentalScenarioPresetInternalDiagnostic | None:
+    return _read_experimental_one_shot_run_result_internal_diagnostic_snapshot(
+        run_result
+    )
+
+
 def _finalize_experimental_one_shot_run_result_internal_tooling(
     *,
     snapshot: Mapping[str, Any],
