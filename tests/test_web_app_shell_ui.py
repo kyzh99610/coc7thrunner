@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from urllib.parse import quote
 
+import coc_runner.api.routes.web_app as web_app_route
 import coc_runner.application.session_service as session_service_module
 from fastapi.testclient import TestClient
 from coc_runner.application.dice_execution import LocalDiceExecutionBackend
@@ -1143,6 +1144,25 @@ def test_web_app_experimental_ai_demo_one_shot_run_reuses_ending_judge_for_midni
     assert len(fake_service.requests) == 8
     after_snapshot = _get_snapshot(client, session_id)
     assert before_snapshot == after_snapshot
+
+
+def test_experimental_one_shot_preset_config_contract_stays_small_and_bounded() -> None:
+    configs = web_app_route.EXPERIMENTAL_ONE_SHOT_PRESET_ENDING_CONFIGS
+
+    assert set(configs) == {
+        "scenario.whispering_guesthouse",
+        "scenario.midnight_archive",
+    }
+    whispering = configs["scenario.whispering_guesthouse"]
+    archive = configs["scenario.midnight_archive"]
+    assert whispering.label == "雾港旅店的低语"
+    assert archive.label == "雨夜档案馆"
+    assert whispering.decisive_cues
+    assert whispering.progress_cues
+    assert archive.decisive_cues
+    assert archive.progress_cues
+    assert whispering.success_decisive.reason
+    assert archive.max_turns_partial.recap
 
 
 def test_web_app_experimental_ai_demo_draft_continuity_prefills_dual_textareas_without_state_mutation(
