@@ -330,6 +330,80 @@ def _make_experimental_result(
     )
 
 
+def _run_finalized_experimental_one_shot_demo(
+    *,
+    client: TestClient,
+    session_id: str,
+    local_llm_service: object,
+    investigator_id: str = "investigator-1",
+    max_turns: int = 6,
+) -> web_app_route.ExperimentalOneShotRunResult:
+    service = client.app.state.session_service
+    session, keeper_view, _, _ = service.get_keeper_workspace(session_id)
+    snapshot = session.model_dump(mode="json")
+    investigator_view = service.get_session_view(
+        session_id,
+        viewer_id=investigator_id,
+        viewer_role=session_service_module.ViewerRole.INVESTIGATOR,
+    ).model_dump(mode="json")
+    run_result = web_app_route._run_experimental_one_shot_demo(
+        service=service,
+        local_llm_service=local_llm_service,
+        session=session,
+        keeper_view=keeper_view,
+        snapshot=snapshot,
+        investigator_view=investigator_view,
+        investigator_id=investigator_id,
+        max_turns=max_turns,
+    )
+    run_result.scenario_preset_ending = (
+        web_app_route._judge_experimental_one_shot_scenario_preset_ending(
+            snapshot=snapshot,
+            run_result=run_result,
+        )
+    )
+    run_result.scenario_preset_internal_diagnostic = (
+        web_app_route._serialize_experimental_one_shot_scenario_preset_internal_diagnostic(
+            snapshot=snapshot,
+        )
+    )
+    run_result.scenario_preset_internal_diagnostic_json = (
+        web_app_route._serialize_experimental_one_shot_scenario_preset_internal_diagnostic_json(
+            run_result.scenario_preset_internal_diagnostic
+        )
+    )
+    return run_result
+
+
+def _make_empty_experimental_one_shot_run_result(
+    *,
+    scenario_preset_internal_diagnostic: (
+        web_app_route.ExperimentalScenarioPresetInternalDiagnostic | None
+    ) = None,
+    scenario_preset_internal_diagnostic_json: str = "",
+) -> web_app_route.ExperimentalOneShotRunResult:
+    return web_app_route.ExperimentalOneShotRunResult(
+        ending_status="success",
+        ending_reason="completed_demo_arc",
+        max_turns=1,
+        turn_records=[],
+        kp_result=None,
+        investigator_result=None,
+        keeper_draft_result=None,
+        visible_draft_result=None,
+        current_turn_index=0,
+        narrative_work_note_value="",
+        keeper_turn_note_value="",
+        visible_turn_note_value="",
+        kp_turn_bridge=None,
+        investigator_turn_bridge=None,
+        keeper_draft_applied=False,
+        visible_draft_applied=False,
+        scenario_preset_internal_diagnostic=scenario_preset_internal_diagnostic,
+        scenario_preset_internal_diagnostic_json=scenario_preset_internal_diagnostic_json,
+    )
+
+
 def _register_text_source(
     client: TestClient,
     *,
@@ -1286,6 +1360,131 @@ def test_experimental_one_shot_preset_internal_diagnostic_exposes_keeper_only_te
     assert internal_diagnostic["keeper_only_explanatory_text"] not in html
     assert internal_diagnostic_json not in html
     assert '"keeper_only_explanatory_text"' not in html
+
+
+@pytest.mark.parametrize(
+    ("start_session", "advance_session", "focus_by_turn", "expected"),
+    [
+        (
+            _start_keeper_dashboard_session,
+            _advance_keeper_dashboard_session,
+            {
+                1: "204 房登记",
+                2: "二楼脚步声",
+                3: "地窖门前异味",
+                4: "封死地窖门",
+            },
+            {
+                "preset_id": "scenario.whispering_guesthouse",
+                "preset_label": "雾港旅店的低语",
+                "keeper_only_explanatory_text": (
+                    "Keeper 内部说明：可把“旅店旧图纸”“储物间账本残页”“地窖门槛符号”"
+                    "视作旅店调查弧线的内部锚点；visible 侧只应落到账册缺页、204 房异常与"
+                    "地窖门前异味等外显表述。"
+                ),
+            },
+        ),
+        (
+            _start_midnight_archive_dashboard_session,
+            _advance_midnight_archive_session,
+            {
+                1: "夜间借阅目录",
+                2: "守夜人低声回避",
+                3: "扶手余温与焦味",
+                4: "地下保管柜方向的金属摩擦声",
+            },
+            {
+                "preset_id": "scenario.midnight_archive",
+                "preset_label": "雨夜档案馆",
+                "keeper_only_explanatory_text": (
+                    "Keeper 内部说明：可把“烧焦便笺”“楼梯灼痕”视作档案馆调查弧线的内部锚点；"
+                    "visible 侧只应落到借阅目录、守夜人口供、扶手余温与焦味等外显表述。"
+                ),
+            },
+        ),
+    ],
+)
+def test_experimental_one_shot_run_result_internal_diagnostic_snapshot_accessor_returns_bounded_internal_contract(
+    client: TestClient,
+    start_session,
+    advance_session,
+    focus_by_turn: dict[int, str],
+    expected: web_app_route.ExperimentalScenarioPresetInternalDiagnostic,
+) -> None:
+    session_id = start_session(client)
+    advance_session(client, session_id)
+    fake_service = _SequencedOneShotLocalLLMService(focus_by_turn=focus_by_turn)
+    before_snapshot = _get_snapshot(client, session_id)
+
+    run_result = _run_finalized_experimental_one_shot_demo(
+        client=client,
+        session_id=session_id,
+        local_llm_service=fake_service,
+    )
+    internal_snapshot = (
+        web_app_route._read_experimental_one_shot_run_result_internal_diagnostic_snapshot(
+            run_result
+        )
+    )
+
+    assert before_snapshot == _get_snapshot(client, session_id)
+    assert internal_snapshot == expected
+    assert run_result.scenario_preset_internal_diagnostic == expected
+    assert run_result.scenario_preset_internal_diagnostic_json
+    assert json.loads(run_result.scenario_preset_internal_diagnostic_json) == expected
+    assert set(internal_snapshot) == {
+        "preset_id",
+        "preset_label",
+        "keeper_only_explanatory_text",
+    }
+    assert "visible_safe_cues" not in run_result.scenario_preset_internal_diagnostic_json
+    assert "visible_safe_endings" not in run_result.scenario_preset_internal_diagnostic_json
+    assert "ending_reason" not in run_result.scenario_preset_internal_diagnostic_json
+    for llm_request in fake_service.requests:
+        if llm_request.workspace_key in {
+            "experimental_ai_investigator_demo",
+            "experimental_ai_visible_continuity_draft",
+        }:
+            assert expected["keeper_only_explanatory_text"] not in str(
+                llm_request.context
+            )
+
+
+@pytest.mark.parametrize(
+    "raw_value",
+    [
+        "",
+        "{not-json}",
+        json.dumps(
+            {
+                "preset_id": "scenario.midnight_archive",
+                "preset_label": "雨夜档案馆",
+                "keeper_only_explanatory_text": "Keeper 内部说明",
+                "visible_safe_cues": ["借阅目录"],
+            },
+            ensure_ascii=False,
+        ),
+    ],
+)
+def test_experimental_one_shot_run_result_internal_diagnostic_snapshot_accessor_is_json_first_and_rejects_non_snapshot_payload(
+    raw_value: str,
+) -> None:
+    diagnostic = {
+        "preset_id": "scenario.midnight_archive",
+        "preset_label": "雨夜档案馆",
+        "keeper_only_explanatory_text": "Keeper 内部说明",
+    }
+    run_result = _make_empty_experimental_one_shot_run_result(
+        scenario_preset_internal_diagnostic=diagnostic,
+        scenario_preset_internal_diagnostic_json=raw_value,
+    )
+
+    assert (
+        web_app_route._read_experimental_one_shot_run_result_internal_diagnostic_snapshot(
+            run_result
+        )
+        is None
+    )
 
 
 def test_experimental_one_shot_preset_internal_diagnostic_json_serializer_returns_empty_string_without_payload() -> None:

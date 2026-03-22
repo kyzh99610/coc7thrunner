@@ -2992,6 +2992,17 @@ def _roundtrip_experimental_one_shot_scenario_preset_internal_diagnostic(
     )
 
 
+def _read_experimental_one_shot_run_result_internal_diagnostic_snapshot(
+    run_result: ExperimentalOneShotRunResult,
+) -> ExperimentalScenarioPresetInternalDiagnostic | None:
+    parsed = _parse_experimental_one_shot_scenario_preset_internal_diagnostic_json(
+        run_result.scenario_preset_internal_diagnostic_json
+    )
+    return _roundtrip_experimental_one_shot_scenario_preset_internal_diagnostic(
+        parsed
+    )
+
+
 def _judge_generic_experimental_one_shot_scenario_preset_ending(
     *,
     run_result: ExperimentalOneShotRunResult,
