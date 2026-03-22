@@ -65,6 +65,41 @@ def _collect_enclosing_functions_calling_helper(
     return callers
 
 
+def _collect_enclosing_functions_touching_attribute(
+    *,
+    path: Path,
+    attribute_name: str,
+    context_names: tuple[str, ...],
+) -> set[str]:
+    tree = ast.parse(path.read_text(encoding="utf-8"))
+    callers: set[str] = set()
+    function_stack: list[str] = []
+    allowed_context_names = set(context_names)
+
+    class _Visitor(ast.NodeVisitor):
+        def visit_FunctionDef(self, node: ast.FunctionDef) -> None:
+            function_stack.append(node.name)
+            self.generic_visit(node)
+            function_stack.pop()
+
+        def visit_AsyncFunctionDef(self, node: ast.AsyncFunctionDef) -> None:
+            function_stack.append(node.name)
+            self.generic_visit(node)
+            function_stack.pop()
+
+        def visit_Attribute(self, node: ast.Attribute) -> None:
+            if (
+                node.attr == attribute_name
+                and type(node.ctx).__name__ in allowed_context_names
+                and function_stack
+            ):
+                callers.add(function_stack[-1])
+            self.generic_visit(node)
+
+    _Visitor().visit(tree)
+    return callers
+
+
 class _FakeLocalLLMService:
     def __init__(self) -> None:
         self.requests = []
@@ -1530,6 +1565,42 @@ def test_experimental_one_shot_runtime_internal_diagnostic_snapshot_builder_is_c
     assert callers == {"_finalize_experimental_one_shot_run_result_internal_tooling"}
 
 
+def test_experimental_one_shot_runtime_internal_diagnostic_json_is_only_read_via_snapshot_accessor() -> None:
+    callers = _collect_enclosing_functions_touching_attribute(
+        path=Path(web_app_route.__file__),
+        attribute_name="scenario_preset_internal_diagnostic_json",
+        context_names=("Load",),
+    )
+
+    assert callers == {"_read_experimental_one_shot_run_result_internal_diagnostic_snapshot"}
+
+
+def test_experimental_one_shot_runtime_internal_diagnostic_fields_are_only_written_during_finalize() -> None:
+    json_callers = _collect_enclosing_functions_touching_attribute(
+        path=Path(web_app_route.__file__),
+        attribute_name="scenario_preset_internal_diagnostic_json",
+        context_names=("Store",),
+    )
+    contract_callers = _collect_enclosing_functions_touching_attribute(
+        path=Path(web_app_route.__file__),
+        attribute_name="scenario_preset_internal_diagnostic",
+        context_names=("Store",),
+    )
+
+    assert json_callers == {"_finalize_experimental_one_shot_run_result_internal_tooling"}
+    assert contract_callers == {"_finalize_experimental_one_shot_run_result_internal_tooling"}
+
+
+def test_experimental_one_shot_runtime_production_helpers_do_not_read_internal_contract_directly() -> None:
+    callers = _collect_enclosing_functions_touching_attribute(
+        path=Path(web_app_route.__file__),
+        attribute_name="scenario_preset_internal_diagnostic",
+        context_names=("Load",),
+    )
+
+    assert callers == set()
+
+
 def test_experimental_one_shot_runtime_test_helpers_do_not_reintroduce_snapshot_based_internal_diagnostic_reads() -> None:
     callers = _collect_enclosing_functions_calling_helper(
         path=Path(__file__),
@@ -1539,6 +1610,26 @@ def test_experimental_one_shot_runtime_test_helpers_do_not_reintroduce_snapshot_
     assert callers == {
         "test_experimental_one_shot_preset_internal_diagnostic_roundtrip_preserves_small_contract_for_supported_presets"
     }
+
+
+def test_experimental_one_shot_runtime_test_helpers_do_not_touch_internal_diagnostic_fields_directly() -> None:
+    helper_function_names = {
+        "_run_finalized_experimental_one_shot_demo",
+        "_make_empty_experimental_one_shot_run_result",
+    }
+    json_callers = _collect_enclosing_functions_touching_attribute(
+        path=Path(__file__),
+        attribute_name="scenario_preset_internal_diagnostic_json",
+        context_names=("Load", "Store"),
+    )
+    contract_callers = _collect_enclosing_functions_touching_attribute(
+        path=Path(__file__),
+        attribute_name="scenario_preset_internal_diagnostic",
+        context_names=("Load", "Store"),
+    )
+
+    assert json_callers & helper_function_names == set()
+    assert contract_callers & helper_function_names == set()
 
 
 def test_experimental_one_shot_runtime_finalize_helper_rehydrates_internal_contract_via_snapshot_accessor(
