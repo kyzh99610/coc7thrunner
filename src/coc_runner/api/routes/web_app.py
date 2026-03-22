@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass
 from html import escape
-from typing import Any, Mapping
+from typing import Any, Callable, Mapping
 from urllib.parse import quote, urlencode
 
 from fastapi import APIRouter, Depends, Request, status
@@ -51,6 +51,10 @@ from coc_runner.domain.models import (
     UpdateKeeperPromptRequest,
     UpdateSessionLifecycleRequest,
     ViewerRole,
+)
+from coc_runner.domain.scenario_examples import (
+    midnight_archive_payload,
+    whispering_guesthouse_payload,
 )
 from coc_runner.error_details import extract_error_detail
 
@@ -265,6 +269,13 @@ class ExperimentalOneShotRunResult:
     secret_breach_term: str = ""
 
 
+EXPERIMENTAL_ONE_SHOT_VISIBLE_SAFE_FORBIDDEN_MARKERS: tuple[str, ...] = (
+    "private_notes",
+    "secret_state_refs",
+    "keeper_workflow",
+)
+
+
 EXPERIMENTAL_ONE_SHOT_PRESET_ENDING_CONFIGS: dict[
     str,
     ExperimentalScenarioPresetJudgeConfig,
@@ -330,7 +341,7 @@ EXPERIMENTAL_ONE_SHOT_PRESET_ENDING_CONFIGS: dict[
         preset_id="scenario.midnight_archive",
         label="雨夜档案馆",
         decisive_cues=(
-            "楼梯灼痕",
+            "灼热擦痕",
             "扶手余温",
             "余温",
             "焦味",
@@ -339,7 +350,7 @@ EXPERIMENTAL_ONE_SHOT_PRESET_ENDING_CONFIGS: dict[
         ),
         progress_cues=(
             "借阅目录",
-            "烧焦便笺",
+            "烧焦的便条",
             "守夜人",
             "地下楼梯间",
             "阅览室",
@@ -354,7 +365,7 @@ EXPERIMENTAL_ONE_SHOT_PRESET_ENDING_CONFIGS: dict[
         ),
         failure_stagnation=ExperimentalScenarioPresetEndingText(
             reason="调查一直围绕借阅目录与守夜人的回避打转，没有把压力继续推进到地下楼梯间异常，因此按停滞 / 未决收尾。",
-            recap="这次雨夜档案馆 demo 反复停在阅览室目录与守夜人口供周围，没有真正把收尾推进到楼梯灼痕与余温层级。",
+            recap="这次雨夜档案馆 demo 反复停在阅览室目录与守夜人口供周围，没有真正把收尾推进到楼梯间的灼热擦痕与余温层级。",
         ),
         failure_default=ExperimentalScenarioPresetEndingText(
             reason="当前 demo run 没能维持可解释的 continuity bridge，preset 下视为这次档案馆调查弧线已经崩坏。",
@@ -369,8 +380,8 @@ EXPERIMENTAL_ONE_SHOT_PRESET_ENDING_CONFIGS: dict[
             recap="这次雨夜档案馆 demo 在达到最大轮数后停下，留下的是未决而非完成的场景收尾。",
         ),
         success_decisive=ExperimentalScenarioPresetEndingText(
-            reason="run 已从阅览室目录推进到地下楼梯间的灼痕、余温或金属摩擦声异常，并保持连续 continuity，当前 preset 下可视为一次明确成功的 demo 收尾。",
-            recap="这次雨夜档案馆 demo 最终从借阅目录与守夜人口供一路推进到楼梯灼痕和扶手余温，形成了一个足以指向地下异常入口的收尾。",
+            reason="run 已从阅览室目录推进到地下楼梯间的灼热擦痕、余温或金属摩擦声异常，并保持连续 continuity，当前 preset 下可视为一次明确成功的 demo 收尾。",
+            recap="这次雨夜档案馆 demo 最终从借阅目录与守夜人口供一路推进到楼梯间的灼热擦痕和扶手余温，形成了一个足以指向地下异常入口的收尾。",
         ),
         success_partial=ExperimentalScenarioPresetEndingText(
             reason="run 虽形成了连续 mini-arc，但主要停留在阅览室目录、守夜人口供与地下楼梯间入口这一层，因此按部分成功解释。",
@@ -382,6 +393,91 @@ EXPERIMENTAL_ONE_SHOT_PRESET_ENDING_CONFIGS: dict[
         ),
     ),
 }
+
+EXPERIMENTAL_ONE_SHOT_PRESET_SCENARIO_BUILDERS: dict[str, Callable[[], dict[str, Any]]] = {
+    "scenario.whispering_guesthouse": whispering_guesthouse_payload,
+    "scenario.midnight_archive": midnight_archive_payload,
+}
+
+
+def _build_experimental_visible_safe_config_forbidden_terms(
+    *,
+    scenario_payload: Mapping[str, Any],
+) -> tuple[str, ...]:
+    terms = list(EXPERIMENTAL_ONE_SHOT_VISIBLE_SAFE_FORBIDDEN_MARKERS)
+    for clue in scenario_payload.get("clues") or []:
+        if not isinstance(clue, dict):
+            continue
+        title = _normalize_form_text(clue.get("title")) or ""
+        scope = _normalize_form_text(clue.get("visibility_scope")) or ""
+        if title and scope in {"kp_only", "hidden_clue", "system_internal"}:
+            terms.append(title)
+    return tuple(dict.fromkeys(term for term in terms if term))
+
+
+def _iter_experimental_visible_safe_config_texts(
+    config: ExperimentalScenarioPresetJudgeConfig,
+) -> list[tuple[str, str]]:
+    items: list[tuple[str, str]] = []
+    items.extend(
+        (f"{config.preset_id}.decisive_cues", cue)
+        for cue in config.decisive_cues
+    )
+    items.extend(
+        (f"{config.preset_id}.progress_cues", cue)
+        for cue in config.progress_cues
+    )
+    ending_fields = {
+        "aborted_secret_breach": config.aborted_secret_breach,
+        "aborted_default": config.aborted_default,
+        "failure_stagnation": config.failure_stagnation,
+        "failure_default": config.failure_default,
+        "max_turns_partial": config.max_turns_partial,
+        "max_turns_stalled": config.max_turns_stalled,
+        "success_decisive": config.success_decisive,
+        "success_partial": config.success_partial,
+        "success_stalled": config.success_stalled,
+    }
+    for field_name, ending_text in ending_fields.items():
+        items.append((f"{config.preset_id}.{field_name}.reason", ending_text.reason))
+        items.append((f"{config.preset_id}.{field_name}.recap", ending_text.recap))
+    return items
+
+
+def _lint_experimental_visible_safe_preset_config(
+    *,
+    config: ExperimentalScenarioPresetJudgeConfig,
+    forbidden_terms: tuple[str, ...],
+) -> None:
+    violations: list[str] = []
+    for field_name, text in _iter_experimental_visible_safe_config_texts(config):
+        for term in forbidden_terms:
+            if term and term in text:
+                violations.append(f"{field_name} 命中不可见词 `{term}`")
+    if violations:
+        details = "；".join(violations)
+        raise ValueError(
+            f"experimental one-shot preset config visible-safe lint failed for {config.preset_id}: {details}"
+        )
+
+
+def _validate_experimental_one_shot_preset_configs_visible_safe() -> None:
+    for preset_id, config in EXPERIMENTAL_ONE_SHOT_PRESET_ENDING_CONFIGS.items():
+        scenario_builder = EXPERIMENTAL_ONE_SHOT_PRESET_SCENARIO_BUILDERS.get(preset_id)
+        if scenario_builder is None:
+            raise ValueError(
+                f"experimental one-shot preset config missing scenario builder for {preset_id}"
+            )
+        forbidden_terms = _build_experimental_visible_safe_config_forbidden_terms(
+            scenario_payload=scenario_builder()
+        )
+        _lint_experimental_visible_safe_preset_config(
+            config=config,
+            forbidden_terms=forbidden_terms,
+        )
+
+
+_validate_experimental_one_shot_preset_configs_visible_safe()
 
 
 def _experimental_ai_demo_narrative_work_note_target_id(session_id: str) -> str:

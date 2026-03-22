@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+from dataclasses import replace
 from urllib.parse import quote
 
 import coc_runner.api.routes.web_app as web_app_route
 import coc_runner.application.session_service as session_service_module
+import pytest
 from fastapi.testclient import TestClient
 from coc_runner.application.dice_execution import LocalDiceExecutionBackend
 from coc_runner.application.local_llm_service import (
@@ -1080,11 +1082,11 @@ def test_web_app_experimental_ai_demo_one_shot_run_reuses_ending_judge_for_midni
     assert "场景结局判定：明确成功。" in html
     assert "ending judgment：明确成功" in html
     assert (
-        "ending reason：run 已从阅览室目录推进到地下楼梯间的灼痕、余温或金属摩擦声异常，并保持连续 continuity，当前 preset 下可视为一次明确成功的 demo 收尾。"
+        "ending reason：run 已从阅览室目录推进到地下楼梯间的灼热擦痕、余温或金属摩擦声异常，并保持连续 continuity，当前 preset 下可视为一次明确成功的 demo 收尾。"
         in html
     )
     assert (
-        "ending recap：这次雨夜档案馆 demo 最终从借阅目录与守夜人口供一路推进到楼梯灼痕和扶手余温，形成了一个足以指向地下异常入口的收尾。"
+        "ending recap：这次雨夜档案馆 demo 最终从借阅目录与守夜人口供一路推进到楼梯间的灼热擦痕和扶手余温，形成了一个足以指向地下异常入口的收尾。"
         in html
     )
     assert "Turn 3" in html
@@ -1148,6 +1150,7 @@ def test_web_app_experimental_ai_demo_one_shot_run_reuses_ending_judge_for_midni
 
 def test_experimental_one_shot_preset_config_contract_stays_small_and_bounded() -> None:
     configs = web_app_route.EXPERIMENTAL_ONE_SHOT_PRESET_ENDING_CONFIGS
+    web_app_route._validate_experimental_one_shot_preset_configs_visible_safe()
 
     assert set(configs) == {
         "scenario.whispering_guesthouse",
@@ -1163,6 +1166,25 @@ def test_experimental_one_shot_preset_config_contract_stays_small_and_bounded() 
     assert archive.progress_cues
     assert whispering.success_decisive.reason
     assert archive.max_turns_partial.recap
+
+
+def test_experimental_one_shot_preset_config_visible_safe_lint_rejects_keeper_only_clue_title() -> None:
+    archive = web_app_route.EXPERIMENTAL_ONE_SHOT_PRESET_ENDING_CONFIGS[
+        "scenario.midnight_archive"
+    ]
+    unsafe_config = replace(
+        archive,
+        progress_cues=(*archive.progress_cues, "楼梯灼痕"),
+    )
+    forbidden_terms = web_app_route._build_experimental_visible_safe_config_forbidden_terms(
+        scenario_payload=midnight_archive_payload()
+    )
+
+    with pytest.raises(ValueError, match="楼梯灼痕"):
+        web_app_route._lint_experimental_visible_safe_preset_config(
+            config=unsafe_config,
+            forbidden_terms=forbidden_terms,
+        )
 
 
 def test_web_app_experimental_ai_demo_draft_continuity_prefills_dual_textareas_without_state_mutation(
