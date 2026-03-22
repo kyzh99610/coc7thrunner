@@ -285,6 +285,7 @@ class ExperimentalOneShotRunResult:
     scenario_preset_internal_diagnostic: (
         ExperimentalScenarioPresetInternalDiagnostic | None
     ) = None
+    scenario_preset_internal_diagnostic_json: str = ""
     error_message: str = ""
     secret_breach_term: str = ""
 
@@ -2935,6 +2936,19 @@ def _serialize_experimental_one_shot_scenario_preset_internal_diagnostic(
         "preset_label": config.label,
         "keeper_only_explanatory_text": explanatory_text,
     }
+
+
+def _serialize_experimental_one_shot_scenario_preset_internal_diagnostic_json(
+    diagnostic: ExperimentalScenarioPresetInternalDiagnostic | None,
+) -> str:
+    if diagnostic is None:
+        return ""
+    payload = {
+        "preset_id": diagnostic["preset_id"],
+        "preset_label": diagnostic["preset_label"],
+        "keeper_only_explanatory_text": diagnostic["keeper_only_explanatory_text"],
+    }
+    return json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
 
 
 def _judge_generic_experimental_one_shot_scenario_preset_ending(
@@ -7897,6 +7911,11 @@ async def web_app_experimental_ai_demo_one_shot_run(
     run_result.scenario_preset_internal_diagnostic = (
         _serialize_experimental_one_shot_scenario_preset_internal_diagnostic(
             snapshot=snapshot,
+        )
+    )
+    run_result.scenario_preset_internal_diagnostic_json = (
+        _serialize_experimental_one_shot_scenario_preset_internal_diagnostic_json(
+            run_result.scenario_preset_internal_diagnostic
         )
     )
     ending_status_label = EXPERIMENTAL_ONE_SHOT_ENDING_STATUS_LABELS.get(

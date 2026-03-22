@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from dataclasses import replace
 from urllib.parse import quote
 
@@ -1233,6 +1234,20 @@ def test_experimental_one_shot_preset_internal_diagnostic_exposes_keeper_only_te
             "visible 侧只应落到借阅目录、守夜人口供、扶手余温与焦味等外显表述。"
         ),
     }
+    internal_diagnostic_json = (
+        web_app_route._serialize_experimental_one_shot_scenario_preset_internal_diagnostic_json(
+            internal_diagnostic
+        )
+    )
+    assert json.loads(internal_diagnostic_json) == internal_diagnostic
+    assert set(json.loads(internal_diagnostic_json)) == {
+        "preset_id",
+        "preset_label",
+        "keeper_only_explanatory_text",
+    }
+    assert "visible_safe_cues" not in internal_diagnostic_json
+    assert "visible_safe_endings" not in internal_diagnostic_json
+    assert "ending_reason" not in internal_diagnostic_json
 
     fake_service = _SequencedOneShotLocalLLMService(
         focus_by_turn={
@@ -1257,6 +1272,17 @@ def test_experimental_one_shot_preset_internal_diagnostic_exposes_keeper_only_te
     assert "烧焦便笺" not in html
     assert "楼梯灼痕" not in html
     assert internal_diagnostic["keeper_only_explanatory_text"] not in html
+    assert internal_diagnostic_json not in html
+    assert '"keeper_only_explanatory_text"' not in html
+
+
+def test_experimental_one_shot_preset_internal_diagnostic_json_serializer_returns_empty_string_without_payload() -> None:
+    assert (
+        web_app_route._serialize_experimental_one_shot_scenario_preset_internal_diagnostic_json(
+            None
+        )
+        == ""
+    )
 
 
 def test_web_app_experimental_ai_demo_draft_continuity_prefills_dual_textareas_without_state_mutation(
