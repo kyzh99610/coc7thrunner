@@ -1240,6 +1240,12 @@ def test_experimental_one_shot_preset_internal_diagnostic_exposes_keeper_only_te
         )
     )
     assert json.loads(internal_diagnostic_json) == internal_diagnostic
+    assert (
+        web_app_route._parse_experimental_one_shot_scenario_preset_internal_diagnostic_json(
+            internal_diagnostic_json
+        )
+        == internal_diagnostic
+    )
     assert set(json.loads(internal_diagnostic_json)) == {
         "preset_id",
         "preset_label",
@@ -1282,6 +1288,56 @@ def test_experimental_one_shot_preset_internal_diagnostic_json_serializer_return
             None
         )
         == ""
+    )
+
+
+def test_experimental_one_shot_preset_internal_diagnostic_json_parser_returns_none_for_empty_or_malformed_payload() -> None:
+    assert (
+        web_app_route._parse_experimental_one_shot_scenario_preset_internal_diagnostic_json(
+            None
+        )
+        is None
+    )
+    assert (
+        web_app_route._parse_experimental_one_shot_scenario_preset_internal_diagnostic_json(
+            ""
+        )
+        is None
+    )
+    assert (
+        web_app_route._parse_experimental_one_shot_scenario_preset_internal_diagnostic_json(
+            "{not-json}"
+        )
+        is None
+    )
+
+
+def test_experimental_one_shot_preset_internal_diagnostic_json_parser_returns_none_for_incomplete_or_unbounded_payload() -> None:
+    assert (
+        web_app_route._parse_experimental_one_shot_scenario_preset_internal_diagnostic_json(
+            json.dumps(
+                {
+                    "preset_id": "scenario.midnight_archive",
+                    "preset_label": "雨夜档案馆",
+                },
+                ensure_ascii=False,
+            )
+        )
+        is None
+    )
+    assert (
+        web_app_route._parse_experimental_one_shot_scenario_preset_internal_diagnostic_json(
+            json.dumps(
+                {
+                    "preset_id": "scenario.midnight_archive",
+                    "preset_label": "雨夜档案馆",
+                    "keeper_only_explanatory_text": "Keeper 内部说明",
+                    "visible_safe_cues": ["借阅目录"],
+                },
+                ensure_ascii=False,
+            )
+        )
+        is None
     )
 
 

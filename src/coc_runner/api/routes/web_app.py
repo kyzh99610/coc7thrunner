@@ -2951,6 +2951,37 @@ def _serialize_experimental_one_shot_scenario_preset_internal_diagnostic_json(
     return json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
 
 
+def _parse_experimental_one_shot_scenario_preset_internal_diagnostic_json(
+    raw_value: Any,
+) -> ExperimentalScenarioPresetInternalDiagnostic | None:
+    normalized = _normalize_form_text(raw_value)
+    if not normalized:
+        return None
+    try:
+        payload = json.loads(normalized)
+    except json.JSONDecodeError:
+        return None
+    if not isinstance(payload, dict):
+        return None
+    expected_keys = {
+        "preset_id",
+        "preset_label",
+        "keeper_only_explanatory_text",
+    }
+    if set(payload) != expected_keys:
+        return None
+    preset_id = _normalize_form_text(payload.get("preset_id"))
+    preset_label = _normalize_form_text(payload.get("preset_label"))
+    explanatory_text = _normalize_form_text(payload.get("keeper_only_explanatory_text"))
+    if not preset_id or not preset_label or not explanatory_text:
+        return None
+    return {
+        "preset_id": preset_id,
+        "preset_label": preset_label,
+        "keeper_only_explanatory_text": explanatory_text,
+    }
+
+
 def _judge_generic_experimental_one_shot_scenario_preset_ending(
     *,
     run_result: ExperimentalOneShotRunResult,
