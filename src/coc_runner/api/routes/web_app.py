@@ -219,11 +219,13 @@ class ExperimentalScenarioPresetEndingText:
 
 
 @dataclass(frozen=True, slots=True)
-class ExperimentalScenarioPresetJudgeConfig:
-    preset_id: str
-    label: str
-    decisive_cues: tuple[str, ...]
-    progress_cues: tuple[str, ...]
+class ExperimentalScenarioPresetVisibleSafeCues:
+    decisive: tuple[str, ...]
+    progress: tuple[str, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class ExperimentalScenarioPresetVisibleSafeEndingTexts:
     aborted_secret_breach: ExperimentalScenarioPresetEndingText
     aborted_default: ExperimentalScenarioPresetEndingText
     failure_stagnation: ExperimentalScenarioPresetEndingText
@@ -233,6 +235,15 @@ class ExperimentalScenarioPresetJudgeConfig:
     success_decisive: ExperimentalScenarioPresetEndingText
     success_partial: ExperimentalScenarioPresetEndingText
     success_stalled: ExperimentalScenarioPresetEndingText
+
+
+@dataclass(frozen=True, slots=True)
+class ExperimentalScenarioPresetJudgeConfig:
+    preset_id: str
+    label: str
+    visible_safe_cues: ExperimentalScenarioPresetVisibleSafeCues
+    visible_safe_endings: ExperimentalScenarioPresetVisibleSafeEndingTexts
+    keeper_only_explanatory_text: str = ""
 
 
 @dataclass(slots=True)
@@ -283,113 +294,121 @@ EXPERIMENTAL_ONE_SHOT_PRESET_ENDING_CONFIGS: dict[
     "scenario.whispering_guesthouse": ExperimentalScenarioPresetJudgeConfig(
         preset_id="scenario.whispering_guesthouse",
         label="雾港旅店的低语",
-        decisive_cues=(
-            "地窖门前异味",
-            "封死地窖门",
-            "地窖入口",
-            "地窖门",
-            "门槛",
-            "异味",
+        visible_safe_cues=ExperimentalScenarioPresetVisibleSafeCues(
+            decisive=(
+                "地窖门前异味",
+                "封死地窖门",
+                "地窖入口",
+                "地窖门",
+                "门槛",
+                "异味",
+            ),
+            progress=(
+                "204 房",
+                "204房",
+                "账册",
+                "缺页",
+                "登记",
+                "二楼脚步声",
+                "二楼",
+            ),
         ),
-        progress_cues=(
-            "204 房",
-            "204房",
-            "账册",
-            "缺页",
-            "登记",
-            "二楼脚步声",
-            "二楼",
-        ),
-        aborted_secret_breach=ExperimentalScenarioPresetEndingText(
-            reason="当前 demo run 因公开侧触碰 keeper-only 禁区而被保护性中止，不能继续把这次输出解释成场景结局。",
-            recap="这次雾港旅店 demo 在形成稳定收尾前就触发了 secret boundary；当前 transcript 只保留为实验记录。",
-        ),
-        aborted_default=ExperimentalScenarioPresetEndingText(
-            reason="当前 demo run 没有拿到可用实验输出，未能形成足够的调查推进，因此只能按中止处理。",
-            recap="这次雾港旅店 demo 在形成稳定调查弧线前就已中止，没有得到可解释的场景收尾。",
-        ),
-        failure_stagnation=ExperimentalScenarioPresetEndingText(
-            reason="调查一直围绕账房记录、缺页与老板回避打转，没有把压力继续推进到更明确的异常入口，因此按停滞 / 未决收尾。",
-            recap="这次雾港旅店 demo 反复停在账册缺页与老板回避周围，没有真正把收尾推进到地窖入口层级。",
-        ),
-        failure_default=ExperimentalScenarioPresetEndingText(
-            reason="当前 demo run 没能维持可解释的 continuity bridge，preset 下视为这次调查弧线已经崩坏。",
-            recap="这次雾港旅店 demo 没能维持住调查推进，最后只留下一个崩坏 / 失败的实验收尾。",
-        ),
-        max_turns_partial=ExperimentalScenarioPresetEndingText(
-            reason="调查已经把旅店疑点推进到账房记录、204 房或更深一层的异常，但在轮数上限前没有完成更明确的收束，因此按部分成功解释。",
-            recap="这次雾港旅店 demo 已经把疑点从账房推进到旅店异常链上，但仍在真正收尾前被轮数上限截住。",
-        ),
-        max_turns_stalled=ExperimentalScenarioPresetEndingText(
-            reason="当前 demo run 达到轮数上限时仍没有形成足够的调查推进，因此只能按未决收尾解释。",
-            recap="这次雾港旅店 demo 在达到最大轮数后停下，留下的是未决而非完成的场景收尾。",
-        ),
-        success_decisive=ExperimentalScenarioPresetEndingText(
-            reason="run 已从账房记录推进到地窖入口级别的异常，并保持连续 continuity，当前 preset 下可视为一次明确成功的 demo 收尾。",
-            recap="这次雾港旅店 demo 最终从账房缺页和 204 房异常一路推进到地窖门前异味，形成了一个足以指向封死地窖入口的收尾。",
-        ),
-        success_partial=ExperimentalScenarioPresetEndingText(
-            reason="run 虽形成了连续 mini-arc，但主要停留在账房记录、204 房与旅店动静这一层，因此按部分成功解释。",
-            recap="这次雾港旅店 demo 已把调查推进到账房记录与旅店异常，但还没有真正触到更深一层的地窖入口收尾。",
-        ),
-        success_stalled=ExperimentalScenarioPresetEndingText(
-            reason="当前 demo run 虽已结束，但 transcript 中没有足够的 preset 进展锚点，只能按未决解释。",
-            recap="这次雾港旅店 demo 虽然跑完了，但没有形成足够清晰的场景收尾锚点。",
+        visible_safe_endings=ExperimentalScenarioPresetVisibleSafeEndingTexts(
+            aborted_secret_breach=ExperimentalScenarioPresetEndingText(
+                reason="当前 demo run 因公开侧触碰 keeper-only 禁区而被保护性中止，不能继续把这次输出解释成场景结局。",
+                recap="这次雾港旅店 demo 在形成稳定收尾前就触发了 secret boundary；当前 transcript 只保留为实验记录。",
+            ),
+            aborted_default=ExperimentalScenarioPresetEndingText(
+                reason="当前 demo run 没有拿到可用实验输出，未能形成足够的调查推进，因此只能按中止处理。",
+                recap="这次雾港旅店 demo 在形成稳定调查弧线前就已中止，没有得到可解释的场景收尾。",
+            ),
+            failure_stagnation=ExperimentalScenarioPresetEndingText(
+                reason="调查一直围绕账房记录、缺页与老板回避打转，没有把压力继续推进到更明确的异常入口，因此按停滞 / 未决收尾。",
+                recap="这次雾港旅店 demo 反复停在账册缺页与老板回避周围，没有真正把收尾推进到地窖入口层级。",
+            ),
+            failure_default=ExperimentalScenarioPresetEndingText(
+                reason="当前 demo run 没能维持可解释的 continuity bridge，preset 下视为这次调查弧线已经崩坏。",
+                recap="这次雾港旅店 demo 没能维持住调查推进，最后只留下一个崩坏 / 失败的实验收尾。",
+            ),
+            max_turns_partial=ExperimentalScenarioPresetEndingText(
+                reason="调查已经把旅店疑点推进到账房记录、204 房或更深一层的异常，但在轮数上限前没有完成更明确的收束，因此按部分成功解释。",
+                recap="这次雾港旅店 demo 已经把疑点从账房推进到旅店异常链上，但仍在真正收尾前被轮数上限截住。",
+            ),
+            max_turns_stalled=ExperimentalScenarioPresetEndingText(
+                reason="当前 demo run 达到轮数上限时仍没有形成足够的调查推进，因此只能按未决收尾解释。",
+                recap="这次雾港旅店 demo 在达到最大轮数后停下，留下的是未决而非完成的场景收尾。",
+            ),
+            success_decisive=ExperimentalScenarioPresetEndingText(
+                reason="run 已从账房记录推进到地窖入口级别的异常，并保持连续 continuity，当前 preset 下可视为一次明确成功的 demo 收尾。",
+                recap="这次雾港旅店 demo 最终从账房缺页和 204 房异常一路推进到地窖门前异味，形成了一个足以指向封死地窖入口的收尾。",
+            ),
+            success_partial=ExperimentalScenarioPresetEndingText(
+                reason="run 虽形成了连续 mini-arc，但主要停留在账房记录、204 房与旅店动静这一层，因此按部分成功解释。",
+                recap="这次雾港旅店 demo 已把调查推进到账房记录与旅店异常，但还没有真正触到更深一层的地窖入口收尾。",
+            ),
+            success_stalled=ExperimentalScenarioPresetEndingText(
+                reason="当前 demo run 虽已结束，但 transcript 中没有足够的 preset 进展锚点，只能按未决解释。",
+                recap="这次雾港旅店 demo 虽然跑完了，但没有形成足够清晰的场景收尾锚点。",
+            ),
         ),
     ),
     "scenario.midnight_archive": ExperimentalScenarioPresetJudgeConfig(
         preset_id="scenario.midnight_archive",
         label="雨夜档案馆",
-        decisive_cues=(
-            "灼热擦痕",
-            "扶手余温",
-            "余温",
-            "焦味",
-            "金属摩擦声",
-            "滚烫金属",
+        visible_safe_cues=ExperimentalScenarioPresetVisibleSafeCues(
+            decisive=(
+                "灼热擦痕",
+                "扶手余温",
+                "余温",
+                "焦味",
+                "金属摩擦声",
+                "滚烫金属",
+            ),
+            progress=(
+                "借阅目录",
+                "烧焦的便条",
+                "守夜人",
+                "地下楼梯间",
+                "阅览室",
+            ),
         ),
-        progress_cues=(
-            "借阅目录",
-            "烧焦的便条",
-            "守夜人",
-            "地下楼梯间",
-            "阅览室",
-        ),
-        aborted_secret_breach=ExperimentalScenarioPresetEndingText(
-            reason="当前 demo run 因公开侧触碰 keeper-only 禁区而被保护性中止，不能继续把这次档案馆输出解释成场景结局。",
-            recap="这次雨夜档案馆 demo 在形成稳定收尾前就触发了 secret boundary；当前 transcript 只保留为实验记录。",
-        ),
-        aborted_default=ExperimentalScenarioPresetEndingText(
-            reason="当前 demo run 没有拿到可用实验输出，未能把阅览室线索推进成可解释的档案馆收尾，因此只能按中止处理。",
-            recap="这次雨夜档案馆 demo 在形成稳定调查弧线前就已中止，没有得到可解释的场景收尾。",
-        ),
-        failure_stagnation=ExperimentalScenarioPresetEndingText(
-            reason="调查一直围绕借阅目录与守夜人的回避打转，没有把压力继续推进到地下楼梯间异常，因此按停滞 / 未决收尾。",
-            recap="这次雨夜档案馆 demo 反复停在阅览室目录与守夜人口供周围，没有真正把收尾推进到楼梯间的灼热擦痕与余温层级。",
-        ),
-        failure_default=ExperimentalScenarioPresetEndingText(
-            reason="当前 demo run 没能维持可解释的 continuity bridge，preset 下视为这次档案馆调查弧线已经崩坏。",
-            recap="这次雨夜档案馆 demo 没能维持住调查推进，最后只留下一个崩坏 / 失败的实验收尾。",
-        ),
-        max_turns_partial=ExperimentalScenarioPresetEndingText(
-            reason="调查已经把档案馆疑点推进到借阅目录、守夜人口供或地下楼梯间异常，但在轮数上限前没有完成更明确的收束，因此按部分成功解释。",
-            recap="这次雨夜档案馆 demo 已经把疑点从阅览室推进到地下楼梯间线索上，但仍在真正收尾前被轮数上限截住。",
-        ),
-        max_turns_stalled=ExperimentalScenarioPresetEndingText(
-            reason="当前 demo run 达到轮数上限时仍没有形成足够的档案馆推进，因此只能按未决收尾解释。",
-            recap="这次雨夜档案馆 demo 在达到最大轮数后停下，留下的是未决而非完成的场景收尾。",
-        ),
-        success_decisive=ExperimentalScenarioPresetEndingText(
-            reason="run 已从阅览室目录推进到地下楼梯间的灼热擦痕、余温或金属摩擦声异常，并保持连续 continuity，当前 preset 下可视为一次明确成功的 demo 收尾。",
-            recap="这次雨夜档案馆 demo 最终从借阅目录与守夜人口供一路推进到楼梯间的灼热擦痕和扶手余温，形成了一个足以指向地下异常入口的收尾。",
-        ),
-        success_partial=ExperimentalScenarioPresetEndingText(
-            reason="run 虽形成了连续 mini-arc，但主要停留在阅览室目录、守夜人口供与地下楼梯间入口这一层，因此按部分成功解释。",
-            recap="这次雨夜档案馆 demo 已把调查推进到档案馆的夜间借阅与楼梯间异常，但还没有真正触到更明确的危险收尾。",
-        ),
-        success_stalled=ExperimentalScenarioPresetEndingText(
-            reason="当前 demo run 虽已结束，但 transcript 中没有足够的档案馆 preset 进展锚点，只能按未决解释。",
-            recap="这次雨夜档案馆 demo 虽然跑完了，但没有形成足够清晰的场景收尾锚点。",
+        visible_safe_endings=ExperimentalScenarioPresetVisibleSafeEndingTexts(
+            aborted_secret_breach=ExperimentalScenarioPresetEndingText(
+                reason="当前 demo run 因公开侧触碰 keeper-only 禁区而被保护性中止，不能继续把这次档案馆输出解释成场景结局。",
+                recap="这次雨夜档案馆 demo 在形成稳定收尾前就触发了 secret boundary；当前 transcript 只保留为实验记录。",
+            ),
+            aborted_default=ExperimentalScenarioPresetEndingText(
+                reason="当前 demo run 没有拿到可用实验输出，未能把阅览室线索推进成可解释的档案馆收尾，因此只能按中止处理。",
+                recap="这次雨夜档案馆 demo 在形成稳定调查弧线前就已中止，没有得到可解释的场景收尾。",
+            ),
+            failure_stagnation=ExperimentalScenarioPresetEndingText(
+                reason="调查一直围绕借阅目录与守夜人的回避打转，没有把压力继续推进到地下楼梯间异常，因此按停滞 / 未决收尾。",
+                recap="这次雨夜档案馆 demo 反复停在阅览室目录与守夜人口供周围，没有真正把收尾推进到楼梯间的灼热擦痕与余温层级。",
+            ),
+            failure_default=ExperimentalScenarioPresetEndingText(
+                reason="当前 demo run 没能维持可解释的 continuity bridge，preset 下视为这次档案馆调查弧线已经崩坏。",
+                recap="这次雨夜档案馆 demo 没能维持住调查推进，最后只留下一个崩坏 / 失败的实验收尾。",
+            ),
+            max_turns_partial=ExperimentalScenarioPresetEndingText(
+                reason="调查已经把档案馆疑点推进到借阅目录、守夜人口供或地下楼梯间异常，但在轮数上限前没有完成更明确的收束，因此按部分成功解释。",
+                recap="这次雨夜档案馆 demo 已经把疑点从阅览室推进到地下楼梯间线索上，但仍在真正收尾前被轮数上限截住。",
+            ),
+            max_turns_stalled=ExperimentalScenarioPresetEndingText(
+                reason="当前 demo run 达到轮数上限时仍没有形成足够的档案馆推进，因此只能按未决收尾解释。",
+                recap="这次雨夜档案馆 demo 在达到最大轮数后停下，留下的是未决而非完成的场景收尾。",
+            ),
+            success_decisive=ExperimentalScenarioPresetEndingText(
+                reason="run 已从阅览室目录推进到地下楼梯间的灼热擦痕、余温或金属摩擦声异常，并保持连续 continuity，当前 preset 下可视为一次明确成功的 demo 收尾。",
+                recap="这次雨夜档案馆 demo 最终从借阅目录与守夜人口供一路推进到楼梯间的灼热擦痕和扶手余温，形成了一个足以指向地下异常入口的收尾。",
+            ),
+            success_partial=ExperimentalScenarioPresetEndingText(
+                reason="run 虽形成了连续 mini-arc，但主要停留在阅览室目录、守夜人口供与地下楼梯间入口这一层，因此按部分成功解释。",
+                recap="这次雨夜档案馆 demo 已把调查推进到档案馆的夜间借阅与楼梯间异常，但还没有真正触到更明确的危险收尾。",
+            ),
+            success_stalled=ExperimentalScenarioPresetEndingText(
+                reason="当前 demo run 虽已结束，但 transcript 中没有足够的档案馆 preset 进展锚点，只能按未决解释。",
+                recap="这次雨夜档案馆 demo 虽然跑完了，但没有形成足够清晰的场景收尾锚点。",
+            ),
         ),
     ),
 }
@@ -420,27 +439,37 @@ def _iter_experimental_visible_safe_config_texts(
 ) -> list[tuple[str, str]]:
     items: list[tuple[str, str]] = []
     items.extend(
-        (f"{config.preset_id}.decisive_cues", cue)
-        for cue in config.decisive_cues
+        (f"{config.preset_id}.visible_safe_cues.decisive", cue)
+        for cue in config.visible_safe_cues.decisive
     )
     items.extend(
-        (f"{config.preset_id}.progress_cues", cue)
-        for cue in config.progress_cues
+        (f"{config.preset_id}.visible_safe_cues.progress", cue)
+        for cue in config.visible_safe_cues.progress
     )
     ending_fields = {
-        "aborted_secret_breach": config.aborted_secret_breach,
-        "aborted_default": config.aborted_default,
-        "failure_stagnation": config.failure_stagnation,
-        "failure_default": config.failure_default,
-        "max_turns_partial": config.max_turns_partial,
-        "max_turns_stalled": config.max_turns_stalled,
-        "success_decisive": config.success_decisive,
-        "success_partial": config.success_partial,
-        "success_stalled": config.success_stalled,
+        "aborted_secret_breach": config.visible_safe_endings.aborted_secret_breach,
+        "aborted_default": config.visible_safe_endings.aborted_default,
+        "failure_stagnation": config.visible_safe_endings.failure_stagnation,
+        "failure_default": config.visible_safe_endings.failure_default,
+        "max_turns_partial": config.visible_safe_endings.max_turns_partial,
+        "max_turns_stalled": config.visible_safe_endings.max_turns_stalled,
+        "success_decisive": config.visible_safe_endings.success_decisive,
+        "success_partial": config.visible_safe_endings.success_partial,
+        "success_stalled": config.visible_safe_endings.success_stalled,
     }
     for field_name, ending_text in ending_fields.items():
-        items.append((f"{config.preset_id}.{field_name}.reason", ending_text.reason))
-        items.append((f"{config.preset_id}.{field_name}.recap", ending_text.recap))
+        items.append(
+            (
+                f"{config.preset_id}.visible_safe_endings.{field_name}.reason",
+                ending_text.reason,
+            )
+        )
+        items.append(
+            (
+                f"{config.preset_id}.visible_safe_endings.{field_name}.recap",
+                ending_text.recap,
+            )
+        )
     return items
 
 
@@ -2925,17 +2954,17 @@ def _judge_configured_experimental_one_shot_preset_ending(
     transcript_text = _build_experimental_one_shot_transcript_text(run_result=run_result)
     has_decisive_cue = _experimental_one_shot_contains_any_cue(
         transcript_text,
-        cues=config.decisive_cues,
+        cues=config.visible_safe_cues.decisive,
     )
     has_progress_cue = _experimental_one_shot_contains_any_cue(
         transcript_text,
-        cues=config.progress_cues,
+        cues=config.visible_safe_cues.progress,
     )
     if run_result.ending_status == "aborted":
         outcome = (
-            config.aborted_secret_breach
+            config.visible_safe_endings.aborted_secret_breach
             if run_result.ending_reason == "visible_secret_breach"
-            else config.aborted_default
+            else config.visible_safe_endings.aborted_default
         )
         return ExperimentalScenarioPresetEnding(
             preset_id=config.preset_id,
@@ -2948,48 +2977,48 @@ def _judge_configured_experimental_one_shot_preset_ending(
             return ExperimentalScenarioPresetEnding(
                 preset_id=config.preset_id,
                 judgment="stalled_or_inconclusive",
-                reason=config.failure_stagnation.reason,
-                recap=config.failure_stagnation.recap,
+                reason=config.visible_safe_endings.failure_stagnation.reason,
+                recap=config.visible_safe_endings.failure_stagnation.recap,
             )
         return ExperimentalScenarioPresetEnding(
             preset_id=config.preset_id,
             judgment="collapse_or_failure",
-            reason=config.failure_default.reason,
-            recap=config.failure_default.recap,
+            reason=config.visible_safe_endings.failure_default.reason,
+            recap=config.visible_safe_endings.failure_default.recap,
         )
     if run_result.ending_status == "max_turns":
         if has_decisive_cue or has_progress_cue:
             return ExperimentalScenarioPresetEnding(
                 preset_id=config.preset_id,
                 judgment="partial_success",
-                reason=config.max_turns_partial.reason,
-                recap=config.max_turns_partial.recap,
+                reason=config.visible_safe_endings.max_turns_partial.reason,
+                recap=config.visible_safe_endings.max_turns_partial.recap,
             )
         return ExperimentalScenarioPresetEnding(
             preset_id=config.preset_id,
             judgment="stalled_or_inconclusive",
-            reason=config.max_turns_stalled.reason,
-            recap=config.max_turns_stalled.recap,
+            reason=config.visible_safe_endings.max_turns_stalled.reason,
+            recap=config.visible_safe_endings.max_turns_stalled.recap,
         )
     if has_decisive_cue:
         return ExperimentalScenarioPresetEnding(
             preset_id=config.preset_id,
             judgment="decisive_success",
-            reason=config.success_decisive.reason,
-            recap=config.success_decisive.recap,
+            reason=config.visible_safe_endings.success_decisive.reason,
+            recap=config.visible_safe_endings.success_decisive.recap,
         )
     if has_progress_cue:
         return ExperimentalScenarioPresetEnding(
             preset_id=config.preset_id,
             judgment="partial_success",
-            reason=config.success_partial.reason,
-            recap=config.success_partial.recap,
+            reason=config.visible_safe_endings.success_partial.reason,
+            recap=config.visible_safe_endings.success_partial.recap,
         )
     return ExperimentalScenarioPresetEnding(
         preset_id=config.preset_id,
         judgment="stalled_or_inconclusive",
-        reason=config.success_stalled.reason,
-        recap=config.success_stalled.recap,
+        reason=config.visible_safe_endings.success_stalled.reason,
+        recap=config.visible_safe_endings.success_stalled.recap,
     )
 
 

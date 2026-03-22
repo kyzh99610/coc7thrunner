@@ -1160,21 +1160,27 @@ def test_experimental_one_shot_preset_config_contract_stays_small_and_bounded() 
     archive = configs["scenario.midnight_archive"]
     assert whispering.label == "雾港旅店的低语"
     assert archive.label == "雨夜档案馆"
-    assert whispering.decisive_cues
-    assert whispering.progress_cues
-    assert archive.decisive_cues
-    assert archive.progress_cues
-    assert whispering.success_decisive.reason
-    assert archive.max_turns_partial.recap
+    assert whispering.visible_safe_cues.decisive
+    assert whispering.visible_safe_cues.progress
+    assert archive.visible_safe_cues.decisive
+    assert archive.visible_safe_cues.progress
+    assert whispering.visible_safe_endings.success_decisive.reason
+    assert archive.visible_safe_endings.max_turns_partial.recap
+    assert whispering.keeper_only_explanatory_text == ""
+    assert archive.keeper_only_explanatory_text == ""
 
 
 def test_experimental_one_shot_preset_config_visible_safe_lint_rejects_keeper_only_clue_title() -> None:
     archive = web_app_route.EXPERIMENTAL_ONE_SHOT_PRESET_ENDING_CONFIGS[
         "scenario.midnight_archive"
     ]
+    unsafe_visible_safe_cues = replace(
+        archive.visible_safe_cues,
+        progress=(*archive.visible_safe_cues.progress, "楼梯灼痕"),
+    )
     unsafe_config = replace(
         archive,
-        progress_cues=(*archive.progress_cues, "楼梯灼痕"),
+        visible_safe_cues=unsafe_visible_safe_cues,
     )
     forbidden_terms = web_app_route._build_experimental_visible_safe_config_forbidden_terms(
         scenario_payload=midnight_archive_payload()
@@ -1185,6 +1191,24 @@ def test_experimental_one_shot_preset_config_visible_safe_lint_rejects_keeper_on
             config=unsafe_config,
             forbidden_terms=forbidden_terms,
         )
+
+
+def test_experimental_one_shot_preset_config_keeper_only_explanatory_text_is_not_visible_safe_linted() -> None:
+    archive = web_app_route.EXPERIMENTAL_ONE_SHOT_PRESET_ENDING_CONFIGS[
+        "scenario.midnight_archive"
+    ]
+    keeper_only_config = replace(
+        archive,
+        keeper_only_explanatory_text="Keeper 内部可把楼梯灼痕视作更明确的 clue 锚点。",
+    )
+    forbidden_terms = web_app_route._build_experimental_visible_safe_config_forbidden_terms(
+        scenario_payload=midnight_archive_payload()
+    )
+
+    web_app_route._lint_experimental_visible_safe_preset_config(
+        config=keeper_only_config,
+        forbidden_terms=forbidden_terms,
+    )
 
 
 def test_web_app_experimental_ai_demo_draft_continuity_prefills_dual_textareas_without_state_mutation(
