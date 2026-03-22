@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import ast
 import json
 from dataclasses import replace
+from pathlib import Path
 from urllib.parse import quote
 
 import coc_runner.api.routes.web_app as web_app_route
@@ -27,6 +29,40 @@ from tests.test_keeper_dashboard_ui import (
 )
 from tests.test_session_import import KEEPER_ID, _get_snapshot
 from tests.test_playtest_session_index_ui import _start_grouped_snapshot_session
+
+
+def _collect_enclosing_functions_calling_helper(
+    *,
+    path: Path,
+    helper_name: str,
+) -> set[str]:
+    tree = ast.parse(path.read_text(encoding="utf-8"))
+    callers: set[str] = set()
+    function_stack: list[str] = []
+
+    class _Visitor(ast.NodeVisitor):
+        def visit_FunctionDef(self, node: ast.FunctionDef) -> None:
+            function_stack.append(node.name)
+            self.generic_visit(node)
+            function_stack.pop()
+
+        def visit_AsyncFunctionDef(self, node: ast.AsyncFunctionDef) -> None:
+            function_stack.append(node.name)
+            self.generic_visit(node)
+            function_stack.pop()
+
+        def visit_Call(self, node: ast.Call) -> None:
+            called_name = ""
+            if isinstance(node.func, ast.Name):
+                called_name = node.func.id
+            elif isinstance(node.func, ast.Attribute):
+                called_name = node.func.attr
+            if called_name == helper_name and function_stack:
+                callers.add(function_stack[-1])
+            self.generic_visit(node)
+
+    _Visitor().visit(tree)
+    return callers
 
 
 class _FakeLocalLLMService:
@@ -1483,6 +1519,85 @@ def test_experimental_one_shot_run_result_internal_diagnostic_snapshot_accessor_
         )
         is None
     )
+
+
+def test_experimental_one_shot_runtime_internal_diagnostic_snapshot_builder_is_confined_to_finalize_helper() -> None:
+    callers = _collect_enclosing_functions_calling_helper(
+        path=Path(web_app_route.__file__),
+        helper_name="_serialize_experimental_one_shot_scenario_preset_internal_diagnostic",
+    )
+
+    assert callers == {"_finalize_experimental_one_shot_run_result_internal_tooling"}
+
+
+def test_experimental_one_shot_runtime_test_helpers_do_not_reintroduce_snapshot_based_internal_diagnostic_reads() -> None:
+    callers = _collect_enclosing_functions_calling_helper(
+        path=Path(__file__),
+        helper_name="_serialize_experimental_one_shot_scenario_preset_internal_diagnostic",
+    )
+
+    assert callers == {
+        "test_experimental_one_shot_preset_internal_diagnostic_roundtrip_preserves_small_contract_for_supported_presets"
+    }
+
+
+def test_experimental_one_shot_runtime_finalize_helper_rehydrates_internal_contract_via_snapshot_accessor(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    sentinel = {
+        "preset_id": "scenario.midnight_archive",
+        "preset_label": "雨夜档案馆",
+        "keeper_only_explanatory_text": "guardrail sentinel",
+    }
+    expected_json = '{"preset_id":"scenario.midnight_archive","preset_label":"雨夜档案馆","keeper_only_explanatory_text":"guardrail raw"}'
+    accessor_calls: list[str] = []
+    run_result = _make_empty_experimental_one_shot_run_result()
+
+    monkeypatch.setattr(
+        web_app_route,
+        "_judge_experimental_one_shot_scenario_preset_ending",
+        lambda *, snapshot, run_result: web_app_route.ExperimentalScenarioPresetEnding(
+            preset_id="scenario.midnight_archive",
+            judgment="partial_success",
+            reason="guardrail",
+            recap="guardrail",
+        ),
+    )
+    monkeypatch.setattr(
+        web_app_route,
+        "_serialize_experimental_one_shot_scenario_preset_internal_diagnostic",
+        lambda *, snapshot: {
+            "preset_id": "scenario.midnight_archive",
+            "preset_label": "雨夜档案馆",
+            "keeper_only_explanatory_text": "guardrail raw",
+        },
+    )
+    monkeypatch.setattr(
+        web_app_route,
+        "_serialize_experimental_one_shot_scenario_preset_internal_diagnostic_json",
+        lambda diagnostic: expected_json,
+    )
+
+    def _fake_accessor(
+        patched_run_result: web_app_route.ExperimentalOneShotRunResult,
+    ) -> web_app_route.ExperimentalScenarioPresetInternalDiagnostic:
+        accessor_calls.append(patched_run_result.scenario_preset_internal_diagnostic_json)
+        return sentinel
+
+    monkeypatch.setattr(
+        web_app_route,
+        "_read_experimental_one_shot_run_result_internal_diagnostic_snapshot",
+        _fake_accessor,
+    )
+
+    finalized = web_app_route._finalize_experimental_one_shot_run_result_internal_tooling(
+        snapshot={"scenario": {"scenario_id": "scenario.midnight_archive"}},
+        run_result=run_result,
+    )
+
+    assert accessor_calls == [expected_json]
+    assert finalized.scenario_preset_internal_diagnostic == sentinel
+    assert finalized.scenario_preset_internal_diagnostic_json == expected_json
 
 
 def test_experimental_one_shot_preset_internal_diagnostic_json_serializer_returns_empty_string_without_payload() -> None:
