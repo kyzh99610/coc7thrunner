@@ -10,7 +10,10 @@ from coc_runner.application.local_llm_service import (
     LocalLLMAssistantResult,
 )
 from coc_runner.domain.dice import D100Roll, RollOutcome
-from coc_runner.domain.scenario_examples import whispering_guesthouse_payload
+from coc_runner.domain.scenario_examples import (
+    midnight_archive_payload,
+    whispering_guesthouse_payload,
+)
 
 from tests.helpers import make_participant
 from tests.test_investigator_playtest_ui import _start_investigator_ui_session
@@ -157,10 +160,16 @@ class _FakeLocalLLMService:
 
 
 class _SequencedOneShotLocalLLMService:
-    def __init__(self) -> None:
+    def __init__(self, *, focus_by_turn: dict[int, str] | None = None) -> None:
         self.requests = []
         self.enabled = True
         self._workspace_counts: dict[str, int] = {}
+        self._focus_by_turn = focus_by_turn or {
+            1: "204 房登记",
+            2: "二楼脚步声",
+            3: "地窖门前异味",
+            4: "封死地窖门",
+        }
 
     def _turn_index_for(self, workspace_key: str) -> int:
         next_index = self._workspace_counts.get(workspace_key, 0) + 1
@@ -170,13 +179,7 @@ class _SequencedOneShotLocalLLMService:
     def generate_assistant(self, request):
         self.requests.append(request)
         turn_index = self._turn_index_for(request.workspace_key)
-        focus_by_turn = {
-            1: "204 房登记",
-            2: "二楼脚步声",
-            3: "地窖门前异味",
-            4: "封死地窖门",
-        }
-        focus = focus_by_turn.get(turn_index, f"第 {turn_index} 轮压力点")
+        focus = self._focus_by_turn.get(turn_index, f"第 {turn_index} 轮压力点")
         if request.workspace_key == "experimental_ai_kp_demo":
             return LocalLLMAssistantResult(
                 status="success",
@@ -255,6 +258,47 @@ class _SecretBreachOneShotLocalLLMService(_SequencedOneShotLocalLLMService):
             assert result.assistant is not None
             result.assistant.draft_text = "公开侧错误提到了储物间账本残页，这应该触发中止。"
         return result
+
+
+def _start_midnight_archive_dashboard_session(client: TestClient) -> str:
+    response = client.post(
+        "/sessions/start",
+        json={
+            "keeper_name": "KP",
+            "keeper_id": KEEPER_ID,
+            "scenario": midnight_archive_payload(),
+            "participants": [
+                make_participant("investigator-1", "林舟"),
+                make_participant("ai-1", "测试调查员", kind="ai"),
+            ],
+        },
+    )
+    assert response.status_code == 201
+    return response.json()["session_id"]
+
+
+def _advance_midnight_archive_session(client: TestClient, session_id: str) -> None:
+    response = client.post(
+        f"/sessions/{session_id}/player-action",
+        json={
+            "actor_id": "investigator-1",
+            "action_text": "我翻出夜间借阅目录，并顺着备注走向地下楼梯间。",
+            "structured_action": {"type": "review_catalog"},
+            "effects": {
+                "scene_transitions": [{"scene_id": "scene.archive_basement_stairs"}],
+                "clue_state_effects": [
+                    {
+                        "clue_id": "clue.burned_memo",
+                        "status": "shared_with_party",
+                        "share_with_party": True,
+                        "add_discovered_by": ["investigator-1"],
+                        "discovered_via": "review_catalog",
+                    }
+                ],
+            },
+        },
+    )
+    assert response.status_code == 202
 
 
 def _make_experimental_result(
@@ -998,6 +1042,105 @@ def test_web_app_experimental_ai_demo_one_shot_run_aborts_cleanly_when_llm_disab
         in html
     )
     assert "错误摘要：当前未启用本地 LLM；主流程不依赖它。" in html
+    after_snapshot = _get_snapshot(client, session_id)
+    assert before_snapshot == after_snapshot
+
+
+def test_web_app_experimental_ai_demo_one_shot_run_reuses_ending_judge_for_midnight_archive_success(
+    client: TestClient,
+) -> None:
+    session_id = _start_midnight_archive_dashboard_session(client)
+    _advance_midnight_archive_session(client, session_id)
+    fake_service = _SequencedOneShotLocalLLMService(
+        focus_by_turn={
+            1: "夜间借阅目录",
+            2: "守夜人低声回避",
+            3: "扶手余温与焦味",
+            4: "地下保管柜方向的金属摩擦声",
+        }
+    )
+    client.app.state.local_llm_service = fake_service
+    before_snapshot = _get_snapshot(client, session_id)
+
+    response = client.post(
+        f"/app/sessions/{session_id}/experimental-ai-demo/one-shot-run",
+        data={
+            "investigator_id": "investigator-1",
+            "max_turns": "6",
+        },
+    )
+
+    assert response.status_code == 200
+    html = response.text
+    assert "one-shot self-play demo run 已结束：成功。" in html
+    assert "结束状态：成功。" in html
+    assert "Scenario Preset Ending Judge" in html
+    assert "场景 preset：雨夜档案馆（scenario.midnight_archive）" in html
+    assert "场景结局判定：明确成功。" in html
+    assert "ending judgment：明确成功" in html
+    assert (
+        "ending reason：run 已从阅览室目录推进到地下楼梯间的灼痕、余温或金属摩擦声异常，并保持连续 continuity，当前 preset 下可视为一次明确成功的 demo 收尾。"
+        in html
+    )
+    assert (
+        "ending recap：这次雨夜档案馆 demo 最终从借阅目录与守夜人口供一路推进到楼梯灼痕和扶手余温，形成了一个足以指向地下异常入口的收尾。"
+        in html
+    )
+    assert "Turn 3" in html
+    assert len(fake_service.requests) == 12
+    for llm_request in fake_service.requests:
+        serialized_context = str(llm_request.context)
+        if llm_request.workspace_key in {
+            "experimental_ai_investigator_demo",
+            "experimental_ai_visible_continuity_draft",
+        }:
+            assert "private_notes" not in serialized_context
+            assert "secret_state_refs" not in serialized_context
+            assert "keeper_workflow" not in serialized_context
+    after_snapshot = _get_snapshot(client, session_id)
+    assert before_snapshot == after_snapshot
+
+
+def test_web_app_experimental_ai_demo_one_shot_run_reuses_ending_judge_for_midnight_archive_turn_limit(
+    client: TestClient,
+) -> None:
+    session_id = _start_midnight_archive_dashboard_session(client)
+    _advance_midnight_archive_session(client, session_id)
+    fake_service = _SequencedOneShotLocalLLMService(
+        focus_by_turn={
+            1: "夜间借阅目录",
+            2: "守夜人低声回避",
+            3: "扶手余温与焦味",
+            4: "地下保管柜方向的金属摩擦声",
+        }
+    )
+    client.app.state.local_llm_service = fake_service
+    before_snapshot = _get_snapshot(client, session_id)
+
+    response = client.post(
+        f"/app/sessions/{session_id}/experimental-ai-demo/one-shot-run",
+        data={
+            "investigator_id": "investigator-1",
+            "max_turns": "2",
+        },
+    )
+
+    assert response.status_code == 200
+    html = response.text
+    assert "one-shot self-play demo run 已结束：达到轮数上限。" in html
+    assert "结束状态：达到轮数上限。" in html
+    assert "场景 preset：雨夜档案馆（scenario.midnight_archive）" in html
+    assert "场景结局判定：部分成功。" in html
+    assert "ending judgment：部分成功" in html
+    assert (
+        "ending reason：调查已经把档案馆疑点推进到借阅目录、守夜人口供或地下楼梯间异常，但在轮数上限前没有完成更明确的收束，因此按部分成功解释。"
+        in html
+    )
+    assert (
+        "ending recap：这次雨夜档案馆 demo 已经把疑点从阅览室推进到地下楼梯间线索上，但仍在真正收尾前被轮数上限截住。"
+        in html
+    )
+    assert len(fake_service.requests) == 8
     after_snapshot = _get_snapshot(client, session_id)
     assert before_snapshot == after_snapshot
 

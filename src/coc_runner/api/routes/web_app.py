@@ -2629,6 +2629,8 @@ def _experimental_one_shot_contains_any_cue(
 def _experimental_scenario_preset_label(preset_id: str) -> str:
     if preset_id == "scenario.whispering_guesthouse":
         return "雾港旅店的低语"
+    if preset_id == "scenario.midnight_archive":
+        return "雨夜档案馆"
     return preset_id
 
 
@@ -2779,6 +2781,105 @@ def _judge_whispering_guesthouse_experimental_one_shot_ending(
     )
 
 
+def _judge_midnight_archive_experimental_one_shot_ending(
+    *,
+    run_result: ExperimentalOneShotRunResult,
+) -> ExperimentalScenarioPresetEnding:
+    transcript_text = _build_experimental_one_shot_transcript_text(run_result=run_result)
+    decisive_cues = (
+        "楼梯灼痕",
+        "扶手余温",
+        "余温",
+        "焦味",
+        "金属摩擦声",
+        "滚烫金属",
+    )
+    progress_cues = (
+        "借阅目录",
+        "烧焦便笺",
+        "守夜人",
+        "地下楼梯间",
+        "阅览室",
+    )
+    has_decisive_cue = _experimental_one_shot_contains_any_cue(
+        transcript_text,
+        cues=decisive_cues,
+    )
+    has_progress_cue = _experimental_one_shot_contains_any_cue(
+        transcript_text,
+        cues=progress_cues,
+    )
+    if run_result.ending_status == "aborted":
+        if run_result.ending_reason == "visible_secret_breach":
+            reason = (
+                "当前 demo run 因公开侧触碰 keeper-only 禁区而被保护性中止，不能继续把这次档案馆输出解释成场景结局。"
+            )
+            recap = (
+                "这次雨夜档案馆 demo 在形成稳定收尾前就触发了 secret boundary；当前 transcript 只保留为实验记录。"
+            )
+        else:
+            reason = (
+                "当前 demo run 没有拿到可用实验输出，未能把阅览室线索推进成可解释的档案馆收尾，因此只能按中止处理。"
+            )
+            recap = (
+                "这次雨夜档案馆 demo 在形成稳定调查弧线前就已中止，没有得到可解释的场景收尾。"
+            )
+        return ExperimentalScenarioPresetEnding(
+            preset_id="scenario.midnight_archive",
+            judgment="aborted",
+            reason=reason,
+            recap=recap,
+        )
+    if run_result.ending_status == "failure":
+        if run_result.ending_reason == "stagnation_threshold":
+            return ExperimentalScenarioPresetEnding(
+                preset_id="scenario.midnight_archive",
+                judgment="stalled_or_inconclusive",
+                reason="调查一直围绕借阅目录与守夜人的回避打转，没有把压力继续推进到地下楼梯间异常，因此按停滞 / 未决收尾。",
+                recap="这次雨夜档案馆 demo 反复停在阅览室目录与守夜人口供周围，没有真正把收尾推进到楼梯灼痕与余温层级。",
+            )
+        return ExperimentalScenarioPresetEnding(
+            preset_id="scenario.midnight_archive",
+            judgment="collapse_or_failure",
+            reason="当前 demo run 没能维持可解释的 continuity bridge，preset 下视为这次档案馆调查弧线已经崩坏。",
+            recap="这次雨夜档案馆 demo 没能维持住调查推进，最后只留下一个崩坏 / 失败的实验收尾。",
+        )
+    if run_result.ending_status == "max_turns":
+        if has_decisive_cue or has_progress_cue:
+            return ExperimentalScenarioPresetEnding(
+                preset_id="scenario.midnight_archive",
+                judgment="partial_success",
+                reason="调查已经把档案馆疑点推进到借阅目录、守夜人口供或地下楼梯间异常，但在轮数上限前没有完成更明确的收束，因此按部分成功解释。",
+                recap="这次雨夜档案馆 demo 已经把疑点从阅览室推进到地下楼梯间线索上，但仍在真正收尾前被轮数上限截住。",
+            )
+        return ExperimentalScenarioPresetEnding(
+            preset_id="scenario.midnight_archive",
+            judgment="stalled_or_inconclusive",
+            reason="当前 demo run 达到轮数上限时仍没有形成足够的档案馆推进，因此只能按未决收尾解释。",
+            recap="这次雨夜档案馆 demo 在达到最大轮数后停下，留下的是未决而非完成的场景收尾。",
+        )
+    if has_decisive_cue:
+        return ExperimentalScenarioPresetEnding(
+            preset_id="scenario.midnight_archive",
+            judgment="decisive_success",
+            reason="run 已从阅览室目录推进到地下楼梯间的灼痕、余温或金属摩擦声异常，并保持连续 continuity，当前 preset 下可视为一次明确成功的 demo 收尾。",
+            recap="这次雨夜档案馆 demo 最终从借阅目录与守夜人口供一路推进到楼梯灼痕和扶手余温，形成了一个足以指向地下异常入口的收尾。",
+        )
+    if has_progress_cue:
+        return ExperimentalScenarioPresetEnding(
+            preset_id="scenario.midnight_archive",
+            judgment="partial_success",
+            reason="run 虽形成了连续 mini-arc，但主要停留在阅览室目录、守夜人口供与地下楼梯间入口这一层，因此按部分成功解释。",
+            recap="这次雨夜档案馆 demo 已把调查推进到档案馆的夜间借阅与楼梯间异常，但还没有真正触到更明确的危险收尾。",
+        )
+    return ExperimentalScenarioPresetEnding(
+        preset_id="scenario.midnight_archive",
+        judgment="stalled_or_inconclusive",
+        reason="当前 demo run 虽已结束，但 transcript 中没有足够的档案馆 preset 进展锚点，只能按未决解释。",
+        recap="这次雨夜档案馆 demo 虽然跑完了，但没有形成足够清晰的场景收尾锚点。",
+    )
+
+
 def _judge_experimental_one_shot_scenario_preset_ending(
     *,
     snapshot: Mapping[str, Any],
@@ -2788,6 +2889,10 @@ def _judge_experimental_one_shot_scenario_preset_ending(
     scenario_id = _normalize_form_text(scenario.get("scenario_id"))
     if scenario_id == "scenario.whispering_guesthouse":
         return _judge_whispering_guesthouse_experimental_one_shot_ending(
+            run_result=run_result,
+        )
+    if scenario_id == "scenario.midnight_archive":
+        return _judge_midnight_archive_experimental_one_shot_ending(
             run_result=run_result,
         )
     return _judge_generic_experimental_one_shot_scenario_preset_ending(
