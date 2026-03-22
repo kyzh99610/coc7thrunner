@@ -356,23 +356,10 @@ def _run_finalized_experimental_one_shot_demo(
         investigator_id=investigator_id,
         max_turns=max_turns,
     )
-    run_result.scenario_preset_ending = (
-        web_app_route._judge_experimental_one_shot_scenario_preset_ending(
-            snapshot=snapshot,
-            run_result=run_result,
-        )
+    return web_app_route._finalize_experimental_one_shot_run_result_internal_tooling(
+        snapshot=snapshot,
+        run_result=run_result,
     )
-    run_result.scenario_preset_internal_diagnostic = (
-        web_app_route._serialize_experimental_one_shot_scenario_preset_internal_diagnostic(
-            snapshot=snapshot,
-        )
-    )
-    run_result.scenario_preset_internal_diagnostic_json = (
-        web_app_route._serialize_experimental_one_shot_scenario_preset_internal_diagnostic_json(
-            run_result.scenario_preset_internal_diagnostic
-        )
-    )
-    return run_result
 
 
 def _make_empty_experimental_one_shot_run_result(
@@ -1293,10 +1280,24 @@ def test_experimental_one_shot_preset_internal_diagnostic_exposes_keeper_only_te
 ) -> None:
     session_id = _start_midnight_archive_dashboard_session(client)
     _advance_midnight_archive_session(client, session_id)
-    snapshot = _get_snapshot(client, session_id)
+    before_snapshot = _get_snapshot(client, session_id)
+    internal_tooling_service = _SequencedOneShotLocalLLMService(
+        focus_by_turn={
+            1: "夜间借阅目录",
+            2: "守夜人低声回避",
+            3: "扶手余温与焦味",
+            4: "地下保管柜方向的金属摩擦声",
+        }
+    )
+    run_result = _run_finalized_experimental_one_shot_demo(
+        client=client,
+        session_id=session_id,
+        local_llm_service=internal_tooling_service,
+    )
+    assert before_snapshot == _get_snapshot(client, session_id)
     internal_diagnostic = (
-        web_app_route._serialize_experimental_one_shot_scenario_preset_internal_diagnostic(
-            snapshot=snapshot
+        web_app_route._read_experimental_one_shot_run_result_internal_diagnostic_snapshot(
+            run_result
         )
     )
     assert internal_diagnostic is not None
@@ -1308,12 +1309,9 @@ def test_experimental_one_shot_preset_internal_diagnostic_exposes_keeper_only_te
             "visible 侧只应落到借阅目录、守夜人口供、扶手余温与焦味等外显表述。"
         ),
     }
-    internal_diagnostic_json = (
-        web_app_route._serialize_experimental_one_shot_scenario_preset_internal_diagnostic_json(
-            internal_diagnostic
-        )
-    )
+    internal_diagnostic_json = run_result.scenario_preset_internal_diagnostic_json
     assert json.loads(internal_diagnostic_json) == internal_diagnostic
+    assert run_result.scenario_preset_internal_diagnostic == internal_diagnostic
     assert (
         web_app_route._roundtrip_experimental_one_shot_scenario_preset_internal_diagnostic(
             internal_diagnostic

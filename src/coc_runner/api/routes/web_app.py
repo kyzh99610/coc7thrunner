@@ -3003,6 +3003,29 @@ def _read_experimental_one_shot_run_result_internal_diagnostic_snapshot(
     )
 
 
+def _finalize_experimental_one_shot_run_result_internal_tooling(
+    *,
+    snapshot: Mapping[str, Any],
+    run_result: ExperimentalOneShotRunResult,
+) -> ExperimentalOneShotRunResult:
+    run_result.scenario_preset_ending = _judge_experimental_one_shot_scenario_preset_ending(
+        snapshot=snapshot,
+        run_result=run_result,
+    )
+    diagnostic = _serialize_experimental_one_shot_scenario_preset_internal_diagnostic(
+        snapshot=snapshot,
+    )
+    run_result.scenario_preset_internal_diagnostic_json = (
+        _serialize_experimental_one_shot_scenario_preset_internal_diagnostic_json(
+            diagnostic
+        )
+    )
+    run_result.scenario_preset_internal_diagnostic = (
+        _read_experimental_one_shot_run_result_internal_diagnostic_snapshot(run_result)
+    )
+    return run_result
+
+
 def _judge_generic_experimental_one_shot_scenario_preset_ending(
     *,
     run_result: ExperimentalOneShotRunResult,
@@ -7956,19 +7979,9 @@ async def web_app_experimental_ai_demo_one_shot_run(
         initial_keeper_turn_note_value=keeper_turn_note_value,
         initial_visible_turn_note_value=visible_turn_note_value,
     )
-    run_result.scenario_preset_ending = _judge_experimental_one_shot_scenario_preset_ending(
+    run_result = _finalize_experimental_one_shot_run_result_internal_tooling(
         snapshot=snapshot,
         run_result=run_result,
-    )
-    run_result.scenario_preset_internal_diagnostic = (
-        _serialize_experimental_one_shot_scenario_preset_internal_diagnostic(
-            snapshot=snapshot,
-        )
-    )
-    run_result.scenario_preset_internal_diagnostic_json = (
-        _serialize_experimental_one_shot_scenario_preset_internal_diagnostic_json(
-            run_result.scenario_preset_internal_diagnostic
-        )
     )
     ending_status_label = EXPERIMENTAL_ONE_SHOT_ENDING_STATUS_LABELS.get(
         run_result.ending_status,
