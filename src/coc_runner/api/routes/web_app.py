@@ -273,6 +273,13 @@ class ExperimentalOneShotInternalAutopilotNextStepRecommendation(TypedDict):
     recommended_focus_text: str
 
 
+class ExperimentalOneShotInternalAutopilotMicroAction(TypedDict):
+    action_kind: str
+    preset_id: str
+    preset_label: str
+    action_text: str
+
+
 @dataclass(slots=True)
 class ExperimentalOneShotTurnRecord:
     turn_index: int
@@ -3110,6 +3117,41 @@ def _build_experimental_one_shot_internal_autopilot_next_step_recommendation(
         "preset_id": follow_up_hint["preset_id"],
         "preset_label": follow_up_hint["preset_label"],
         "recommended_focus_text": recommended_focus_text,
+    }
+
+
+def _build_experimental_one_shot_internal_autopilot_micro_action(
+    *,
+    run_result: ExperimentalOneShotRunResult,
+) -> ExperimentalOneShotInternalAutopilotMicroAction | None:
+    recommendation = _build_experimental_one_shot_internal_autopilot_next_step_recommendation(
+        run_result=run_result,
+    )
+    if recommendation is None:
+        return None
+    action_kind = (
+        "pin_focus"
+        if recommendation["recommendation_kind"] == "hold_anchor"
+        else (
+            "advance_focus"
+            if recommendation["recommendation_kind"] == "push_anchor"
+            else "stabilize_focus"
+        )
+    )
+    action_text = (
+        "先做一条 keeper-only 聚焦动作："
+        if action_kind == "pin_focus"
+        else (
+            "先做一条 keeper-only 微推进："
+            if action_kind == "advance_focus"
+            else "先做一条 keeper-only 稳定动作："
+        )
+    ) + recommendation["recommended_focus_text"]
+    return {
+        "action_kind": action_kind,
+        "preset_id": recommendation["preset_id"],
+        "preset_label": recommendation["preset_label"],
+        "action_text": action_text,
     }
 
 
