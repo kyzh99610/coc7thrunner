@@ -259,6 +259,13 @@ class ExperimentalOneShotInternalAutopilotSeedContext(TypedDict):
     keeper_only_explanatory_text: str
 
 
+class ExperimentalOneShotInternalAutopilotFollowUpHint(TypedDict):
+    follow_up_kind: str
+    preset_id: str
+    preset_label: str
+    keeper_anchor_text: str
+
+
 @dataclass(slots=True)
 class ExperimentalOneShotTurnRecord:
     turn_index: int
@@ -3035,6 +3042,32 @@ def _build_experimental_one_shot_internal_autopilot_seed_context(
         "keeper_only_explanatory_text": internal_diagnostic[
             "keeper_only_explanatory_text"
         ],
+    }
+
+
+def _build_experimental_one_shot_internal_autopilot_follow_up_hint(
+    *,
+    run_result: ExperimentalOneShotRunResult,
+) -> ExperimentalOneShotInternalAutopilotFollowUpHint | None:
+    seed_context = _build_experimental_one_shot_internal_autopilot_seed_context(
+        run_result=run_result,
+    )
+    if seed_context is None:
+        return None
+    follow_up_kind = (
+        "preserve_anchor"
+        if seed_context["ending_status"] == "success"
+        else (
+            "continue_anchor"
+            if seed_context["ending_status"] == "max_turns"
+            else "stabilize_anchor"
+        )
+    )
+    return {
+        "follow_up_kind": follow_up_kind,
+        "preset_id": seed_context["preset_id"],
+        "preset_label": seed_context["preset_label"],
+        "keeper_anchor_text": seed_context["keeper_only_explanatory_text"],
     }
 
 

@@ -1374,6 +1374,9 @@ def test_experimental_one_shot_preset_internal_diagnostic_exposes_keeper_only_te
     seed_context = web_app_route._build_experimental_one_shot_internal_autopilot_seed_context(
         run_result=run_result
     )
+    follow_up_hint = web_app_route._build_experimental_one_shot_internal_autopilot_follow_up_hint(
+        run_result=run_result
+    )
     assert internal_diagnostic is not None
     assert internal_diagnostic == {
         "preset_id": "scenario.midnight_archive",
@@ -1392,8 +1395,22 @@ def test_experimental_one_shot_preset_internal_diagnostic_exposes_keeper_only_te
             "visible 侧只应落到借阅目录、守夜人口供、扶手余温与焦味等外显表述。"
         ),
     }
+    assert follow_up_hint == {
+        "follow_up_kind": "preserve_anchor",
+        "preset_id": "scenario.midnight_archive",
+        "preset_label": "雨夜档案馆",
+        "keeper_anchor_text": (
+            "Keeper 内部说明：可把“烧焦便笺”“楼梯灼痕”视作档案馆调查弧线的内部锚点；"
+            "visible 侧只应落到借阅目录、守夜人口供、扶手余温与焦味等外显表述。"
+        ),
+    }
     internal_diagnostic_json = run_result.scenario_preset_internal_diagnostic_json
     seed_context_json = json.dumps(seed_context, ensure_ascii=False, separators=(",", ":"))
+    follow_up_hint_json = json.dumps(
+        follow_up_hint,
+        ensure_ascii=False,
+        separators=(",", ":"),
+    )
     assert json.loads(internal_diagnostic_json) == internal_diagnostic
     assert run_result.scenario_preset_internal_diagnostic == internal_diagnostic
     assert (
@@ -1442,6 +1459,7 @@ def test_experimental_one_shot_preset_internal_diagnostic_exposes_keeper_only_te
     assert internal_diagnostic["keeper_only_explanatory_text"] not in html
     assert internal_diagnostic_json not in html
     assert seed_context_json not in html
+    assert follow_up_hint_json not in html
     assert '"keeper_only_explanatory_text"' not in html
 
 
@@ -1609,6 +1627,83 @@ def test_experimental_one_shot_internal_autopilot_seed_context_helper_returns_bo
 
 
 @pytest.mark.parametrize(
+    ("start_session", "advance_session", "focus_by_turn", "expected"),
+    [
+        (
+            _start_keeper_dashboard_session,
+            _advance_keeper_dashboard_session,
+            {
+                1: "204 房登记",
+                2: "二楼脚步声",
+                3: "地窖门前异味",
+                4: "封死地窖门",
+            },
+            {
+                "follow_up_kind": "preserve_anchor",
+                "preset_id": "scenario.whispering_guesthouse",
+                "preset_label": "雾港旅店的低语",
+                "keeper_anchor_text": (
+                    "Keeper 内部说明：可把“旅店旧图纸”“储物间账本残页”“地窖门槛符号”"
+                    "视作旅店调查弧线的内部锚点；visible 侧只应落到账册缺页、204 房异常与"
+                    "地窖门前异味等外显表述。"
+                ),
+            },
+        ),
+        (
+            _start_midnight_archive_dashboard_session,
+            _advance_midnight_archive_session,
+            {
+                1: "夜间借阅目录",
+                2: "守夜人低声回避",
+                3: "扶手余温与焦味",
+                4: "地下保管柜方向的金属摩擦声",
+            },
+            {
+                "follow_up_kind": "preserve_anchor",
+                "preset_id": "scenario.midnight_archive",
+                "preset_label": "雨夜档案馆",
+                "keeper_anchor_text": (
+                    "Keeper 内部说明：可把“烧焦便笺”“楼梯灼痕”视作档案馆调查弧线的内部锚点；"
+                    "visible 侧只应落到借阅目录、守夜人口供、扶手余温与焦味等外显表述。"
+                ),
+            },
+        ),
+    ],
+)
+def test_experimental_one_shot_internal_autopilot_follow_up_hint_helper_returns_bounded_hint_for_supported_presets(
+    client: TestClient,
+    start_session,
+    advance_session,
+    focus_by_turn: dict[int, str],
+    expected: web_app_route.ExperimentalOneShotInternalAutopilotFollowUpHint,
+) -> None:
+    session_id = start_session(client)
+    advance_session(client, session_id)
+    fake_service = _SequencedOneShotLocalLLMService(focus_by_turn=focus_by_turn)
+    before_snapshot = _get_snapshot(client, session_id)
+
+    run_result = _run_finalized_experimental_one_shot_demo(
+        client=client,
+        session_id=session_id,
+        local_llm_service=fake_service,
+    )
+    follow_up_hint = (
+        web_app_route._build_experimental_one_shot_internal_autopilot_follow_up_hint(
+            run_result=run_result
+        )
+    )
+
+    assert before_snapshot == _get_snapshot(client, session_id)
+    assert follow_up_hint == expected
+    assert set(follow_up_hint) == {
+        "follow_up_kind",
+        "preset_id",
+        "preset_label",
+        "keeper_anchor_text",
+    }
+
+
+@pytest.mark.parametrize(
     "raw_value",
     [
         "",
@@ -1711,6 +1806,52 @@ def test_experimental_one_shot_internal_autopilot_seed_context_helper_delegates_
     assert onboarding_calls == [run_result]
 
 
+@pytest.mark.parametrize(
+    ("ending_status", "expected_follow_up_kind"),
+    [
+        ("success", "preserve_anchor"),
+        ("max_turns", "continue_anchor"),
+        ("failure", "stabilize_anchor"),
+        ("aborted", "stabilize_anchor"),
+    ],
+)
+def test_experimental_one_shot_internal_autopilot_follow_up_hint_helper_delegates_to_seed_context_helper(
+    monkeypatch: pytest.MonkeyPatch,
+    ending_status: str,
+    expected_follow_up_kind: str,
+) -> None:
+    seed_context_calls: list[web_app_route.ExperimentalOneShotRunResult] = []
+    run_result = _make_empty_experimental_one_shot_run_result()
+
+    def _fake_seed_context_helper(
+        *,
+        run_result: web_app_route.ExperimentalOneShotRunResult,
+    ) -> web_app_route.ExperimentalOneShotInternalAutopilotSeedContext:
+        seed_context_calls.append(run_result)
+        return {
+            "ending_status": ending_status,
+            "preset_id": "scenario.midnight_archive",
+            "preset_label": "雨夜档案馆",
+            "keeper_only_explanatory_text": "follow-up sentinel",
+        }
+
+    monkeypatch.setattr(
+        web_app_route,
+        "_build_experimental_one_shot_internal_autopilot_seed_context",
+        _fake_seed_context_helper,
+    )
+
+    assert web_app_route._build_experimental_one_shot_internal_autopilot_follow_up_hint(
+        run_result=run_result
+    ) == {
+        "follow_up_kind": expected_follow_up_kind,
+        "preset_id": "scenario.midnight_archive",
+        "preset_label": "雨夜档案馆",
+        "keeper_anchor_text": "follow-up sentinel",
+    }
+    assert seed_context_calls == [run_result]
+
+
 def test_experimental_one_shot_internal_autopilot_seed_context_helper_returns_none_without_internal_diagnostic(
 ) -> None:
     run_result = _make_empty_experimental_one_shot_run_result(
@@ -1720,6 +1861,21 @@ def test_experimental_one_shot_internal_autopilot_seed_context_helper_returns_no
 
     assert (
         web_app_route._build_experimental_one_shot_internal_autopilot_seed_context(
+            run_result=run_result
+        )
+        is None
+    )
+
+
+def test_experimental_one_shot_internal_autopilot_follow_up_hint_helper_returns_none_without_seed_context(
+) -> None:
+    run_result = _make_empty_experimental_one_shot_run_result(
+        scenario_preset_internal_diagnostic=None,
+        scenario_preset_internal_diagnostic_json="",
+    )
+
+    assert (
+        web_app_route._build_experimental_one_shot_internal_autopilot_follow_up_hint(
             run_result=run_result
         )
         is None
