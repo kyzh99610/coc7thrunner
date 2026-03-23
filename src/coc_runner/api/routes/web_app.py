@@ -301,6 +301,13 @@ class ExperimentalOneShotInternalAutopilotAgentInputEnvelope(TypedDict):
     envelope_text: str
 
 
+class ExperimentalOneShotInternalAutopilotAgentTurnInput(TypedDict):
+    turn_input_kind: str
+    preset_id: str
+    preset_label: str
+    turn_input_text: str
+
+
 @dataclass(slots=True)
 class ExperimentalOneShotTurnRecord:
     turn_index: int
@@ -3258,6 +3265,35 @@ def _build_experimental_one_shot_internal_autopilot_agent_input_envelope(
         "preset_id": executable_step_payload["preset_id"],
         "preset_label": executable_step_payload["preset_label"],
         "envelope_text": envelope_text,
+    }
+
+
+def _build_experimental_one_shot_internal_autopilot_agent_turn_input(
+    *,
+    run_result: ExperimentalOneShotRunResult,
+) -> ExperimentalOneShotInternalAutopilotAgentTurnInput | None:
+    agent_input_envelope = _build_experimental_one_shot_internal_autopilot_agent_input_envelope(
+        run_result=run_result,
+    )
+    if agent_input_envelope is None:
+        return None
+    turn_input_kind = (
+        "turn_input_pin_focus"
+        if agent_input_envelope["envelope_kind"] == "envelope_pin_focus"
+        else (
+            "turn_input_advance_focus"
+            if agent_input_envelope["envelope_kind"] == "envelope_advance_focus"
+            else "turn_input_stabilize_focus"
+        )
+    )
+    turn_input_text = "整理为 internal agent 单轮输入：" + agent_input_envelope[
+        "envelope_text"
+    ]
+    return {
+        "turn_input_kind": turn_input_kind,
+        "preset_id": agent_input_envelope["preset_id"],
+        "preset_label": agent_input_envelope["preset_label"],
+        "turn_input_text": turn_input_text,
     }
 
 
