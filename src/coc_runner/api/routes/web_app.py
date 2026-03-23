@@ -280,6 +280,13 @@ class ExperimentalOneShotInternalAutopilotMicroAction(TypedDict):
     action_text: str
 
 
+class ExperimentalOneShotInternalAutopilotExecutionIntent(TypedDict):
+    intent_kind: str
+    preset_id: str
+    preset_label: str
+    intent_text: str
+
+
 @dataclass(slots=True)
 class ExperimentalOneShotTurnRecord:
     turn_index: int
@@ -3152,6 +3159,33 @@ def _build_experimental_one_shot_internal_autopilot_micro_action(
         "preset_id": recommendation["preset_id"],
         "preset_label": recommendation["preset_label"],
         "action_text": action_text,
+    }
+
+
+def _build_experimental_one_shot_internal_autopilot_execution_intent(
+    *,
+    run_result: ExperimentalOneShotRunResult,
+) -> ExperimentalOneShotInternalAutopilotExecutionIntent | None:
+    micro_action = _build_experimental_one_shot_internal_autopilot_micro_action(
+        run_result=run_result,
+    )
+    if micro_action is None:
+        return None
+    intent_kind = (
+        "execute_pin_focus"
+        if micro_action["action_kind"] == "pin_focus"
+        else (
+            "execute_advance_focus"
+            if micro_action["action_kind"] == "advance_focus"
+            else "execute_stabilize_focus"
+        )
+    )
+    intent_text = "按当前 keeper-only 微动作执行：" + micro_action["action_text"]
+    return {
+        "intent_kind": intent_kind,
+        "preset_id": micro_action["preset_id"],
+        "preset_label": micro_action["preset_label"],
+        "intent_text": intent_text,
     }
 
 
