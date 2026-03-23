@@ -1395,6 +1395,11 @@ def test_experimental_one_shot_preset_internal_diagnostic_exposes_keeper_only_te
             run_result=run_result
         )
     )
+    agent_input_envelope = (
+        web_app_route._build_experimental_one_shot_internal_autopilot_agent_input_envelope(
+            run_result=run_result
+        )
+    )
     assert internal_diagnostic is not None
     assert internal_diagnostic == {
         "preset_id": "scenario.midnight_archive",
@@ -1468,6 +1473,20 @@ def test_experimental_one_shot_preset_internal_diagnostic_exposes_keeper_only_te
             "visible 侧只应落到借阅目录、守夜人口供、扶手余温与焦味等外显表述。"
         ),
     }
+    assert agent_input_envelope == {
+        "envelope_kind": "envelope_pin_focus",
+        "preset_id": "scenario.midnight_archive",
+        "preset_label": "雨夜档案馆",
+        "envelope_text": (
+            "封装为 internal agent 单步输入："
+            "按当前 keeper-only 执行意图形成单步 payload："
+            "按当前 keeper-only 微动作执行："
+            "先做一条 keeper-only 聚焦动作："
+            "优先保持当前 keeper 锚点："
+            "Keeper 内部说明：可把“烧焦便笺”“楼梯灼痕”视作档案馆调查弧线的内部锚点；"
+            "visible 侧只应落到借阅目录、守夜人口供、扶手余温与焦味等外显表述。"
+        ),
+    }
     internal_diagnostic_json = run_result.scenario_preset_internal_diagnostic_json
     seed_context_json = json.dumps(seed_context, ensure_ascii=False, separators=(",", ":"))
     follow_up_hint_json = json.dumps(
@@ -1492,6 +1511,11 @@ def test_experimental_one_shot_preset_internal_diagnostic_exposes_keeper_only_te
     )
     executable_step_payload_json = json.dumps(
         executable_step_payload,
+        ensure_ascii=False,
+        separators=(",", ":"),
+    )
+    agent_input_envelope_json = json.dumps(
+        agent_input_envelope,
         ensure_ascii=False,
         separators=(",", ":"),
     )
@@ -1548,6 +1572,7 @@ def test_experimental_one_shot_preset_internal_diagnostic_exposes_keeper_only_te
     assert micro_action_json not in html
     assert execution_intent_json not in html
     assert executable_step_payload_json not in html
+    assert agent_input_envelope_json not in html
     assert '"keeper_only_explanatory_text"' not in html
 
 
@@ -2118,6 +2143,93 @@ def test_experimental_one_shot_internal_autopilot_executable_step_payload_helper
 
 
 @pytest.mark.parametrize(
+    ("start_session", "advance_session", "focus_by_turn", "expected"),
+    [
+        (
+            _start_keeper_dashboard_session,
+            _advance_keeper_dashboard_session,
+            {
+                1: "204 房登记",
+                2: "二楼脚步声",
+                3: "地窖门前异味",
+                4: "封死地窖门",
+            },
+            {
+                "envelope_kind": "envelope_pin_focus",
+                "preset_id": "scenario.whispering_guesthouse",
+                "preset_label": "雾港旅店的低语",
+                "envelope_text": (
+                    "封装为 internal agent 单步输入："
+                    "按当前 keeper-only 执行意图形成单步 payload："
+                    "按当前 keeper-only 微动作执行："
+                    "先做一条 keeper-only 聚焦动作："
+                    "优先保持当前 keeper 锚点："
+                    "Keeper 内部说明：可把“旅店旧图纸”“储物间账本残页”“地窖门槛符号”"
+                    "视作旅店调查弧线的内部锚点；visible 侧只应落到账册缺页、204 房异常与"
+                    "地窖门前异味等外显表述。"
+                ),
+            },
+        ),
+        (
+            _start_midnight_archive_dashboard_session,
+            _advance_midnight_archive_session,
+            {
+                1: "夜间借阅目录",
+                2: "守夜人低声回避",
+                3: "扶手余温与焦味",
+                4: "地下保管柜方向的金属摩擦声",
+            },
+            {
+                "envelope_kind": "envelope_pin_focus",
+                "preset_id": "scenario.midnight_archive",
+                "preset_label": "雨夜档案馆",
+                "envelope_text": (
+                    "封装为 internal agent 单步输入："
+                    "按当前 keeper-only 执行意图形成单步 payload："
+                    "按当前 keeper-only 微动作执行："
+                    "先做一条 keeper-only 聚焦动作："
+                    "优先保持当前 keeper 锚点："
+                    "Keeper 内部说明：可把“烧焦便笺”“楼梯灼痕”视作档案馆调查弧线的内部锚点；"
+                    "visible 侧只应落到借阅目录、守夜人口供、扶手余温与焦味等外显表述。"
+                ),
+            },
+        ),
+    ],
+)
+def test_experimental_one_shot_internal_autopilot_agent_input_envelope_helper_returns_bounded_envelope_for_supported_presets(
+    client: TestClient,
+    start_session,
+    advance_session,
+    focus_by_turn: dict[int, str],
+    expected: web_app_route.ExperimentalOneShotInternalAutopilotAgentInputEnvelope,
+) -> None:
+    session_id = start_session(client)
+    advance_session(client, session_id)
+    fake_service = _SequencedOneShotLocalLLMService(focus_by_turn=focus_by_turn)
+    before_snapshot = _get_snapshot(client, session_id)
+
+    run_result = _run_finalized_experimental_one_shot_demo(
+        client=client,
+        session_id=session_id,
+        local_llm_service=fake_service,
+    )
+    agent_input_envelope = (
+        web_app_route._build_experimental_one_shot_internal_autopilot_agent_input_envelope(
+            run_result=run_result
+        )
+    )
+
+    assert before_snapshot == _get_snapshot(client, session_id)
+    assert agent_input_envelope == expected
+    assert set(agent_input_envelope) == {
+        "envelope_kind",
+        "preset_id",
+        "preset_label",
+        "envelope_text",
+    }
+
+
+@pytest.mark.parametrize(
     "raw_value",
     [
         "",
@@ -2454,6 +2566,54 @@ def test_experimental_one_shot_internal_autopilot_executable_step_payload_helper
     assert execution_intent_calls == [run_result]
 
 
+@pytest.mark.parametrize(
+    ("payload_kind", "expected_envelope_kind"),
+    [
+        ("payload_pin_focus", "envelope_pin_focus"),
+        ("payload_advance_focus", "envelope_advance_focus"),
+        ("payload_stabilize_focus", "envelope_stabilize_focus"),
+    ],
+)
+def test_experimental_one_shot_internal_autopilot_agent_input_envelope_helper_delegates_to_executable_step_payload_helper(
+    monkeypatch: pytest.MonkeyPatch,
+    payload_kind: str,
+    expected_envelope_kind: str,
+) -> None:
+    payload_calls: list[web_app_route.ExperimentalOneShotRunResult] = []
+    run_result = _make_empty_experimental_one_shot_run_result()
+
+    def _fake_payload_helper(
+        *,
+        run_result: web_app_route.ExperimentalOneShotRunResult,
+    ) -> web_app_route.ExperimentalOneShotInternalAutopilotExecutableStepPayload:
+        payload_calls.append(run_result)
+        return {
+            "payload_kind": payload_kind,
+            "preset_id": "scenario.midnight_archive",
+            "preset_label": "雨夜档案馆",
+            "payload_text": "input-envelope sentinel",
+        }
+
+    monkeypatch.setattr(
+        web_app_route,
+        "_build_experimental_one_shot_internal_autopilot_executable_step_payload",
+        _fake_payload_helper,
+    )
+
+    assert (
+        web_app_route._build_experimental_one_shot_internal_autopilot_agent_input_envelope(
+            run_result=run_result
+        )
+        == {
+            "envelope_kind": expected_envelope_kind,
+            "preset_id": "scenario.midnight_archive",
+            "preset_label": "雨夜档案馆",
+            "envelope_text": "封装为 internal agent 单步输入：input-envelope sentinel",
+        }
+    )
+    assert payload_calls == [run_result]
+
+
 def test_experimental_one_shot_internal_autopilot_seed_context_helper_returns_none_without_internal_diagnostic(
 ) -> None:
     run_result = _make_empty_experimental_one_shot_run_result(
@@ -2538,6 +2698,21 @@ def test_experimental_one_shot_internal_autopilot_executable_step_payload_helper
 
     assert (
         web_app_route._build_experimental_one_shot_internal_autopilot_executable_step_payload(
+            run_result=run_result
+        )
+        is None
+    )
+
+
+def test_experimental_one_shot_internal_autopilot_agent_input_envelope_helper_returns_none_without_executable_step_payload(
+) -> None:
+    run_result = _make_empty_experimental_one_shot_run_result(
+        scenario_preset_internal_diagnostic=None,
+        scenario_preset_internal_diagnostic_json="",
+    )
+
+    assert (
+        web_app_route._build_experimental_one_shot_internal_autopilot_agent_input_envelope(
             run_result=run_result
         )
         is None

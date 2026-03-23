@@ -294,6 +294,13 @@ class ExperimentalOneShotInternalAutopilotExecutableStepPayload(TypedDict):
     payload_text: str
 
 
+class ExperimentalOneShotInternalAutopilotAgentInputEnvelope(TypedDict):
+    envelope_kind: str
+    preset_id: str
+    preset_label: str
+    envelope_text: str
+
+
 @dataclass(slots=True)
 class ExperimentalOneShotTurnRecord:
     turn_index: int
@@ -3222,6 +3229,35 @@ def _build_experimental_one_shot_internal_autopilot_executable_step_payload(
         "preset_id": execution_intent["preset_id"],
         "preset_label": execution_intent["preset_label"],
         "payload_text": payload_text,
+    }
+
+
+def _build_experimental_one_shot_internal_autopilot_agent_input_envelope(
+    *,
+    run_result: ExperimentalOneShotRunResult,
+) -> ExperimentalOneShotInternalAutopilotAgentInputEnvelope | None:
+    executable_step_payload = _build_experimental_one_shot_internal_autopilot_executable_step_payload(
+        run_result=run_result,
+    )
+    if executable_step_payload is None:
+        return None
+    envelope_kind = (
+        "envelope_pin_focus"
+        if executable_step_payload["payload_kind"] == "payload_pin_focus"
+        else (
+            "envelope_advance_focus"
+            if executable_step_payload["payload_kind"] == "payload_advance_focus"
+            else "envelope_stabilize_focus"
+        )
+    )
+    envelope_text = "封装为 internal agent 单步输入：" + executable_step_payload[
+        "payload_text"
+    ]
+    return {
+        "envelope_kind": envelope_kind,
+        "preset_id": executable_step_payload["preset_id"],
+        "preset_label": executable_step_payload["preset_label"],
+        "envelope_text": envelope_text,
     }
 
 
