@@ -287,6 +287,13 @@ class ExperimentalOneShotInternalAutopilotExecutionIntent(TypedDict):
     intent_text: str
 
 
+class ExperimentalOneShotInternalAutopilotExecutableStepPayload(TypedDict):
+    payload_kind: str
+    preset_id: str
+    preset_label: str
+    payload_text: str
+
+
 @dataclass(slots=True)
 class ExperimentalOneShotTurnRecord:
     turn_index: int
@@ -3186,6 +3193,35 @@ def _build_experimental_one_shot_internal_autopilot_execution_intent(
         "preset_id": micro_action["preset_id"],
         "preset_label": micro_action["preset_label"],
         "intent_text": intent_text,
+    }
+
+
+def _build_experimental_one_shot_internal_autopilot_executable_step_payload(
+    *,
+    run_result: ExperimentalOneShotRunResult,
+) -> ExperimentalOneShotInternalAutopilotExecutableStepPayload | None:
+    execution_intent = _build_experimental_one_shot_internal_autopilot_execution_intent(
+        run_result=run_result,
+    )
+    if execution_intent is None:
+        return None
+    payload_kind = (
+        "payload_pin_focus"
+        if execution_intent["intent_kind"] == "execute_pin_focus"
+        else (
+            "payload_advance_focus"
+            if execution_intent["intent_kind"] == "execute_advance_focus"
+            else "payload_stabilize_focus"
+        )
+    )
+    payload_text = "按当前 keeper-only 执行意图形成单步 payload：" + execution_intent[
+        "intent_text"
+    ]
+    return {
+        "payload_kind": payload_kind,
+        "preset_id": execution_intent["preset_id"],
+        "preset_label": execution_intent["preset_label"],
+        "payload_text": payload_text,
     }
 
 
