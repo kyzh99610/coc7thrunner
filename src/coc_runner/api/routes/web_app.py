@@ -266,6 +266,13 @@ class ExperimentalOneShotInternalAutopilotFollowUpHint(TypedDict):
     keeper_anchor_text: str
 
 
+class ExperimentalOneShotInternalAutopilotNextStepRecommendation(TypedDict):
+    recommendation_kind: str
+    preset_id: str
+    preset_label: str
+    recommended_focus_text: str
+
+
 @dataclass(slots=True)
 class ExperimentalOneShotTurnRecord:
     turn_index: int
@@ -3068,6 +3075,41 @@ def _build_experimental_one_shot_internal_autopilot_follow_up_hint(
         "preset_id": seed_context["preset_id"],
         "preset_label": seed_context["preset_label"],
         "keeper_anchor_text": seed_context["keeper_only_explanatory_text"],
+    }
+
+
+def _build_experimental_one_shot_internal_autopilot_next_step_recommendation(
+    *,
+    run_result: ExperimentalOneShotRunResult,
+) -> ExperimentalOneShotInternalAutopilotNextStepRecommendation | None:
+    follow_up_hint = _build_experimental_one_shot_internal_autopilot_follow_up_hint(
+        run_result=run_result,
+    )
+    if follow_up_hint is None:
+        return None
+    recommendation_kind = (
+        "hold_anchor"
+        if follow_up_hint["follow_up_kind"] == "preserve_anchor"
+        else (
+            "push_anchor"
+            if follow_up_hint["follow_up_kind"] == "continue_anchor"
+            else "recover_anchor"
+        )
+    )
+    recommended_focus_text = (
+        "优先保持当前 keeper 锚点："
+        if recommendation_kind == "hold_anchor"
+        else (
+            "优先沿当前 keeper 锚点继续推进："
+            if recommendation_kind == "push_anchor"
+            else "优先先回到 keeper 锚点并稳定推进："
+        )
+    ) + follow_up_hint["keeper_anchor_text"]
+    return {
+        "recommendation_kind": recommendation_kind,
+        "preset_id": follow_up_hint["preset_id"],
+        "preset_label": follow_up_hint["preset_label"],
+        "recommended_focus_text": recommended_focus_text,
     }
 
 
