@@ -329,6 +329,13 @@ class ExperimentalOneShotInternalAutopilotAgentTurnMemo(TypedDict):
     memo_text: str
 
 
+class ExperimentalOneShotInternalAutopilotAgentMemoInput(TypedDict):
+    input_kind: str
+    preset_id: str
+    preset_label: str
+    input_text: str
+
+
 @dataclass(slots=True)
 class ExperimentalOneShotTurnRecord:
     turn_index: int
@@ -3398,6 +3405,33 @@ def _build_experimental_one_shot_internal_autopilot_agent_turn_memo(
         "preset_id": agent_turn_note["preset_id"],
         "preset_label": agent_turn_note["preset_label"],
         "memo_text": memo_text,
+    }
+
+
+def _build_experimental_one_shot_internal_autopilot_agent_memo_input(
+    *,
+    run_result: ExperimentalOneShotRunResult,
+) -> ExperimentalOneShotInternalAutopilotAgentMemoInput | None:
+    agent_turn_memo = _build_experimental_one_shot_internal_autopilot_agent_turn_memo(
+        run_result=run_result,
+    )
+    if agent_turn_memo is None:
+        return None
+    input_kind = (
+        "input_pin_focus"
+        if agent_turn_memo["memo_kind"] == "memo_pin_focus"
+        else (
+            "input_advance_focus"
+            if agent_turn_memo["memo_kind"] == "memo_advance_focus"
+            else "input_stabilize_focus"
+        )
+    )
+    input_text = "封装为 internal agent memo 输入：" + agent_turn_memo["memo_text"]
+    return {
+        "input_kind": input_kind,
+        "preset_id": agent_turn_memo["preset_id"],
+        "preset_label": agent_turn_memo["preset_label"],
+        "input_text": input_text,
     }
 
 
