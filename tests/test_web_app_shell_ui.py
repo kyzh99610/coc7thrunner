@@ -1410,6 +1410,11 @@ def test_experimental_one_shot_preset_internal_diagnostic_exposes_keeper_only_te
             run_result=run_result
         )
     )
+    agent_turn_memo = (
+        web_app_route._build_experimental_one_shot_internal_autopilot_agent_turn_memo(
+            run_result=run_result
+        )
+    )
     agent_turn_input = (
         web_app_route._build_experimental_one_shot_internal_autopilot_agent_turn_input(
             run_result=run_result
@@ -1550,6 +1555,24 @@ def test_experimental_one_shot_preset_internal_diagnostic_exposes_keeper_only_te
             "visible 侧只应落到借阅目录、守夜人口供、扶手余温与焦味等外显表述。"
         ),
     }
+    assert agent_turn_memo == {
+        "memo_kind": "memo_pin_focus",
+        "preset_id": "scenario.midnight_archive",
+        "preset_label": "雨夜档案馆",
+        "memo_text": (
+            "整理为 internal agent 单轮 memo："
+            "整理为 internal agent 单轮便签："
+            "整理为 internal agent 单轮摘要："
+            "整理为 internal agent 单轮输入："
+            "封装为 internal agent 单步输入："
+            "按当前 keeper-only 执行意图形成单步 payload："
+            "按当前 keeper-only 微动作执行："
+            "先做一条 keeper-only 聚焦动作："
+            "优先保持当前 keeper 锚点："
+            "Keeper 内部说明：可把“烧焦便笺”“楼梯灼痕”视作档案馆调查弧线的内部锚点；"
+            "visible 侧只应落到借阅目录、守夜人口供、扶手余温与焦味等外显表述。"
+        ),
+    }
     internal_diagnostic_json = run_result.scenario_preset_internal_diagnostic_json
     seed_context_json = json.dumps(seed_context, ensure_ascii=False, separators=(",", ":"))
     follow_up_hint_json = json.dumps(
@@ -1594,6 +1617,11 @@ def test_experimental_one_shot_preset_internal_diagnostic_exposes_keeper_only_te
     )
     agent_turn_note_json = json.dumps(
         agent_turn_note,
+        ensure_ascii=False,
+        separators=(",", ":"),
+    )
+    agent_turn_memo_json = json.dumps(
+        agent_turn_memo,
         ensure_ascii=False,
         separators=(",", ":"),
     )
@@ -1654,6 +1682,7 @@ def test_experimental_one_shot_preset_internal_diagnostic_exposes_keeper_only_te
     assert agent_turn_input_json not in html
     assert agent_turn_brief_json not in html
     assert agent_turn_note_json not in html
+    assert agent_turn_memo_json not in html
     assert '"keeper_only_explanatory_text"' not in html
 
 
@@ -2584,6 +2613,101 @@ def test_experimental_one_shot_internal_autopilot_agent_turn_note_helper_returns
 
 
 @pytest.mark.parametrize(
+    ("start_session", "advance_session", "focus_by_turn", "expected"),
+    [
+        (
+            _start_keeper_dashboard_session,
+            _advance_keeper_dashboard_session,
+            {
+                1: "门廊潮湿脚印",
+                2: "前台账册缺页",
+                3: "204 房门后的低语",
+                4: "地窖门前混杂的煤灰与盐痕",
+            },
+            {
+                "memo_kind": "memo_pin_focus",
+                "preset_id": "scenario.whispering_guesthouse",
+                "preset_label": "雾港旅店的低语",
+                "memo_text": (
+                    "整理为 internal agent 单轮 memo："
+                    "整理为 internal agent 单轮便签："
+                    "整理为 internal agent 单轮摘要："
+                    "整理为 internal agent 单轮输入："
+                    "封装为 internal agent 单步输入："
+                    "按当前 keeper-only 执行意图形成单步 payload："
+                    "按当前 keeper-only 微动作执行："
+                    "先做一条 keeper-only 聚焦动作："
+                    "优先保持当前 keeper 锚点："
+                    "Keeper 内部说明：可把“旅店旧图纸”“储物间账本残页”“地窖门槛符号”"
+                    "视作旅店调查弧线的内部锚点；visible 侧只应落到账册缺页、204 房异常与"
+                    "地窖门前异味等外显表述。"
+                ),
+            },
+        ),
+        (
+            _start_midnight_archive_dashboard_session,
+            _advance_midnight_archive_session,
+            {
+                1: "夜间借阅目录",
+                2: "守夜人低声回避",
+                3: "扶手余温与焦味",
+                4: "地下保管柜方向的金属摩擦声",
+            },
+            {
+                "memo_kind": "memo_pin_focus",
+                "preset_id": "scenario.midnight_archive",
+                "preset_label": "雨夜档案馆",
+                "memo_text": (
+                    "整理为 internal agent 单轮 memo："
+                    "整理为 internal agent 单轮便签："
+                    "整理为 internal agent 单轮摘要："
+                    "整理为 internal agent 单轮输入："
+                    "封装为 internal agent 单步输入："
+                    "按当前 keeper-only 执行意图形成单步 payload："
+                    "按当前 keeper-only 微动作执行："
+                    "先做一条 keeper-only 聚焦动作："
+                    "优先保持当前 keeper 锚点："
+                    "Keeper 内部说明：可把“烧焦便笺”“楼梯灼痕”视作档案馆调查弧线的内部锚点；"
+                    "visible 侧只应落到借阅目录、守夜人口供、扶手余温与焦味等外显表述。"
+                ),
+            },
+        ),
+    ],
+)
+def test_experimental_one_shot_internal_autopilot_agent_turn_memo_helper_returns_bounded_memo_for_supported_presets(
+    client: TestClient,
+    start_session,
+    advance_session,
+    focus_by_turn: dict[int, str],
+    expected: web_app_route.ExperimentalOneShotInternalAutopilotAgentTurnMemo,
+) -> None:
+    session_id = start_session(client)
+    advance_session(client, session_id)
+    fake_service = _SequencedOneShotLocalLLMService(focus_by_turn=focus_by_turn)
+    before_snapshot = _get_snapshot(client, session_id)
+
+    run_result = _run_finalized_experimental_one_shot_demo(
+        client=client,
+        session_id=session_id,
+        local_llm_service=fake_service,
+    )
+    agent_turn_memo = (
+        web_app_route._build_experimental_one_shot_internal_autopilot_agent_turn_memo(
+            run_result=run_result
+        )
+    )
+
+    assert before_snapshot == _get_snapshot(client, session_id)
+    assert agent_turn_memo == expected
+    assert set(agent_turn_memo) == {
+        "memo_kind",
+        "preset_id",
+        "preset_label",
+        "memo_text",
+    }
+
+
+@pytest.mark.parametrize(
     "raw_value",
     [
         "",
@@ -3112,6 +3236,54 @@ def test_experimental_one_shot_internal_autopilot_agent_turn_note_helper_delegat
     assert turn_brief_calls == [run_result]
 
 
+@pytest.mark.parametrize(
+    ("note_kind", "expected_memo_kind"),
+    [
+        ("note_pin_focus", "memo_pin_focus"),
+        ("note_advance_focus", "memo_advance_focus"),
+        ("note_stabilize_focus", "memo_stabilize_focus"),
+    ],
+)
+def test_experimental_one_shot_internal_autopilot_agent_turn_memo_helper_delegates_to_agent_turn_note_helper(
+    monkeypatch: pytest.MonkeyPatch,
+    note_kind: str,
+    expected_memo_kind: str,
+) -> None:
+    turn_note_calls: list[web_app_route.ExperimentalOneShotRunResult] = []
+    run_result = _make_empty_experimental_one_shot_run_result()
+
+    def _fake_agent_turn_note_helper(
+        *,
+        run_result: web_app_route.ExperimentalOneShotRunResult,
+    ) -> web_app_route.ExperimentalOneShotInternalAutopilotAgentTurnNote:
+        turn_note_calls.append(run_result)
+        return {
+            "note_kind": note_kind,
+            "preset_id": "scenario.midnight_archive",
+            "preset_label": "雨夜档案馆",
+            "note_text": "turn-memo sentinel",
+        }
+
+    monkeypatch.setattr(
+        web_app_route,
+        "_build_experimental_one_shot_internal_autopilot_agent_turn_note",
+        _fake_agent_turn_note_helper,
+    )
+
+    assert (
+        web_app_route._build_experimental_one_shot_internal_autopilot_agent_turn_memo(
+            run_result=run_result
+        )
+        == {
+            "memo_kind": expected_memo_kind,
+            "preset_id": "scenario.midnight_archive",
+            "preset_label": "雨夜档案馆",
+            "memo_text": "整理为 internal agent 单轮 memo：turn-memo sentinel",
+        }
+    )
+    assert turn_note_calls == [run_result]
+
+
 def test_experimental_one_shot_internal_autopilot_seed_context_helper_returns_none_without_internal_diagnostic(
 ) -> None:
     run_result = _make_empty_experimental_one_shot_run_result(
@@ -3256,6 +3428,21 @@ def test_experimental_one_shot_internal_autopilot_agent_turn_note_helper_returns
 
     assert (
         web_app_route._build_experimental_one_shot_internal_autopilot_agent_turn_note(
+            run_result=run_result
+        )
+        is None
+    )
+
+
+def test_experimental_one_shot_internal_autopilot_agent_turn_memo_helper_returns_none_without_agent_turn_note(
+) -> None:
+    run_result = _make_empty_experimental_one_shot_run_result(
+        scenario_preset_internal_diagnostic=None,
+        scenario_preset_internal_diagnostic_json="",
+    )
+
+    assert (
+        web_app_route._build_experimental_one_shot_internal_autopilot_agent_turn_memo(
             run_result=run_result
         )
         is None

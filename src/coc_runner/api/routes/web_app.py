@@ -322,6 +322,13 @@ class ExperimentalOneShotInternalAutopilotAgentTurnNote(TypedDict):
     note_text: str
 
 
+class ExperimentalOneShotInternalAutopilotAgentTurnMemo(TypedDict):
+    memo_kind: str
+    preset_id: str
+    preset_label: str
+    memo_text: str
+
+
 @dataclass(slots=True)
 class ExperimentalOneShotTurnRecord:
     turn_index: int
@@ -3364,6 +3371,33 @@ def _build_experimental_one_shot_internal_autopilot_agent_turn_note(
         "preset_id": agent_turn_brief["preset_id"],
         "preset_label": agent_turn_brief["preset_label"],
         "note_text": note_text,
+    }
+
+
+def _build_experimental_one_shot_internal_autopilot_agent_turn_memo(
+    *,
+    run_result: ExperimentalOneShotRunResult,
+) -> ExperimentalOneShotInternalAutopilotAgentTurnMemo | None:
+    agent_turn_note = _build_experimental_one_shot_internal_autopilot_agent_turn_note(
+        run_result=run_result,
+    )
+    if agent_turn_note is None:
+        return None
+    memo_kind = (
+        "memo_pin_focus"
+        if agent_turn_note["note_kind"] == "note_pin_focus"
+        else (
+            "memo_advance_focus"
+            if agent_turn_note["note_kind"] == "note_advance_focus"
+            else "memo_stabilize_focus"
+        )
+    )
+    memo_text = "整理为 internal agent 单轮 memo：" + agent_turn_note["note_text"]
+    return {
+        "memo_kind": memo_kind,
+        "preset_id": agent_turn_note["preset_id"],
+        "preset_label": agent_turn_note["preset_label"],
+        "memo_text": memo_text,
     }
 
 
