@@ -315,6 +315,13 @@ class ExperimentalOneShotInternalAutopilotAgentTurnBrief(TypedDict):
     brief_text: str
 
 
+class ExperimentalOneShotInternalAutopilotAgentTurnNote(TypedDict):
+    note_kind: str
+    preset_id: str
+    preset_label: str
+    note_text: str
+
+
 @dataclass(slots=True)
 class ExperimentalOneShotTurnRecord:
     turn_index: int
@@ -3330,6 +3337,33 @@ def _build_experimental_one_shot_internal_autopilot_agent_turn_brief(
         "preset_id": agent_turn_input["preset_id"],
         "preset_label": agent_turn_input["preset_label"],
         "brief_text": brief_text,
+    }
+
+
+def _build_experimental_one_shot_internal_autopilot_agent_turn_note(
+    *,
+    run_result: ExperimentalOneShotRunResult,
+) -> ExperimentalOneShotInternalAutopilotAgentTurnNote | None:
+    agent_turn_brief = _build_experimental_one_shot_internal_autopilot_agent_turn_brief(
+        run_result=run_result,
+    )
+    if agent_turn_brief is None:
+        return None
+    note_kind = (
+        "note_pin_focus"
+        if agent_turn_brief["brief_kind"] == "brief_pin_focus"
+        else (
+            "note_advance_focus"
+            if agent_turn_brief["brief_kind"] == "brief_advance_focus"
+            else "note_stabilize_focus"
+        )
+    )
+    note_text = "整理为 internal agent 单轮便签：" + agent_turn_brief["brief_text"]
+    return {
+        "note_kind": note_kind,
+        "preset_id": agent_turn_brief["preset_id"],
+        "preset_label": agent_turn_brief["preset_label"],
+        "note_text": note_text,
     }
 
 
