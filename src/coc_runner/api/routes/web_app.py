@@ -336,13 +336,6 @@ class ExperimentalOneShotInternalAutopilotAgentMemoInput(TypedDict):
     input_text: str
 
 
-class ExperimentalOneShotInternalAutopilotAgentMemoBrief(TypedDict):
-    brief_kind: str
-    preset_id: str
-    preset_label: str
-    brief_text: str
-
-
 @dataclass(slots=True)
 class ExperimentalOneShotTurnRecord:
     turn_index: int
@@ -3442,33 +3435,6 @@ def _build_experimental_one_shot_internal_autopilot_agent_memo_input(
     }
 
 
-def _build_experimental_one_shot_internal_autopilot_agent_memo_brief(
-    *,
-    run_result: ExperimentalOneShotRunResult,
-) -> ExperimentalOneShotInternalAutopilotAgentMemoBrief | None:
-    agent_memo_input = _build_experimental_one_shot_internal_autopilot_agent_memo_input(
-        run_result=run_result,
-    )
-    if agent_memo_input is None:
-        return None
-    brief_kind = (
-        "brief_pin_focus"
-        if agent_memo_input["input_kind"] == "input_pin_focus"
-        else (
-            "brief_advance_focus"
-            if agent_memo_input["input_kind"] == "input_advance_focus"
-            else "brief_stabilize_focus"
-        )
-    )
-    brief_text = "整理为 internal agent memo 摘要：" + agent_memo_input["input_text"]
-    return {
-        "brief_kind": brief_kind,
-        "preset_id": agent_memo_input["preset_id"],
-        "preset_label": agent_memo_input["preset_label"],
-        "brief_text": brief_text,
-    }
-
-
 def _finalize_experimental_one_shot_run_result_internal_tooling(
     *,
     snapshot: Mapping[str, Any],
@@ -4269,6 +4235,147 @@ def _render_experimental_ai_demo_one_shot_control(
     """
 
 
+def _build_experimental_one_shot_autoplay_observer_cards(
+    *,
+    run_result: ExperimentalOneShotRunResult,
+) -> list[dict[str, str]]:
+    cards: list[dict[str, str]] = []
+    seed_context = _build_experimental_one_shot_internal_autopilot_seed_context(
+        run_result=run_result,
+    )
+    if seed_context is not None:
+        cards.append(
+            {
+                "title": "种子上下文",
+                "badge": EXPERIMENTAL_ONE_SHOT_ENDING_STATUS_LABELS.get(
+                    seed_context["ending_status"],
+                    seed_context["ending_status"],
+                ),
+                "preset": f'{seed_context["preset_label"]}（{seed_context["preset_id"]}）',
+                "summary": _excerpt(
+                    seed_context["keeper_only_explanatory_text"],
+                    limit=180,
+                ),
+            }
+        )
+    follow_up_hint = _build_experimental_one_shot_internal_autopilot_follow_up_hint(
+        run_result=run_result,
+    )
+    if follow_up_hint is not None:
+        cards.append(
+            {
+                "title": "跟进提示",
+                "badge": follow_up_hint["follow_up_kind"],
+                "preset": f'{follow_up_hint["preset_label"]}（{follow_up_hint["preset_id"]}）',
+                "summary": _excerpt(
+                    follow_up_hint["keeper_anchor_text"],
+                    limit=180,
+                ),
+            }
+        )
+    execution_intent = _build_experimental_one_shot_internal_autopilot_execution_intent(
+        run_result=run_result,
+    )
+    if execution_intent is not None:
+        cards.append(
+            {
+                "title": "执行意图",
+                "badge": execution_intent["intent_kind"],
+                "preset": f'{execution_intent["preset_label"]}（{execution_intent["preset_id"]}）',
+                "summary": _excerpt(
+                    execution_intent["intent_text"],
+                    limit=180,
+                ),
+            }
+        )
+    agent_memo_input = _build_experimental_one_shot_internal_autopilot_agent_memo_input(
+        run_result=run_result,
+    )
+    if agent_memo_input is not None:
+        cards.append(
+            {
+                "title": "Memo 输入",
+                "badge": agent_memo_input["input_kind"],
+                "preset": f'{agent_memo_input["preset_label"]}（{agent_memo_input["preset_id"]}）',
+                "summary": _excerpt(
+                    agent_memo_input["input_text"],
+                    limit=180,
+                ),
+            }
+        )
+    return cards
+
+
+def _render_experimental_one_shot_autoplay_observer_panel(
+    *,
+    run_result: ExperimentalOneShotRunResult | None = None,
+) -> str:
+    if run_result is None or not run_result.turn_records:
+        return """
+      <section class="surface">
+        <div class="surface-header">
+          <div>
+            <h2>Autoplay Observer</h2>
+            <p>观察型 keeper/internal 面板：点击一次 one-shot self-play demo 后，会在这里显示 bounded autoplay 状态、逐轮 transcript 与 very small internal helper chain 快照。</p>
+          </div>
+          <span class="tag">idle</span>
+        </div>
+        <ul class="meta-list">
+          <li>模式：bounded one-shot autoplay</li>
+          <li>当前状态：尚未运行。</li>
+          <li>停止边界：success / failure / aborted / max_turns。</li>
+          <li>说明：这里只显示 keeper/internal observer 内容，不是公开 explainability contract，也不会写入 authoritative state。</li>
+        </ul>
+      </section>
+    """
+    status_label = EXPERIMENTAL_ONE_SHOT_ENDING_STATUS_LABELS.get(
+        run_result.ending_status,
+        run_result.ending_status,
+    )
+    reason_label = EXPERIMENTAL_ONE_SHOT_ENDING_REASON_LABELS.get(
+        run_result.ending_reason,
+        run_result.ending_reason,
+    )
+    chain_cards = _build_experimental_one_shot_autoplay_observer_cards(
+        run_result=run_result,
+    )
+    chain_cards_html = "".join(
+        f"""
+        <article class="assistant-source-echo">
+          <div class="list-head">
+            <h3>{escape(card["title"])}</h3>
+            <span class="tag">{escape(card["badge"])}</span>
+          </div>
+          <ul class="meta-list">
+            <li>preset：{escape(card["preset"])}</li>
+            <li>observer 摘要：{escape(card["summary"])}</li>
+          </ul>
+        </article>
+        """
+        for card in chain_cards
+    )
+    return f"""
+      <section class="surface">
+        <div class="surface-header">
+          <div>
+            <h2>Autoplay Observer</h2>
+            <p>观察当前 bounded autoplay run 的状态与 very small internal helper chain 快照。这里只是 keeper/internal observer，不是 full autopilot runtime，也不是公开 explainability 面板。</p>
+          </div>
+          <span class="tag warn">{escape(status_label)}</span>
+        </div>
+        <ul class="meta-list">
+          <li>模式：bounded one-shot autoplay</li>
+          <li>当前状态：{escape(status_label)}。</li>
+          <li>当前停止原因：{escape(reason_label)}</li>
+          <li>已跑轮次：{escape(str(len(run_result.turn_records)))} / 最大 {escape(str(run_result.max_turns))}</li>
+          <li>当前只显示 4 个代表性 internal helper object：种子上下文、跟进提示、执行意图、Memo 输入。</li>
+        </ul>
+        <div class="card-list">{chain_cards_html}</div>
+        <p class="helper">逐轮 run-local 结果仍看下方 Turn 卡片；这里的 internal chain 只代表当前 bounded autoplay run 的最终快照，不是 per-turn raw dump，也不是 authoritative state。</p>
+      </section>
+    """
+
+
 def _build_experimental_one_shot_run_summary_lines(
     *,
     run_result: ExperimentalOneShotRunResult,
@@ -4322,6 +4429,9 @@ def _render_experimental_one_shot_run_panel(
 ) -> str:
     if not run_result.turn_records:
         return ""
+    observer_html = _render_experimental_one_shot_autoplay_observer_panel(
+        run_result=run_result,
+    )
     status_label = EXPERIMENTAL_ONE_SHOT_ENDING_STATUS_LABELS.get(
         run_result.ending_status,
         run_result.ending_status,
@@ -4372,12 +4482,12 @@ def _render_experimental_one_shot_run_panel(
         """
         for record in run_result.turn_records
     )
-    return f"""
+    return observer_html + f"""
       <section class="surface">
         <div class="surface-header">
           <div>
             <h2>One-shot Self-play Demo Run</h2>
-            <p>当前页受控自动 run：只复用 experimental blocks 与 run-local bridge，不会写入 authoritative state，也不是 full AI GM。</p>
+            <p>当前页受控自动 run：只复用 experimental blocks 与 run-local bridge，不会写入 authoritative state，也不是 full AI GM。上方 observer 只展示当前 run 的 very small internal chain 快照。</p>
           </div>
           <span class="tag warn">{escape(status_label)}</span>
         </div>
@@ -7492,7 +7602,7 @@ def _render_experimental_ai_demo_page(
             )}
           </div>
           <div class="card-list">
-            {one_shot_run_html}
+            {one_shot_run_html or _render_experimental_one_shot_autoplay_observer_panel()}
             {orchestration_preview_html}
             {_render_experimental_ai_demo_output_block(
                 title="AI KP Demo Output",

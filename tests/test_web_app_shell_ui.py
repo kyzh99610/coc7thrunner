@@ -611,6 +611,9 @@ def test_web_app_experimental_ai_demo_page_loads_without_breaking_keeper_shell_w
     assert "不会自动写入主状态" in html
     assert "运行 self-play 预演链" in html
     assert "开始 one-shot self-play demo" in html
+    assert "Autoplay Observer" in html
+    assert "模式：bounded one-shot autoplay" in html
+    assert "当前状态：尚未运行。" in html
     assert 'name="max_turns"' in html
     assert 'action="/app/sessions/' in html
     assert 'name="keeper_turn_outcome_note"' not in html
@@ -987,6 +990,13 @@ def test_web_app_experimental_ai_demo_one_shot_run_can_finish_with_demo_success_
     assert "结束状态：成功。" in html
     assert "结束原因：已形成连续、可读且带 continuity 的受控 demo mini-arc。" in html
     assert "Scenario Preset Ending Judge" in html
+    assert "Autoplay Observer" in html
+    assert "模式：bounded one-shot autoplay" in html
+    assert "当前只显示 4 个代表性 internal helper object" in html
+    assert "种子上下文" in html
+    assert "跟进提示" in html
+    assert "执行意图" in html
+    assert "Memo 输入" in html
     assert "场景 preset：雾港旅店的低语（scenario.whispering_guesthouse）" in html
     assert "场景结局判定：明确成功。" in html
     assert "ending judgment：明确成功" in html
@@ -1053,6 +1063,10 @@ def test_web_app_experimental_ai_demo_one_shot_run_stops_at_turn_limit_when_demo
     assert response.status_code == 200
     html = response.text
     assert "one-shot self-play demo run 已结束：达到轮数上限。" in html
+    assert "Autoplay Observer" in html
+    assert "模式：bounded one-shot autoplay" in html
+    assert "当前状态：达到轮数上限。" in html
+    assert "当前停止原因：达到当前受控 one-shot demo run 的最大轮数上限。" in html
     assert "结束状态：达到轮数上限。" in html
     assert "结束原因：达到当前受控 one-shot demo run 的最大轮数上限。" in html
     assert "场景结局判定：部分成功。" in html
@@ -1420,11 +1434,6 @@ def test_experimental_one_shot_preset_internal_diagnostic_exposes_keeper_only_te
             run_result=run_result
         )
     )
-    agent_memo_brief = (
-        web_app_route._build_experimental_one_shot_internal_autopilot_agent_memo_brief(
-            run_result=run_result
-        )
-    )
     agent_turn_input = (
         web_app_route._build_experimental_one_shot_internal_autopilot_agent_turn_input(
             run_result=run_result
@@ -1602,26 +1611,6 @@ def test_experimental_one_shot_preset_internal_diagnostic_exposes_keeper_only_te
             "visible 侧只应落到借阅目录、守夜人口供、扶手余温与焦味等外显表述。"
         ),
     }
-    assert agent_memo_brief == {
-        "brief_kind": "brief_pin_focus",
-        "preset_id": "scenario.midnight_archive",
-        "preset_label": "雨夜档案馆",
-        "brief_text": (
-            "整理为 internal agent memo 摘要："
-            "封装为 internal agent memo 输入："
-            "整理为 internal agent 单轮 memo："
-            "整理为 internal agent 单轮便签："
-            "整理为 internal agent 单轮摘要："
-            "整理为 internal agent 单轮输入："
-            "封装为 internal agent 单步输入："
-            "按当前 keeper-only 执行意图形成单步 payload："
-            "按当前 keeper-only 微动作执行："
-            "先做一条 keeper-only 聚焦动作："
-            "优先保持当前 keeper 锚点："
-            "Keeper 内部说明：可把“烧焦便笺”“楼梯灼痕”视作档案馆调查弧线的内部锚点；"
-            "visible 侧只应落到借阅目录、守夜人口供、扶手余温与焦味等外显表述。"
-        ),
-    }
     internal_diagnostic_json = run_result.scenario_preset_internal_diagnostic_json
     seed_context_json = json.dumps(seed_context, ensure_ascii=False, separators=(",", ":"))
     follow_up_hint_json = json.dumps(
@@ -1679,11 +1668,6 @@ def test_experimental_one_shot_preset_internal_diagnostic_exposes_keeper_only_te
         ensure_ascii=False,
         separators=(",", ":"),
     )
-    agent_memo_brief_json = json.dumps(
-        agent_memo_brief,
-        ensure_ascii=False,
-        separators=(",", ":"),
-    )
     assert json.loads(internal_diagnostic_json) == internal_diagnostic
     assert run_result.scenario_preset_internal_diagnostic == internal_diagnostic
     assert (
@@ -1727,9 +1711,17 @@ def test_experimental_one_shot_preset_internal_diagnostic_exposes_keeper_only_te
 
     assert response.status_code == 200
     html = response.text
-    assert "烧焦便笺" not in html
-    assert "楼梯灼痕" not in html
-    assert internal_diagnostic["keeper_only_explanatory_text"] not in html
+    assert before_snapshot == _get_snapshot(client, session_id)
+    assert "Autoplay Observer" in html
+    assert "模式：bounded one-shot autoplay" in html
+    assert "当前只显示 4 个代表性 internal helper object" in html
+    assert "种子上下文" in html
+    assert "跟进提示" in html
+    assert "执行意图" in html
+    assert "Memo 输入" in html
+    assert "烧焦便笺" in html
+    assert "楼梯灼痕" in html
+    assert "封装为 internal agent memo 输入" in html
     assert internal_diagnostic_json not in html
     assert seed_context_json not in html
     assert follow_up_hint_json not in html
@@ -1743,8 +1735,18 @@ def test_experimental_one_shot_preset_internal_diagnostic_exposes_keeper_only_te
     assert agent_turn_note_json not in html
     assert agent_turn_memo_json not in html
     assert agent_memo_input_json not in html
-    assert agent_memo_brief_json not in html
     assert '"keeper_only_explanatory_text"' not in html
+
+    investigator_response = client.get(
+        f"/app/sessions/{session_id}/investigator/investigator-1"
+    )
+
+    assert investigator_response.status_code == 200
+    investigator_html = investigator_response.text
+    assert internal_diagnostic["keeper_only_explanatory_text"] not in investigator_html
+    assert "Keeper 内部说明" not in investigator_html
+    assert "封装为 internal agent memo 输入" not in investigator_html
+    assert "Autoplay Observer" not in investigator_html
 
 
 @pytest.mark.parametrize(
@@ -2866,105 +2868,6 @@ def test_experimental_one_shot_internal_autopilot_agent_memo_input_helper_return
 
 
 @pytest.mark.parametrize(
-    ("start_session", "advance_session", "focus_by_turn", "expected"),
-    [
-        (
-            _start_keeper_dashboard_session,
-            _advance_keeper_dashboard_session,
-            {
-                1: "门廊潮湿脚印",
-                2: "前台账册缺页",
-                3: "204 房门后的低语",
-                4: "地窖门前混杂的煤灰与盐痕",
-            },
-            {
-                "brief_kind": "brief_pin_focus",
-                "preset_id": "scenario.whispering_guesthouse",
-                "preset_label": "雾港旅店的低语",
-                "brief_text": (
-                    "整理为 internal agent memo 摘要："
-                    "封装为 internal agent memo 输入："
-                    "整理为 internal agent 单轮 memo："
-                    "整理为 internal agent 单轮便签："
-                    "整理为 internal agent 单轮摘要："
-                    "整理为 internal agent 单轮输入："
-                    "封装为 internal agent 单步输入："
-                    "按当前 keeper-only 执行意图形成单步 payload："
-                    "按当前 keeper-only 微动作执行："
-                    "先做一条 keeper-only 聚焦动作："
-                    "优先保持当前 keeper 锚点："
-                    "Keeper 内部说明：可把“旅店旧图纸”“储物间账本残页”“地窖门槛符号”"
-                    "视作旅店调查弧线的内部锚点；visible 侧只应落到账册缺页、204 房异常与"
-                    "地窖门前异味等外显表述。"
-                ),
-            },
-        ),
-        (
-            _start_midnight_archive_dashboard_session,
-            _advance_midnight_archive_session,
-            {
-                1: "夜间借阅目录",
-                2: "守夜人低声回避",
-                3: "扶手余温与焦味",
-                4: "地下保管柜方向的金属摩擦声",
-            },
-            {
-                "brief_kind": "brief_pin_focus",
-                "preset_id": "scenario.midnight_archive",
-                "preset_label": "雨夜档案馆",
-                "brief_text": (
-                    "整理为 internal agent memo 摘要："
-                    "封装为 internal agent memo 输入："
-                    "整理为 internal agent 单轮 memo："
-                    "整理为 internal agent 单轮便签："
-                    "整理为 internal agent 单轮摘要："
-                    "整理为 internal agent 单轮输入："
-                    "封装为 internal agent 单步输入："
-                    "按当前 keeper-only 执行意图形成单步 payload："
-                    "按当前 keeper-only 微动作执行："
-                    "先做一条 keeper-only 聚焦动作："
-                    "优先保持当前 keeper 锚点："
-                    "Keeper 内部说明：可把“烧焦便笺”“楼梯灼痕”视作档案馆调查弧线的内部锚点；"
-                    "visible 侧只应落到借阅目录、守夜人口供、扶手余温与焦味等外显表述。"
-                ),
-            },
-        ),
-    ],
-)
-def test_experimental_one_shot_internal_autopilot_agent_memo_brief_helper_returns_bounded_brief_for_supported_presets(
-    client: TestClient,
-    start_session,
-    advance_session,
-    focus_by_turn: dict[int, str],
-    expected: web_app_route.ExperimentalOneShotInternalAutopilotAgentMemoBrief,
-) -> None:
-    session_id = start_session(client)
-    advance_session(client, session_id)
-    fake_service = _SequencedOneShotLocalLLMService(focus_by_turn=focus_by_turn)
-    before_snapshot = _get_snapshot(client, session_id)
-
-    run_result = _run_finalized_experimental_one_shot_demo(
-        client=client,
-        session_id=session_id,
-        local_llm_service=fake_service,
-    )
-    agent_memo_brief = (
-        web_app_route._build_experimental_one_shot_internal_autopilot_agent_memo_brief(
-            run_result=run_result
-        )
-    )
-
-    assert before_snapshot == _get_snapshot(client, session_id)
-    assert agent_memo_brief == expected
-    assert set(agent_memo_brief) == {
-        "brief_kind",
-        "preset_id",
-        "preset_label",
-        "brief_text",
-    }
-
-
-@pytest.mark.parametrize(
     "raw_value",
     [
         "",
@@ -3589,54 +3492,6 @@ def test_experimental_one_shot_internal_autopilot_agent_memo_input_helper_delega
     assert turn_memo_calls == [run_result]
 
 
-@pytest.mark.parametrize(
-    ("input_kind", "expected_brief_kind"),
-    [
-        ("input_pin_focus", "brief_pin_focus"),
-        ("input_advance_focus", "brief_advance_focus"),
-        ("input_stabilize_focus", "brief_stabilize_focus"),
-    ],
-)
-def test_experimental_one_shot_internal_autopilot_agent_memo_brief_helper_delegates_to_agent_memo_input_helper(
-    monkeypatch: pytest.MonkeyPatch,
-    input_kind: str,
-    expected_brief_kind: str,
-) -> None:
-    memo_input_calls: list[web_app_route.ExperimentalOneShotRunResult] = []
-    run_result = _make_empty_experimental_one_shot_run_result()
-
-    def _fake_agent_memo_input_helper(
-        *,
-        run_result: web_app_route.ExperimentalOneShotRunResult,
-    ) -> web_app_route.ExperimentalOneShotInternalAutopilotAgentMemoInput:
-        memo_input_calls.append(run_result)
-        return {
-            "input_kind": input_kind,
-            "preset_id": "scenario.midnight_archive",
-            "preset_label": "雨夜档案馆",
-            "input_text": "memo-brief sentinel",
-        }
-
-    monkeypatch.setattr(
-        web_app_route,
-        "_build_experimental_one_shot_internal_autopilot_agent_memo_input",
-        _fake_agent_memo_input_helper,
-    )
-
-    assert (
-        web_app_route._build_experimental_one_shot_internal_autopilot_agent_memo_brief(
-            run_result=run_result
-        )
-        == {
-            "brief_kind": expected_brief_kind,
-            "preset_id": "scenario.midnight_archive",
-            "preset_label": "雨夜档案馆",
-            "brief_text": "整理为 internal agent memo 摘要：memo-brief sentinel",
-        }
-    )
-    assert memo_input_calls == [run_result]
-
-
 def test_experimental_one_shot_internal_autopilot_seed_context_helper_returns_none_without_internal_diagnostic(
 ) -> None:
     run_result = _make_empty_experimental_one_shot_run_result(
@@ -3811,21 +3666,6 @@ def test_experimental_one_shot_internal_autopilot_agent_memo_input_helper_return
 
     assert (
         web_app_route._build_experimental_one_shot_internal_autopilot_agent_memo_input(
-            run_result=run_result
-        )
-        is None
-    )
-
-
-def test_experimental_one_shot_internal_autopilot_agent_memo_brief_helper_returns_none_without_agent_memo_input(
-) -> None:
-    run_result = _make_empty_experimental_one_shot_run_result(
-        scenario_preset_internal_diagnostic=None,
-        scenario_preset_internal_diagnostic_json="",
-    )
-
-    assert (
-        web_app_route._build_experimental_one_shot_internal_autopilot_agent_memo_brief(
             run_result=run_result
         )
         is None
