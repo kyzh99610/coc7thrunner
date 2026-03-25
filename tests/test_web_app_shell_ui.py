@@ -614,6 +614,7 @@ def test_web_app_experimental_ai_demo_page_loads_without_breaking_keeper_shell_w
     assert "Autoplay Observer" in html
     assert "模式：bounded one-shot autoplay" in html
     assert "当前状态：尚未运行。" in html
+    assert "按轮快照：运行后会在这里追加 very small run-local snapshot 列表。" in html
     assert 'name="max_turns"' in html
     assert 'action="/app/sessions/' in html
     assert 'name="keeper_turn_outcome_note"' not in html
@@ -993,6 +994,12 @@ def test_web_app_experimental_ai_demo_one_shot_run_can_finish_with_demo_success_
     assert "Autoplay Observer" in html
     assert "模式：bounded one-shot autoplay" in html
     assert "当前只显示 4 个代表性 internal helper object" in html
+    assert "按轮内部快照" in html
+    assert "第 1 轮快照" in html
+    assert "第 2 轮快照" in html
+    assert "第 3 轮快照" in html
+    assert "轮次阶段：结束轮" in html
+    assert "停止原因：已形成连续、可读且带 continuity 的受控 demo mini-arc。" in html
     assert "种子上下文" in html
     assert "跟进提示" in html
     assert "执行意图" in html
@@ -1067,6 +1074,10 @@ def test_web_app_experimental_ai_demo_one_shot_run_stops_at_turn_limit_when_demo
     assert "模式：bounded one-shot autoplay" in html
     assert "当前状态：达到轮数上限。" in html
     assert "当前停止原因：达到当前受控 one-shot demo run 的最大轮数上限。" in html
+    assert "按轮内部快照" in html
+    assert "第 1 轮快照" in html
+    assert "第 2 轮快照" in html
+    assert "停止原因：达到当前受控 one-shot demo run 的最大轮数上限。" in html
     assert "结束状态：达到轮数上限。" in html
     assert "结束原因：达到当前受控 one-shot demo run 的最大轮数上限。" in html
     assert "场景结局判定：部分成功。" in html
@@ -1715,6 +1726,10 @@ def test_experimental_one_shot_preset_internal_diagnostic_exposes_keeper_only_te
     assert "Autoplay Observer" in html
     assert "模式：bounded one-shot autoplay" in html
     assert "当前只显示 4 个代表性 internal helper object" in html
+    assert "按轮内部快照" in html
+    assert "第 1 轮快照" in html
+    assert "第 2 轮快照" in html
+    assert "第 3 轮快照" in html
     assert "种子上下文" in html
     assert "跟进提示" in html
     assert "执行意图" in html
@@ -1747,6 +1762,54 @@ def test_experimental_one_shot_preset_internal_diagnostic_exposes_keeper_only_te
     assert "Keeper 内部说明" not in investigator_html
     assert "封装为 internal agent memo 输入" not in investigator_html
     assert "Autoplay Observer" not in investigator_html
+
+
+def test_experimental_one_shot_autoplay_turn_observer_snapshot_helper_returns_bounded_run_local_snapshots(
+    client: TestClient,
+) -> None:
+    session_id = _start_keeper_dashboard_session(client)
+    _advance_keeper_dashboard_session(client, session_id)
+    fake_service = _SequencedOneShotLocalLLMService()
+    before_snapshot = _get_snapshot(client, session_id)
+
+    run_result = _run_finalized_experimental_one_shot_demo(
+        client=client,
+        session_id=session_id,
+        local_llm_service=fake_service,
+    )
+    turn_snapshots = (
+        web_app_route._build_experimental_one_shot_autoplay_turn_observer_snapshots(
+            run_result=run_result
+        )
+    )
+
+    assert before_snapshot == _get_snapshot(client, session_id)
+    assert len(turn_snapshots) == 3
+    assert set(turn_snapshots[0]) == {
+        "title",
+        "badge",
+        "phase",
+        "run_local_summary",
+        "continuity_summary",
+        "stop_reason",
+    }
+    assert turn_snapshots[0]["title"] == "第 1 轮快照"
+    assert turn_snapshots[0]["badge"] == "已完成"
+    assert turn_snapshots[0]["phase"] == "中间轮"
+    assert "第 1 轮把压力推进到204 房登记" in turn_snapshots[0]["run_local_summary"]
+    assert "204 房" in turn_snapshots[0]["run_local_summary"]
+    assert "第 1 轮 keeper continuity" in turn_snapshots[0]["continuity_summary"]
+    assert turn_snapshots[0]["stop_reason"] == ""
+    assert turn_snapshots[-1]["title"] == "第 3 轮快照"
+    assert turn_snapshots[-1]["badge"] == "成功"
+    assert turn_snapshots[-1]["phase"] == "结束轮"
+    assert (
+        turn_snapshots[-1]["stop_reason"]
+        == "已形成连续、可读且带 continuity 的受控 demo mini-arc。"
+    )
+    assert "keeper_only_explanatory_text" not in str(turn_snapshots)
+    assert "旅店旧图纸" not in str(turn_snapshots)
+    assert "储物间账本残页" not in str(turn_snapshots)
 
 
 @pytest.mark.parametrize(
