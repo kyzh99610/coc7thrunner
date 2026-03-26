@@ -5278,6 +5278,10 @@ def _experimental_ai_demo_session_boot_href(session_id: str) -> str:
     )
 
 
+def _experimental_ai_demo_setup_boot_href(*, fresh: bool = False) -> str:
+    return "/app/setup?demo_boot=1&fresh=1" if fresh else "/app/setup?demo_boot=1"
+
+
 def _render_setup_page(
     *,
     form_values: dict[str, Any] | None = None,
@@ -8533,19 +8537,22 @@ def web_app_sessions(
 @router.get("/experimental-ai-demo", include_in_schema=False)
 def web_app_experimental_ai_demo_launcher_entry(
     demo_boot: str | None = None,
+    fresh: str | None = None,
     service: SessionService = Depends(get_session_service),
 ) -> RedirectResponse:
     demo_boot_enabled = _is_demo_boot_enabled(demo_boot)
+    fresh_requested = _is_demo_boot_enabled(fresh)
     sessions = [session.model_dump(mode="json") for session in service.list_sessions()]
     if demo_boot_enabled:
-        recent_demo_session_id = _resolve_recent_demo_boot_session_id(sessions)
-        if recent_demo_session_id:
-            return RedirectResponse(
-                url=_experimental_ai_demo_session_boot_href(recent_demo_session_id),
-                status_code=status.HTTP_303_SEE_OTHER,
-            )
+        if not fresh_requested:
+            recent_demo_session_id = _resolve_recent_demo_boot_session_id(sessions)
+            if recent_demo_session_id:
+                return RedirectResponse(
+                    url=_experimental_ai_demo_session_boot_href(recent_demo_session_id),
+                    status_code=status.HTTP_303_SEE_OTHER,
+                )
         return RedirectResponse(
-            url="/app/setup?demo_boot=1",
+            url=_experimental_ai_demo_setup_boot_href(fresh=fresh_requested),
             status_code=status.HTTP_303_SEE_OTHER,
         )
     if not sessions:

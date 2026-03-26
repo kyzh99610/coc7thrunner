@@ -793,6 +793,18 @@ def test_web_app_experimental_ai_demo_launcher_entry_demo_boot_redirects_to_setu
     assert response.headers["location"] == "/app/setup?demo_boot=1"
 
 
+def test_web_app_experimental_ai_demo_launcher_entry_demo_boot_fresh_redirects_to_setup_without_session(
+    client: TestClient,
+) -> None:
+    response = client.get(
+        "/app/experimental-ai-demo?demo_boot=1&fresh=1",
+        follow_redirects=False,
+    )
+
+    assert response.status_code == 303
+    assert response.headers["location"] == "/app/setup?demo_boot=1&fresh=1"
+
+
 def test_web_app_experimental_ai_demo_launcher_entry_demo_boot_falls_back_to_setup_without_reusable_demo_session(
     client: TestClient,
 ) -> None:
@@ -805,6 +817,30 @@ def test_web_app_experimental_ai_demo_launcher_entry_demo_boot_falls_back_to_set
 
     assert response.status_code == 303
     assert response.headers["location"] == "/app/setup?demo_boot=1"
+
+
+def test_web_app_experimental_ai_demo_launcher_entry_demo_boot_fresh_bypasses_recent_demo_session_reuse(
+    client: TestClient,
+) -> None:
+    demo_create_response = client.post(
+        "/app/setup",
+        data={
+            "keeper_name": "内部演示KP",
+            "playtest_group": web_app_route.DEMO_BOOT_PLAYTEST_GROUP,
+            "scenario_template": "whispering_guesthouse",
+            "investigator_1_name": "演示调查员",
+        },
+        follow_redirects=False,
+    )
+    assert demo_create_response.status_code == 303
+
+    response = client.get(
+        "/app/experimental-ai-demo?demo_boot=1&fresh=1",
+        follow_redirects=False,
+    )
+
+    assert response.status_code == 303
+    assert response.headers["location"] == "/app/setup?demo_boot=1&fresh=1"
 
 
 def test_web_app_experimental_ai_demo_launcher_entry_demo_boot_reuses_recent_demo_session_before_newer_non_demo_session(
