@@ -625,6 +625,63 @@ def test_web_app_setup_demo_boot_can_create_session_and_run_one_shot_observer(
     assert "整理为当前轮 finalized memo" not in persisted_snapshot
 
 
+def test_demo_boot_session_resolver_prefers_recent_reusable_demo_session() -> None:
+    sessions = [
+        {
+            "session_id": "session-newer-non-demo",
+            "playtest_group": "第二阶段",
+            "keeper_id": "keeper",
+            "participants": [
+                {"actor_id": "investigator-1", "kind": "human"},
+            ],
+        },
+        {
+            "session_id": "session-reusable-demo",
+            "playtest_group": web_app_route.DEMO_BOOT_PLAYTEST_GROUP,
+            "keeper_id": "keeper",
+            "participants": [
+                {"actor_id": "investigator-1", "kind": "human"},
+            ],
+        },
+        {
+            "session_id": "session-older-demo",
+            "playtest_group": web_app_route.DEMO_BOOT_PLAYTEST_GROUP,
+            "keeper_id": "keeper",
+            "participants": [
+                {"actor_id": "investigator-2", "kind": "ai"},
+            ],
+        },
+    ]
+
+    assert (
+        web_app_route._resolve_recent_demo_boot_session_id(sessions)
+        == "session-reusable-demo"
+    )
+
+
+def test_demo_boot_session_resolver_returns_none_without_reusable_demo_session() -> None:
+    sessions = [
+        {
+            "session_id": "session-non-demo",
+            "playtest_group": "第二阶段",
+            "keeper_id": "keeper",
+            "participants": [
+                {"actor_id": "investigator-1", "kind": "human"},
+            ],
+        },
+        {
+            "session_id": "session-empty-demo",
+            "playtest_group": web_app_route.DEMO_BOOT_PLAYTEST_GROUP,
+            "keeper_id": "keeper",
+            "participants": [
+                {"actor_id": "keeper", "kind": "human"},
+            ],
+        },
+    ]
+
+    assert web_app_route._resolve_recent_demo_boot_session_id(sessions) is None
+
+
 def test_web_app_keeper_assistant_block_defaults_to_disabled_without_breaking_workspace(
     client: TestClient,
 ) -> None:
@@ -736,12 +793,39 @@ def test_web_app_experimental_ai_demo_launcher_entry_demo_boot_redirects_to_setu
     assert response.headers["location"] == "/app/setup?demo_boot=1"
 
 
-def test_web_app_experimental_ai_demo_launcher_entry_demo_boot_redirects_to_latest_session_demo_boot(
+def test_web_app_experimental_ai_demo_launcher_entry_demo_boot_falls_back_to_setup_without_reusable_demo_session(
     client: TestClient,
 ) -> None:
-    latest_session_id = _start_keeper_dashboard_session(client)
-    older_session_id = _start_keeper_dashboard_session(client)
-    _advance_keeper_dashboard_session(client, latest_session_id)
+    _start_keeper_dashboard_session(client)
+
+    response = client.get(
+        "/app/experimental-ai-demo?demo_boot=1",
+        follow_redirects=False,
+    )
+
+    assert response.status_code == 303
+    assert response.headers["location"] == "/app/setup?demo_boot=1"
+
+
+def test_web_app_experimental_ai_demo_launcher_entry_demo_boot_reuses_recent_demo_session_before_newer_non_demo_session(
+    client: TestClient,
+) -> None:
+    demo_create_response = client.post(
+        "/app/setup",
+        data={
+            "keeper_name": "内部演示KP",
+            "playtest_group": web_app_route.DEMO_BOOT_PLAYTEST_GROUP,
+            "scenario_template": "whispering_guesthouse",
+            "investigator_1_name": "演示调查员",
+        },
+        follow_redirects=False,
+    )
+    assert demo_create_response.status_code == 303
+    demo_session_location = demo_create_response.headers["location"]
+    demo_session_id = demo_session_location.rsplit("/", 1)[-1]
+
+    non_demo_session_id = _start_keeper_dashboard_session(client)
+    _advance_keeper_dashboard_session(client, non_demo_session_id)
 
     response = client.get(
         "/app/experimental-ai-demo?demo_boot=1",
@@ -750,11 +834,11 @@ def test_web_app_experimental_ai_demo_launcher_entry_demo_boot_redirects_to_late
 
     assert response.status_code == 303
     assert response.headers["location"] == (
-        f"/app/sessions/{latest_session_id}/experimental-ai-demo"
+        f"/app/sessions/{demo_session_id}/experimental-ai-demo"
         "?demo_boot=1#experimental-demo-one-shot-control"
     )
     assert response.headers["location"] != (
-        f"/app/sessions/{older_session_id}/experimental-ai-demo"
+        f"/app/sessions/{non_demo_session_id}/experimental-ai-demo"
         "?demo_boot=1#experimental-demo-one-shot-control"
     )
 

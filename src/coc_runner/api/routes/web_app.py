@@ -5230,16 +5230,45 @@ def _is_demo_boot_enabled(raw_value: Any) -> bool:
     return normalized in {"1", "true", "yes", "on"}
 
 
+DEMO_BOOT_PLAYTEST_GROUP = "内部 Observer Demo"
+
+
 def _build_demo_boot_setup_form_values(
     *,
     playtest_group: str | None = None,
 ) -> dict[str, Any]:
     values = _default_playtest_setup_form_values()
     values["keeper_name"] = "内部演示KP"
-    values["playtest_group"] = _normalize_form_text(playtest_group) or "内部 Observer Demo"
+    values["playtest_group"] = _normalize_form_text(playtest_group) or DEMO_BOOT_PLAYTEST_GROUP
     values["scenario_template"] = "whispering_guesthouse"
     values["investigator_names"] = ["演示调查员", "", "", ""]
     return values
+
+
+def _is_reusable_demo_boot_session(session: dict[str, Any]) -> bool:
+    if _normalize_form_text(session.get("playtest_group")) != DEMO_BOOT_PLAYTEST_GROUP:
+        return False
+    session_id = _normalize_form_text(session.get("session_id")) or ""
+    if not session_id:
+        return False
+    participants = [
+        participant
+        for participant in session.get("participants") or []
+        if isinstance(participant, dict)
+    ]
+    return bool(
+        _demo_investigator_candidates(
+            participants,
+            keeper_id=session.get("keeper_id"),
+        )
+    )
+
+
+def _resolve_recent_demo_boot_session_id(sessions: list[dict[str, Any]]) -> str | None:
+    for session in sessions:
+        if _is_reusable_demo_boot_session(session):
+            return _normalize_form_text(session.get("session_id")) or None
+    return None
 
 
 def _experimental_ai_demo_session_boot_href(session_id: str) -> str:
@@ -8507,21 +8536,23 @@ def web_app_experimental_ai_demo_launcher_entry(
     service: SessionService = Depends(get_session_service),
 ) -> RedirectResponse:
     demo_boot_enabled = _is_demo_boot_enabled(demo_boot)
-    sessions = service.list_sessions()
-    if not sessions:
-        if demo_boot_enabled:
+    sessions = [session.model_dump(mode="json") for session in service.list_sessions()]
+    if demo_boot_enabled:
+        recent_demo_session_id = _resolve_recent_demo_boot_session_id(sessions)
+        if recent_demo_session_id:
             return RedirectResponse(
-                url="/app/setup?demo_boot=1",
+                url=_experimental_ai_demo_session_boot_href(recent_demo_session_id),
                 status_code=status.HTTP_303_SEE_OTHER,
             )
+        return RedirectResponse(
+            url="/app/setup?demo_boot=1",
+            status_code=status.HTTP_303_SEE_OTHER,
+        )
+    if not sessions:
         return RedirectResponse(url="/app/sessions", status_code=status.HTTP_303_SEE_OTHER)
-    latest_session_id = sessions[0].session_id
+    latest_session_id = _normalize_form_text(sessions[0].get("session_id")) or ""
     return RedirectResponse(
-        url=(
-            _experimental_ai_demo_session_boot_href(latest_session_id)
-            if demo_boot_enabled
-            else f"/app/sessions/{latest_session_id}/experimental-ai-demo"
-        ),
+        url=f"/app/sessions/{latest_session_id}/experimental-ai-demo",
         status_code=status.HTTP_303_SEE_OTHER,
     )
 
