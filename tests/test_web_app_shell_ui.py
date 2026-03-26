@@ -568,6 +568,63 @@ def test_web_app_setup_flow_creates_session_inside_app_shell(
     assert "第二阶段" in overview_html
 
 
+def test_web_app_setup_demo_boot_prefills_demo_ready_defaults(
+    client: TestClient,
+) -> None:
+    response = client.get("/app/setup?demo_boot=1")
+
+    assert response.status_code == 200
+    html = response.text
+    assert "创建 Demo Session 并直接进入 Observer Demo" in html
+    assert "Launcher Demo Boot" in html
+    assert 'name="demo_boot" value="1"' in html
+    assert 'name="launch_target" value="experimental_ai_demo"' in html
+    assert 'name="autorun_one_shot" value="1"' in html
+    assert 'name="keeper_name"' in html
+    assert 'value="内部演示KP"' in html
+    assert 'name="investigator_1_name"' in html
+    assert 'value="演示调查员"' in html
+    assert "创建 Demo Session 并运行 Observer Demo" in html
+
+
+def test_web_app_setup_demo_boot_can_create_session_and_run_one_shot_observer(
+    client: TestClient,
+) -> None:
+    fake_service = _SequencedOneShotLocalLLMService()
+    client.app.state.local_llm_service = fake_service
+    before_session_count = len(client.app.state.session_service.list_sessions())
+
+    response = client.post(
+        "/app/setup",
+        data={
+            "demo_boot": "1",
+            "launch_target": "experimental_ai_demo",
+            "autorun_one_shot": "1",
+            "keeper_name": "内部演示KP",
+            "playtest_group": "内部 Observer Demo",
+            "scenario_template": "whispering_guesthouse",
+            "investigator_1_name": "演示调查员",
+        },
+    )
+
+    assert response.status_code == 200
+    html = response.text
+    assert "AI KP + AI Investigator Demo Harness" in html
+    assert "launcher / demo boot 已创建 sample session" in html
+    assert "Autoplay Observer" in html
+    assert "模式：bounded one-shot autoplay" in html
+    assert "第 1 轮快照" in html
+    assert "finalized object：turn_memo" in html
+    assert '"keeper_only_explanatory_text"' not in html
+
+    sessions = client.app.state.session_service.list_sessions()
+    assert len(sessions) == before_session_count + 1
+    new_session_id = sessions[0].session_id
+    persisted_snapshot = str(_get_snapshot(client, new_session_id))
+    assert "第 1 轮 keeper continuity" not in persisted_snapshot
+    assert "整理为当前轮 finalized memo" not in persisted_snapshot
+
+
 def test_web_app_keeper_assistant_block_defaults_to_disabled_without_breaking_workspace(
     client: TestClient,
 ) -> None:
@@ -623,6 +680,23 @@ def test_web_app_experimental_ai_demo_page_loads_without_breaking_keeper_shell_w
     assert "当前页实验评估" not in html
 
 
+def test_web_app_experimental_ai_demo_page_demo_boot_surfaces_demo_ready_hint(
+    client: TestClient,
+) -> None:
+    session_id = _start_keeper_dashboard_session(client)
+    _advance_keeper_dashboard_session(client, session_id)
+
+    response = client.get(f"/app/sessions/{session_id}/experimental-ai-demo?demo_boot=1")
+
+    assert response.status_code == 200
+    html = response.text
+    assert "launcher / demo boot 已就绪" in html
+    assert 'id="experimental-demo-one-shot-control"' in html
+    assert 'name="demo_boot" value="1"' in html
+    assert 'id="experimental-demo-observer"' in html
+    assert "demo-ready：当前页已默认选好 sample investigator 与 bounded turn limit。" in html
+
+
 def test_web_app_experimental_ai_demo_launcher_entry_redirects_to_latest_session_demo(
     client: TestClient,
 ) -> None:
@@ -648,6 +722,41 @@ def test_web_app_experimental_ai_demo_launcher_entry_falls_back_to_sessions_inde
 
     assert response.status_code == 303
     assert response.headers["location"] == "/app/sessions"
+
+
+def test_web_app_experimental_ai_demo_launcher_entry_demo_boot_redirects_to_setup_without_session(
+    client: TestClient,
+) -> None:
+    response = client.get(
+        "/app/experimental-ai-demo?demo_boot=1",
+        follow_redirects=False,
+    )
+
+    assert response.status_code == 303
+    assert response.headers["location"] == "/app/setup?demo_boot=1"
+
+
+def test_web_app_experimental_ai_demo_launcher_entry_demo_boot_redirects_to_latest_session_demo_boot(
+    client: TestClient,
+) -> None:
+    latest_session_id = _start_keeper_dashboard_session(client)
+    older_session_id = _start_keeper_dashboard_session(client)
+    _advance_keeper_dashboard_session(client, latest_session_id)
+
+    response = client.get(
+        "/app/experimental-ai-demo?demo_boot=1",
+        follow_redirects=False,
+    )
+
+    assert response.status_code == 303
+    assert response.headers["location"] == (
+        f"/app/sessions/{latest_session_id}/experimental-ai-demo"
+        "?demo_boot=1#experimental-demo-one-shot-control"
+    )
+    assert response.headers["location"] != (
+        f"/app/sessions/{older_session_id}/experimental-ai-demo"
+        "?demo_boot=1#experimental-demo-one-shot-control"
+    )
 
 
 def test_keeper_compressed_context_builder_stays_short_and_secret_safe(

@@ -4218,6 +4218,7 @@ def _render_experimental_ai_demo_one_shot_control(
     options_html: str,
     selected_investigator_id: str,
     max_turns: int,
+    demo_boot: bool = False,
     evaluation_state: Mapping[str, str] | None = None,
     narrative_work_note_value: str = "",
     keeper_turn_note_value: str = "",
@@ -4225,9 +4226,14 @@ def _render_experimental_ai_demo_one_shot_control(
 ) -> str:
     if not options_html:
         return ""
+    demo_boot_hint_html = (
+        '<p class="helper">demo-ready：当前页已默认选好 sample investigator 与 bounded turn limit。点击一次“开始 one-shot self-play demo”即可直接观察 observer autoplay。</p>'
+        if demo_boot
+        else ""
+    )
     return f"""
       <div class="divider"></div>
-      <form method="post" action="/app/sessions/{escape(session_id)}/experimental-ai-demo/one-shot-run" class="form-stack">
+      <form id="experimental-demo-one-shot-control" method="post" action="/app/sessions/{escape(session_id)}/experimental-ai-demo/one-shot-run" class="form-stack">
         <label>
           Investigator 视角
           <select name="investigator_id">{options_html}</select>
@@ -4236,10 +4242,12 @@ def _render_experimental_ai_demo_one_shot_control(
           最大轮数
           <input type="number" name="max_turns" min="1" max="{EXPERIMENTAL_ONE_SHOT_MAX_TURNS_LIMIT}" value="{escape(str(max_turns))}">
         </label>
+        {'<input type="hidden" name="demo_boot" value="1">' if demo_boot else ''}
         <input type="hidden" name="seed_narrative_work_note" value="{escape(narrative_work_note_value)}">
         <input type="hidden" name="seed_keeper_turn_outcome_note" value="{escape(keeper_turn_note_value)}">
         <input type="hidden" name="seed_visible_turn_outcome_note" value="{escape(visible_turn_note_value)}">
         {_render_hidden_experimental_demo_evaluation_state_inputs(evaluation_state)}
+        {demo_boot_hint_html}
         <p class="helper">受控 one-shot self-play demo run：每轮顺序复用 AI KP、AI investigator、keeper continuity draft 与 visible continuity draft，直到成功 / 失败 / 中止 / 达到轮数上限；只保留当前页 run-local transcript，不会写入 authoritative state。</p>
         <div class="toolbar">
           <button class="button-button ghost" type="submit">开始 one-shot self-play demo</button>
@@ -4466,7 +4474,7 @@ def _render_experimental_one_shot_autoplay_observer_panel(
 ) -> str:
     if run_result is None or not run_result.turn_records:
         return """
-      <section class="surface">
+      <section id="experimental-demo-observer" class="surface">
         <div class="surface-header">
           <div>
             <h2>Autoplay Observer</h2>
@@ -4533,7 +4541,7 @@ def _render_experimental_one_shot_autoplay_observer_panel(
         for snapshot in turn_snapshots
     )
     return f"""
-      <section class="surface">
+      <section id="experimental-demo-observer" class="surface">
         <div class="surface-header">
           <div>
             <h2>Autoplay Observer</h2>
@@ -5217,9 +5225,34 @@ def _render_session_card(session: dict[str, Any]) -> str:
     """
 
 
+def _is_demo_boot_enabled(raw_value: Any) -> bool:
+    normalized = (_normalize_form_text(raw_value) or "").lower()
+    return normalized in {"1", "true", "yes", "on"}
+
+
+def _build_demo_boot_setup_form_values(
+    *,
+    playtest_group: str | None = None,
+) -> dict[str, Any]:
+    values = _default_playtest_setup_form_values()
+    values["keeper_name"] = "内部演示KP"
+    values["playtest_group"] = _normalize_form_text(playtest_group) or "内部 Observer Demo"
+    values["scenario_template"] = "whispering_guesthouse"
+    values["investigator_names"] = ["演示调查员", "", "", ""]
+    return values
+
+
+def _experimental_ai_demo_session_boot_href(session_id: str) -> str:
+    return (
+        f"/app/sessions/{session_id}/experimental-ai-demo"
+        "?demo_boot=1#experimental-demo-one-shot-control"
+    )
+
+
 def _render_setup_page(
     *,
     form_values: dict[str, Any] | None = None,
+    demo_boot: bool = False,
     detail: dict[str, Any] | str | None = None,
     status_code: int = status.HTTP_200_OK,
 ) -> HTMLResponse:
@@ -5236,6 +5269,8 @@ def _render_setup_page(
     ]
     if group_name:
         actions.insert(1, ("返回当前分组", f"/app/groups/{quote(group_name)}", "ghost"))
+    if demo_boot:
+        actions.insert(0, ("普通 Setup", "/app/setup", "ghost"))
     template_cards = "".join(
         f"""
         <label class="radio-card">
@@ -5272,23 +5307,62 @@ def _render_setup_page(
         """
         for index in range(1, 5)
     )
+    page_title = "在 App Shell 内创建新局"
+    page_summary = (
+        "create / setup 已收进 Web GUI 壳，仍复用现有 playtest 模板和 start_session 语义，不新开后端产品线。"
+    )
+    section_title = "最小 setup"
+    section_summary = "保持现有模板建局语义，只把入口、层级和回链收进统一 app shell。"
+    helper_text = "至少填写 1 名调查员。创建成功后直接进入新的 session overview，而不是跳回旧 launcher。"
+    submit_label = "创建并进入 App Shell"
+    hidden_fields_html = ""
+    demo_boot_intro_html = ""
+    if demo_boot:
+        page_title = "创建 Demo Session 并直接进入 Observer Demo"
+        page_summary = (
+            "launcher / exe demo boot 只补一条 internal 引导链：复用现有模板建局与 bounded one-shot autoplay，"
+            "让 keeper 不必先翻 Session 列表再找 experimental observer。"
+        )
+        section_title = "Demo-ready setup"
+        section_summary = (
+            "只为 internal observer demo 预填 very small sample session：创建后直接进入 bounded autoplay observer，"
+            "不扩成最终产品级 launcher 或 full autopilot runtime。"
+        )
+        helper_text = (
+            "这条入口只服务 keeper/internal demo boot。提交后会先创建 sample session，"
+            "再直接复用现有 one-shot 主链展示 observer autoplay run；不会自动改写该 session 的 authoritative 历史。"
+        )
+        submit_label = "创建 Demo Session 并运行 Observer Demo"
+        hidden_fields_html = """
+            <input type="hidden" name="demo_boot" value="1" />
+            <input type="hidden" name="launch_target" value="experimental_ai_demo" />
+            <input type="hidden" name="autorun_one_shot" value="1" />
+        """
+        demo_boot_intro_html = """
+        <section class="notice-panel">
+          <h2>Launcher Demo Boot</h2>
+          <p>当前是 keeper/internal 的 demo boot 引导页。默认使用 sample template 与 sample investigator；点击一次即可创建 demo session 并直接看到 bounded autoplay observer 的过程与结果。</p>
+        </section>
+        """
     body = (
         _page_head(
             eyebrow="Setup / Create",
-            title="在 App Shell 内创建新局",
-            summary="create / setup 已收进 Web GUI 壳，仍复用现有 playtest 模板和 start_session 语义，不新开后端产品线。",
+            title=page_title,
+            summary=page_summary,
             actions=actions,
         )
+        + demo_boot_intro_html
         + _detail_block(detail)
         + f"""
         <section class="surface">
           <div class="surface-header">
             <div>
-              <h2>最小 setup</h2>
-              <p>保持现有模板建局语义，只把入口、层级和回链收进统一 app shell。</p>
+              <h2>{escape(section_title)}</h2>
+              <p>{escape(section_summary)}</p>
             </div>
           </div>
           <form method="post" action="/app/setup" class="form-stack">
+            {hidden_fields_html}
             <div class="field-grid">
               <label>
                 Keeper 名称
@@ -5328,8 +5402,8 @@ def _render_setup_page(
             <div class="field-grid">
               {investigator_inputs}
             </div>
-            <p class="helper">至少填写 1 名调查员。创建成功后直接进入新的 session overview，而不是跳回旧 launcher。</p>
-            <button class="button-button" type="submit">创建并进入 App Shell</button>
+            <p class="helper">{escape(helper_text)}</p>
+            <button class="button-button" type="submit">{escape(submit_label)}</button>
           </form>
         </section>
         """
@@ -7705,6 +7779,7 @@ def _render_experimental_ai_demo_page(
     orchestration_preview_html: str = "",
     one_shot_max_turns: int = EXPERIMENTAL_ONE_SHOT_DEFAULT_MAX_TURNS,
     one_shot_run_html: str = "",
+    demo_boot: bool = False,
     notice: str | None = None,
     detail: dict[str, Any] | str | None = None,
 ) -> HTMLResponse:
@@ -7720,6 +7795,9 @@ def _render_experimental_ai_demo_page(
         f'{escape(str(item.get("display_name") or item.get("actor_id") or "调查员"))}'
         f'（{escape(str(item.get("kind") or "unknown"))}）</option>'
         for item in investigator_candidates
+    )
+    demo_boot_hidden_input = (
+        '<input type="hidden" name="demo_boot" value="1" />' if demo_boot else ""
     )
     body = (
         _page_head(
@@ -7752,6 +7830,7 @@ def _render_experimental_ai_demo_page(
           {
               f'''
               <form method="post" action="/app/sessions/{escape(session_id)}/experimental-ai-demo/run" class="form-stack">
+                {demo_boot_hidden_input}
                 <label>
                   Investigator 视角
                   <select name="investigator_id">{options_html}</select>
@@ -7766,6 +7845,7 @@ def _render_experimental_ai_demo_page(
                   options_html=options_html,
                   selected_investigator_id=selected_investigator_id or "",
                   max_turns=one_shot_max_turns,
+                  demo_boot=demo_boot,
                   evaluation_state=evaluation_state,
                   narrative_work_note_value=narrative_work_note_value,
                   keeper_turn_note_value=keeper_turn_note_value,
@@ -8084,6 +8164,7 @@ def _render_app_experimental_ai_demo_from_service(
     orchestration_preview_html: str = "",
     one_shot_max_turns: int = EXPERIMENTAL_ONE_SHOT_DEFAULT_MAX_TURNS,
     one_shot_run_html: str = "",
+    demo_boot: bool = False,
     notice: str | None = None,
     detail: dict[str, Any] | str | None = None,
     status_code: int = status.HTTP_200_OK,
@@ -8168,11 +8249,141 @@ def _render_app_experimental_ai_demo_from_service(
         orchestration_preview_html=orchestration_preview_html,
         one_shot_max_turns=one_shot_max_turns,
         one_shot_run_html=one_shot_run_html,
+        demo_boot=demo_boot,
         notice=notice,
         detail=detail,
     )
     response.status_code = status_code
     return response
+
+
+def _render_experimental_ai_demo_one_shot_run_from_service(
+    *,
+    service: SessionService,
+    local_llm_service: LocalLLMService,
+    session_id: str,
+    selected_investigator_id: str = "",
+    max_turns: int = EXPERIMENTAL_ONE_SHOT_DEFAULT_MAX_TURNS,
+    evaluation_state: Mapping[str, str] | None = None,
+    narrative_work_note_value: str = "",
+    keeper_turn_note_value: str = "",
+    visible_turn_note_value: str = "",
+    demo_boot: bool = False,
+    notice_prefix: str | None = None,
+) -> HTMLResponse:
+    try:
+        session, keeper_view, _, _ = service.get_keeper_workspace(session_id)
+    except LookupError as exc:
+        body = _detail_block(extract_error_detail(exc)) + _page_head(
+            eyebrow="Experimental AI Demo",
+            title="Experimental AI Demo 不可用",
+            summary="当前无法加载实验 harness 所需的 keeper workspace。",
+            actions=[("返回 Sessions", "/app/sessions", "ghost")],
+        )
+        return render_web_app_shell(
+            title=f"Session {session_id} Experimental AI Demo Missing",
+            sidebar_html=_render_sidebar(active_section="keeper"),
+            body_html=body,
+            status_code=status.HTTP_404_NOT_FOUND,
+        )
+    snapshot = session.model_dump(mode="json")
+    participants = [
+        participant
+        for participant in snapshot.get("participants") or []
+        if isinstance(participant, dict)
+    ]
+    candidates = _demo_investigator_candidates(
+        participants,
+        keeper_id=snapshot.get("keeper_id"),
+    )
+    candidate_ids = {
+        str(item.get("actor_id") or "")
+        for item in candidates
+        if str(item.get("actor_id") or "")
+    }
+    resolved_investigator_id = selected_investigator_id
+    if not resolved_investigator_id and candidates:
+        resolved_investigator_id = str(candidates[0].get("actor_id") or "")
+    if not resolved_investigator_id or resolved_investigator_id not in candidate_ids:
+        return _render_app_experimental_ai_demo_from_service(
+            service=service,
+            session_id=session_id,
+            local_llm_service=local_llm_service,
+            selected_investigator_id=resolved_investigator_id,
+            one_shot_max_turns=max_turns,
+            demo_boot=demo_boot,
+            narrative_work_note_value=narrative_work_note_value,
+            keeper_turn_note_value=keeper_turn_note_value,
+            visible_turn_note_value=visible_turn_note_value,
+            detail="当前无法建立可用的 investigator visible summary；请先选择一个有效调查员视角。",
+            status_code=status.HTTP_404_NOT_FOUND,
+        )
+    investigator_view = service.get_session_view(
+        session_id,
+        viewer_id=resolved_investigator_id,
+        viewer_role=ViewerRole.INVESTIGATOR,
+    ).model_dump(mode="json")
+    run_result = _run_experimental_one_shot_demo(
+        service=service,
+        local_llm_service=local_llm_service,
+        session=session,
+        keeper_view=keeper_view,
+        snapshot=snapshot,
+        investigator_view=investigator_view,
+        investigator_id=resolved_investigator_id,
+        max_turns=max_turns,
+        evaluation_state=evaluation_state,
+        initial_narrative_work_note_value=narrative_work_note_value,
+        initial_keeper_turn_note_value=keeper_turn_note_value,
+        initial_visible_turn_note_value=visible_turn_note_value,
+    )
+    run_result = _finalize_experimental_one_shot_run_result_internal_tooling(
+        snapshot=snapshot,
+        run_result=run_result,
+    )
+    ending_status_label = EXPERIMENTAL_ONE_SHOT_ENDING_STATUS_LABELS.get(
+        run_result.ending_status,
+        run_result.ending_status,
+    )
+    notice_parts = [
+        _normalize_form_text(notice_prefix) or "",
+        (
+            f"one-shot self-play demo run 已结束：{ending_status_label}。"
+            "当前只保留 run-local transcript / ending summary，不会写入 authoritative state。"
+        ),
+    ]
+    notice = " ".join(part for part in notice_parts if part)
+    return _render_app_experimental_ai_demo_from_service(
+        service=service,
+        session_id=session_id,
+        local_llm_service=local_llm_service,
+        selected_investigator_id=resolved_investigator_id,
+        kp_result=run_result.kp_result,
+        investigator_result=run_result.investigator_result,
+        current_turn_index=run_result.current_turn_index,
+        kp_turn_bridge=run_result.kp_turn_bridge,
+        investigator_turn_bridge=run_result.investigator_turn_bridge,
+        evaluation_state=evaluation_state,
+        narrative_work_note_value=run_result.narrative_work_note_value,
+        keeper_turn_note_value=run_result.keeper_turn_note_value,
+        visible_turn_note_value=run_result.visible_turn_note_value,
+        keeper_draft_applied=run_result.keeper_draft_applied,
+        visible_draft_applied=run_result.visible_draft_applied,
+        orchestration_preview_html=_render_experimental_ai_demo_preview_chain(
+            session_id=session_id,
+            current_turn_index=run_result.current_turn_index,
+            kp_result=run_result.kp_result,
+            investigator_result=run_result.investigator_result,
+            keeper_draft_result=run_result.keeper_draft_result,
+            visible_draft_result=run_result.visible_draft_result,
+        ),
+        one_shot_max_turns=max_turns,
+        one_shot_run_html=_render_experimental_one_shot_run_panel(
+            run_result=run_result,
+        ),
+        demo_boot=demo_boot,
+        notice=notice,
+    )
 
 
 def _render_app_investigator_from_service(
@@ -8224,23 +8435,50 @@ def web_app_root() -> RedirectResponse:
 @router.get("/setup", response_class=HTMLResponse)
 def web_app_setup(
     playtest_group: str | None = None,
+    demo_boot: str | None = None,
 ) -> HTMLResponse:
-    form_values = _default_playtest_setup_form_values()
+    demo_boot_enabled = _is_demo_boot_enabled(demo_boot)
     normalized_group = _normalize_form_text(playtest_group)
+    form_values = (
+        _build_demo_boot_setup_form_values(playtest_group=normalized_group)
+        if demo_boot_enabled
+        else _default_playtest_setup_form_values()
+    )
     if normalized_group:
         form_values["playtest_group"] = normalized_group
-    return _render_setup_page(form_values=form_values)
+    return _render_setup_page(form_values=form_values, demo_boot=demo_boot_enabled)
 
 
 @router.post("/setup", response_class=HTMLResponse)
 async def web_app_create_session(
     request: Request,
     service: SessionService = Depends(get_session_service),
+    local_llm_service: LocalLLMService = Depends(get_local_llm_service),
 ) -> HTMLResponse:
-    form = _normalize_playtest_setup_form_values(await _read_form_payload(request))
+    raw_form = await _read_form_payload(request)
+    demo_boot_enabled = _is_demo_boot_enabled(raw_form.get("demo_boot"))
+    launch_target = _normalize_form_text(raw_form.get("launch_target")) or ""
+    autorun_one_shot = _is_demo_boot_enabled(raw_form.get("autorun_one_shot"))
+    form = _normalize_playtest_setup_form_values(raw_form)
     try:
         start_request = _build_playtest_setup_request(form)
         response = service.start_session(start_request)
+        if demo_boot_enabled and launch_target == "experimental_ai_demo":
+            if autorun_one_shot:
+                return _render_experimental_ai_demo_one_shot_run_from_service(
+                    service=service,
+                    local_llm_service=local_llm_service,
+                    session_id=response.session_id,
+                    max_turns=EXPERIMENTAL_ONE_SHOT_DEFAULT_MAX_TURNS,
+                    demo_boot=True,
+                    notice_prefix=(
+                        "launcher / demo boot 已创建 sample session，并直接复用现有 bounded autoplay observer 主链。"
+                    ),
+                )
+            return RedirectResponse(
+                url=_experimental_ai_demo_session_boot_href(response.session_id),
+                status_code=status.HTTP_303_SEE_OTHER,
+            )
         return RedirectResponse(
             url=f"/app/sessions/{response.session_id}",
             status_code=status.HTTP_303_SEE_OTHER,
@@ -8248,6 +8486,7 @@ async def web_app_create_session(
     except (ValidationError, ValueError) as exc:
         return _render_setup_page(
             form_values=form,
+            demo_boot=demo_boot_enabled,
             detail=extract_error_detail(exc),
             status_code=_exception_status_code(exc),
         )
@@ -8264,14 +8503,25 @@ def web_app_sessions(
 
 @router.get("/experimental-ai-demo", include_in_schema=False)
 def web_app_experimental_ai_demo_launcher_entry(
+    demo_boot: str | None = None,
     service: SessionService = Depends(get_session_service),
 ) -> RedirectResponse:
+    demo_boot_enabled = _is_demo_boot_enabled(demo_boot)
     sessions = service.list_sessions()
     if not sessions:
+        if demo_boot_enabled:
+            return RedirectResponse(
+                url="/app/setup?demo_boot=1",
+                status_code=status.HTTP_303_SEE_OTHER,
+            )
         return RedirectResponse(url="/app/sessions", status_code=status.HTTP_303_SEE_OTHER)
     latest_session_id = sessions[0].session_id
     return RedirectResponse(
-        url=f"/app/sessions/{latest_session_id}/experimental-ai-demo",
+        url=(
+            _experimental_ai_demo_session_boot_href(latest_session_id)
+            if demo_boot_enabled
+            else f"/app/sessions/{latest_session_id}/experimental-ai-demo"
+        ),
         status_code=status.HTTP_303_SEE_OTHER,
     )
 
@@ -8329,14 +8579,23 @@ def web_app_keeper_workspace(
 def web_app_experimental_ai_demo(
     session_id: str,
     investigator_id: str | None = None,
+    demo_boot: str | None = None,
     service: SessionService = Depends(get_session_service),
     local_llm_service: LocalLLMService = Depends(get_local_llm_service),
 ) -> HTMLResponse:
+    demo_boot_enabled = _is_demo_boot_enabled(demo_boot)
     return _render_app_experimental_ai_demo_from_service(
         service=service,
         session_id=session_id,
         local_llm_service=local_llm_service,
         selected_investigator_id=_normalize_form_text(investigator_id),
+        demo_boot=demo_boot_enabled,
+        notice=(
+            "launcher / demo boot 已就绪：当前页默认用于 observer autoplay demo。"
+            "已自动选中首个 investigator，并保留 bounded one-shot 参数；点击一次“开始 one-shot self-play demo”即可观察过程与结果。"
+            if demo_boot_enabled
+            else None
+        ),
     )
 
 
@@ -8666,122 +8925,22 @@ async def web_app_experimental_ai_demo_one_shot_run(
     local_llm_service: LocalLLMService = Depends(get_local_llm_service),
 ) -> HTMLResponse:
     form = await _read_form_payload(request)
-    selected_investigator_id = _normalize_form_text(form.get("investigator_id"))
-    max_turns = _parse_one_shot_max_turns(form.get("max_turns"))
-    evaluation_state = _normalize_experimental_demo_rubric_state(form)
-    narrative_work_note_value = _normalize_form_text(form.get("seed_narrative_work_note")) or ""
-    keeper_turn_note_value = (
-        _normalize_form_text(form.get("seed_keeper_turn_outcome_note")) or ""
-    )
-    visible_turn_note_value = (
-        _normalize_form_text(form.get("seed_visible_turn_outcome_note")) or ""
-    )
-    try:
-        session, keeper_view, _, _ = service.get_keeper_workspace(session_id)
-    except LookupError as exc:
-        body = _detail_block(extract_error_detail(exc)) + _page_head(
-            eyebrow="Experimental AI Demo",
-            title="Experimental AI Demo 不可用",
-            summary="当前无法加载实验 harness 所需的 keeper workspace。",
-            actions=[("返回 Sessions", "/app/sessions", "ghost")],
-        )
-        return render_web_app_shell(
-            title=f"Session {session_id} Experimental AI Demo Missing",
-            sidebar_html=_render_sidebar(active_section="keeper"),
-            body_html=body,
-            status_code=status.HTTP_404_NOT_FOUND,
-        )
-    snapshot = session.model_dump(mode="json")
-    participants = [
-        participant
-        for participant in snapshot.get("participants") or []
-        if isinstance(participant, dict)
-    ]
-    candidates = _demo_investigator_candidates(
-        participants,
-        keeper_id=snapshot.get("keeper_id"),
-    )
-    candidate_ids = {
-        str(item.get("actor_id") or "")
-        for item in candidates
-        if str(item.get("actor_id") or "")
-    }
-    resolved_investigator_id = selected_investigator_id
-    if not resolved_investigator_id and candidates:
-        resolved_investigator_id = str(candidates[0].get("actor_id") or "")
-    if not resolved_investigator_id or resolved_investigator_id not in candidate_ids:
-        return _render_app_experimental_ai_demo_from_service(
-            service=service,
-            session_id=session_id,
-            local_llm_service=local_llm_service,
-            selected_investigator_id=resolved_investigator_id,
-            one_shot_max_turns=max_turns,
-            narrative_work_note_value=narrative_work_note_value,
-            keeper_turn_note_value=keeper_turn_note_value,
-            visible_turn_note_value=visible_turn_note_value,
-            detail="当前无法建立可用的 investigator visible summary；请先选择一个有效调查员视角。",
-            status_code=status.HTTP_404_NOT_FOUND,
-        )
-    investigator_view = service.get_session_view(
-        session_id,
-        viewer_id=resolved_investigator_id,
-        viewer_role=ViewerRole.INVESTIGATOR,
-    ).model_dump(mode="json")
-    run_result = _run_experimental_one_shot_demo(
+    return _render_experimental_ai_demo_one_shot_run_from_service(
         service=service,
         local_llm_service=local_llm_service,
-        session=session,
-        keeper_view=keeper_view,
-        snapshot=snapshot,
-        investigator_view=investigator_view,
-        investigator_id=resolved_investigator_id,
-        max_turns=max_turns,
-        evaluation_state=evaluation_state,
-        initial_narrative_work_note_value=narrative_work_note_value,
-        initial_keeper_turn_note_value=keeper_turn_note_value,
-        initial_visible_turn_note_value=visible_turn_note_value,
-    )
-    run_result = _finalize_experimental_one_shot_run_result_internal_tooling(
-        snapshot=snapshot,
-        run_result=run_result,
-    )
-    ending_status_label = EXPERIMENTAL_ONE_SHOT_ENDING_STATUS_LABELS.get(
-        run_result.ending_status,
-        run_result.ending_status,
-    )
-    notice = (
-        f"one-shot self-play demo run 已结束：{ending_status_label}。"
-        "当前只保留 run-local transcript / ending summary，不会写入 authoritative state。"
-    )
-    return _render_app_experimental_ai_demo_from_service(
-        service=service,
         session_id=session_id,
-        local_llm_service=local_llm_service,
-        selected_investigator_id=resolved_investigator_id,
-        kp_result=run_result.kp_result,
-        investigator_result=run_result.investigator_result,
-        current_turn_index=run_result.current_turn_index,
-        kp_turn_bridge=run_result.kp_turn_bridge,
-        investigator_turn_bridge=run_result.investigator_turn_bridge,
-        evaluation_state=evaluation_state,
-        narrative_work_note_value=run_result.narrative_work_note_value,
-        keeper_turn_note_value=run_result.keeper_turn_note_value,
-        visible_turn_note_value=run_result.visible_turn_note_value,
-        keeper_draft_applied=run_result.keeper_draft_applied,
-        visible_draft_applied=run_result.visible_draft_applied,
-        orchestration_preview_html=_render_experimental_ai_demo_preview_chain(
-            session_id=session_id,
-            current_turn_index=run_result.current_turn_index,
-            kp_result=run_result.kp_result,
-            investigator_result=run_result.investigator_result,
-            keeper_draft_result=run_result.keeper_draft_result,
-            visible_draft_result=run_result.visible_draft_result,
+        selected_investigator_id=_normalize_form_text(form.get("investigator_id")) or "",
+        max_turns=_parse_one_shot_max_turns(form.get("max_turns")),
+        evaluation_state=_normalize_experimental_demo_rubric_state(form),
+        narrative_work_note_value=_normalize_form_text(form.get("seed_narrative_work_note"))
+        or "",
+        keeper_turn_note_value=(
+            _normalize_form_text(form.get("seed_keeper_turn_outcome_note")) or ""
         ),
-        one_shot_max_turns=max_turns,
-        one_shot_run_html=_render_experimental_one_shot_run_panel(
-            run_result=run_result,
+        visible_turn_note_value=(
+            _normalize_form_text(form.get("seed_visible_turn_outcome_note")) or ""
         ),
-        notice=notice,
+        demo_boot=_is_demo_boot_enabled(form.get("demo_boot")),
     )
 
 

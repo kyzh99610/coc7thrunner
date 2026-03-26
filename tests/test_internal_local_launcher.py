@@ -176,7 +176,7 @@ def test_run_headless_smoke_can_start_open_browser_and_stop_real_service() -> No
         assert payload["stop_called"] is True
         assert payload["status_after_start"] == "running"
         assert payload["status_after_stop"] == "not_running"
-        assert payload["browser_urls"] == [payload["web_url"]]
+        assert payload["browser_urls"] == [payload["experimental_demo_url"]]
     finally:
         shutil.rmtree(run_dir, ignore_errors=True)
 
@@ -240,7 +240,7 @@ def test_local_service_manager_open_experimental_demo_uses_launcher_deep_link() 
         assert manager.open_experimental_demo() is True
 
     assert manager.experimental_demo_url.endswith(DEFAULT_EXPERIMENTAL_DEMO_PATH)
-    assert opened_urls == [manager.experimental_demo_url]
+    assert opened_urls == [manager.experimental_demo_boot_url]
 
 
 def test_local_service_manager_open_experimental_demo_requires_running_service() -> None:
@@ -299,7 +299,7 @@ def test_launcher_cli_smoke_json_uses_real_entry() -> None:
         assert payload["success"] is True
         assert payload["status_after_start"] == "running"
         assert payload["status_after_stop"] == "not_running"
-        assert payload["browser_urls"] == [payload["web_url"]]
+        assert payload["browser_urls"] == [payload["experimental_demo_url"]]
     finally:
         shutil.rmtree(run_dir, ignore_errors=True)
 
@@ -341,7 +341,7 @@ def test_launcher_cli_smoke_json_can_write_output_file() -> None:
         assert smoke_output.exists() is True
         payload = json.loads(smoke_output.read_text(encoding="utf-8"))
         assert payload["success"] is True
-        assert payload["browser_urls"] == [payload["web_url"]]
+        assert payload["browser_urls"] == [payload["experimental_demo_url"]]
     finally:
         shutil.rmtree(run_dir, ignore_errors=True)
 

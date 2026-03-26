@@ -22,6 +22,7 @@ DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 8000
 DEFAULT_WEB_PATH = "/app/sessions"
 DEFAULT_EXPERIMENTAL_DEMO_PATH = "/app/experimental-ai-demo"
+DEFAULT_EXPERIMENTAL_DEMO_BOOT_QUERY = "?demo_boot=1"
 DEFAULT_HEALTH_PATH = "/healthz"
 MAX_LOG_LINES = 200
 ENV_PROBE_TIMEOUT_SECONDS = 15.0
@@ -430,6 +431,10 @@ class LocalServiceManager:
         return f"http://{self.host}:{self.port}{DEFAULT_EXPERIMENTAL_DEMO_PATH}"
 
     @property
+    def experimental_demo_boot_url(self) -> str:
+        return f"{self.experimental_demo_url}{DEFAULT_EXPERIMENTAL_DEMO_BOOT_QUERY}"
+
+    @property
     def health_url(self) -> str:
         return f"http://{self.host}:{self.port}{DEFAULT_HEALTH_PATH}"
 
@@ -437,7 +442,7 @@ class LocalServiceManager:
         return LauncherSnapshot(
             status=self._status,
             status_text=self._status_text,
-            url=self.web_url,
+            url=self.experimental_demo_boot_url,
             port=self.port,
             last_error=self._last_error,
             owns_process=self._process is not None,
@@ -539,7 +544,7 @@ class LocalServiceManager:
             self.poll()
             self._last_error = "当前服务未运行；请先启动本地应用后再打开 experimental AI demo。"
             return False
-        return self._open_url(self.experimental_demo_url)
+        return self._open_url(self.experimental_demo_boot_url)
 
     def _open_url(self, url: str) -> bool:
         try:
@@ -652,6 +657,7 @@ def run_headless_smoke(
         "host": manager.host,
         "port": manager.port,
         "web_url": manager.web_url,
+        "experimental_demo_url": manager.experimental_demo_boot_url,
         "health_url": manager.health_url,
         "status_before": initial_snapshot.status,
         "status_before_text": initial_snapshot.status_text,
@@ -677,7 +683,7 @@ def run_headless_smoke(
         payload["status_after_start_text"] = running_snapshot.status_text
         payload["last_error"] = running_snapshot.last_error
         if running_snapshot.status == "running":
-            payload["browser_opened"] = manager.open_browser()
+            payload["browser_opened"] = manager.open_experimental_demo()
             payload["browser_urls"] = list(opened_urls)
         if manager.snapshot().owns_process:
             payload["stop_called"] = manager.stop()
@@ -743,7 +749,7 @@ def run_launcher_window(
     root.minsize(680, 520)
 
     status_var = tk.StringVar(value=manager.snapshot().status_text)
-    url_var = tk.StringVar(value=manager.web_url)
+    url_var = tk.StringVar(value=manager.experimental_demo_boot_url)
     port_var = tk.StringVar(value=str(manager.port))
     error_var = tk.StringVar(value="")
     env_var = tk.StringVar(value=_environment_display_text(manager.snapshot().environment))
@@ -760,18 +766,18 @@ def run_launcher_window(
     ).pack(anchor="w")
     ttk.Label(
         header,
-        text="仅供本地 / internal 使用：启动、停服、打开首页或 experimental AI demo、做 very small 环境检查。",
+        text="仅供本地 / internal 使用：一键启动本地服务并打开 experimental observer demo，也可手动回到 Sessions 首页做 very small 环境检查。",
     ).pack(anchor="w", pady=(4, 10))
 
     controls = ttk.Frame(frame)
     controls.pack(fill="x", pady=(0, 10))
     ttk.Button(controls, text="检查环境", command=lambda: _refresh_environment()).pack(side="left")
-    ttk.Button(controls, text="启动本地应用", command=lambda: _start_service()).pack(side="left", padx=(8, 0))
+    ttk.Button(controls, text="启动并打开 Observer Demo", command=lambda: _start_service()).pack(side="left", padx=(8, 0))
     ttk.Button(controls, text="停止本地应用", command=lambda: _stop_service()).pack(side="left", padx=(8, 0))
-    ttk.Button(controls, text="打开首页", command=lambda: _open_browser()).pack(side="left", padx=(8, 0))
+    ttk.Button(controls, text="打开 Sessions 首页", command=lambda: _open_browser()).pack(side="left", padx=(8, 0))
     ttk.Button(
         controls,
-        text="打开 Experimental AI Demo",
+        text="重新打开 Observer Demo",
         command=lambda: _open_experimental_demo(),
     ).pack(side="left", padx=(8, 0))
 
@@ -826,7 +832,12 @@ def run_launcher_window(
             status_var.set("环境未就绪")
 
     def _start_service() -> None:
-        manager.start()
+        started = manager.start()
+        if started:
+            manager.wait_until_running(timeout_seconds=STARTUP_TIMEOUT_SECONDS)
+        snapshot = manager.poll()
+        if snapshot.status in {"running", "running_external"}:
+            manager.open_experimental_demo()
         _apply_snapshot(manager.snapshot())
 
     def _stop_service() -> None:
