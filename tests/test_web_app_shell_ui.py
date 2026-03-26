@@ -1838,6 +1838,83 @@ def test_experimental_one_shot_turn_finalized_internal_snapshot_helper_prefers_k
     )
 
 
+def test_experimental_one_shot_recent_turn_finalized_snapshot_contract_returns_stable_small_items(
+    client: TestClient,
+) -> None:
+    session_id = _start_keeper_dashboard_session(client)
+    _advance_keeper_dashboard_session(client, session_id)
+    fake_service = _SequencedOneShotLocalLLMService()
+    before_snapshot = _get_snapshot(client, session_id)
+
+    run_result = _run_finalized_experimental_one_shot_demo(
+        client=client,
+        session_id=session_id,
+        local_llm_service=fake_service,
+    )
+    contract_items = (
+        web_app_route._build_experimental_one_shot_recent_turn_finalized_snapshot_contract(
+            run_result=run_result
+        )
+    )
+
+    assert before_snapshot == _get_snapshot(client, session_id)
+    assert len(contract_items) == 3
+    assert set(contract_items[0]) == {
+        "turn_index",
+        "status_label",
+        "finalized_kind",
+        "finalized_text",
+        "stop_reason",
+    }
+    assert contract_items[0]["turn_index"] == 1
+    assert contract_items[0]["status_label"] == "已完成"
+    assert contract_items[0]["finalized_kind"] == "turn_memo"
+    assert "整理为当前轮 finalized memo：" in contract_items[0]["finalized_text"]
+    assert "第 1 轮 keeper continuity" in contract_items[0]["finalized_text"]
+    assert contract_items[0]["stop_reason"] == ""
+    assert contract_items[-1]["turn_index"] == 3
+    assert contract_items[-1]["status_label"] == "成功"
+    assert contract_items[-1]["finalized_kind"] == "turn_memo"
+    assert (
+        contract_items[-1]["stop_reason"]
+        == "已形成连续、可读且带 continuity 的受控 demo mini-arc。"
+    )
+    assert "keeper_only_explanatory_text" not in str(contract_items)
+    assert "旅店旧图纸" not in str(contract_items)
+    assert "储物间账本残页" not in str(contract_items)
+    assert "input_pin_focus" not in str(contract_items)
+
+
+def test_experimental_one_shot_recent_turn_finalized_snapshot_contract_can_limit_to_latest_turns(
+    client: TestClient,
+) -> None:
+    session_id = _start_keeper_dashboard_session(client)
+    _advance_keeper_dashboard_session(client, session_id)
+    fake_service = _SequencedOneShotLocalLLMService()
+    before_snapshot = _get_snapshot(client, session_id)
+
+    run_result = _run_finalized_experimental_one_shot_demo(
+        client=client,
+        session_id=session_id,
+        local_llm_service=fake_service,
+    )
+    contract_items = (
+        web_app_route._build_experimental_one_shot_recent_turn_finalized_snapshot_contract(
+            run_result=run_result,
+            limit=2,
+        )
+    )
+
+    assert before_snapshot == _get_snapshot(client, session_id)
+    assert [item["turn_index"] for item in contract_items] == [2, 3]
+    assert contract_items[0]["status_label"] == "已完成"
+    assert contract_items[-1]["status_label"] == "成功"
+    assert (
+        contract_items[-1]["stop_reason"]
+        == "已形成连续、可读且带 continuity 的受控 demo mini-arc。"
+    )
+
+
 def test_experimental_one_shot_autoplay_turn_observer_snapshot_helper_returns_bounded_run_local_snapshots(
     client: TestClient,
 ) -> None:
@@ -1850,6 +1927,11 @@ def test_experimental_one_shot_autoplay_turn_observer_snapshot_helper_returns_bo
         client=client,
         session_id=session_id,
         local_llm_service=fake_service,
+    )
+    contract_items = (
+        web_app_route._build_experimental_one_shot_recent_turn_finalized_snapshot_contract(
+            run_result=run_result
+        )
     )
     turn_snapshots = (
         web_app_route._build_experimental_one_shot_autoplay_turn_observer_snapshots(
@@ -1875,18 +1957,19 @@ def test_experimental_one_shot_autoplay_turn_observer_snapshot_helper_returns_bo
     assert "第 1 轮把压力推进到204 房登记" in turn_snapshots[0]["run_local_summary"]
     assert "204 房" in turn_snapshots[0]["run_local_summary"]
     assert "第 1 轮 keeper continuity" in turn_snapshots[0]["continuity_summary"]
-    assert turn_snapshots[0]["finalized_kind"] == "turn_memo"
-    assert "整理为当前轮 finalized memo：" in turn_snapshots[0]["finalized_text"]
+    assert turn_snapshots[0]["badge"] == contract_items[0]["status_label"]
+    assert turn_snapshots[0]["finalized_kind"] == contract_items[0]["finalized_kind"]
+    assert turn_snapshots[0]["finalized_text"] == contract_items[0]["finalized_text"]
     assert "第 1 轮 keeper continuity" in turn_snapshots[0]["finalized_text"]
-    assert turn_snapshots[0]["stop_reason"] == ""
+    assert turn_snapshots[0]["stop_reason"] == contract_items[0]["stop_reason"]
     assert turn_snapshots[-1]["title"] == "第 3 轮快照"
-    assert turn_snapshots[-1]["badge"] == "成功"
+    assert turn_snapshots[-1]["badge"] == contract_items[-1]["status_label"]
     assert turn_snapshots[-1]["phase"] == "结束轮"
-    assert turn_snapshots[-1]["finalized_kind"] == "turn_memo"
-    assert "整理为当前轮 finalized memo：" in turn_snapshots[-1]["finalized_text"]
+    assert turn_snapshots[-1]["finalized_kind"] == contract_items[-1]["finalized_kind"]
+    assert turn_snapshots[-1]["finalized_text"] == contract_items[-1]["finalized_text"]
     assert (
         turn_snapshots[-1]["stop_reason"]
-        == "已形成连续、可读且带 continuity 的受控 demo mini-arc。"
+        == contract_items[-1]["stop_reason"]
     )
     assert "keeper_only_explanatory_text" not in str(turn_snapshots)
     assert "旅店旧图纸" not in str(turn_snapshots)

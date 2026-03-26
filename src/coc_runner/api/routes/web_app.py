@@ -341,6 +341,14 @@ class ExperimentalOneShotTurnFinalizedInternalSnapshot(TypedDict):
     text: str
 
 
+class ExperimentalOneShotRecentTurnFinalizedSnapshotItem(TypedDict):
+    turn_index: int
+    status_label: str
+    finalized_kind: str
+    finalized_text: str
+    stop_reason: str
+
+
 @dataclass(slots=True)
 class ExperimentalOneShotTurnRecord:
     turn_index: int
@@ -4336,20 +4344,71 @@ def _build_experimental_one_shot_turn_finalized_internal_snapshot(
     return None
 
 
+def _build_experimental_one_shot_recent_turn_finalized_snapshot_contract(
+    *,
+    run_result: ExperimentalOneShotRunResult,
+    limit: int | None = None,
+) -> list[ExperimentalOneShotRecentTurnFinalizedSnapshotItem]:
+    if not run_result.turn_records:
+        return []
+    selected_records = (
+        run_result.turn_records
+        if limit is None
+        else (
+            run_result.turn_records[-limit:]
+            if limit > 0
+            else []
+        )
+    )
+    final_turn_index = run_result.turn_records[-1].turn_index
+    final_status_label = EXPERIMENTAL_ONE_SHOT_ENDING_STATUS_LABELS.get(
+        run_result.ending_status,
+        run_result.ending_status,
+    )
+    final_stop_reason = EXPERIMENTAL_ONE_SHOT_ENDING_REASON_LABELS.get(
+        run_result.ending_reason,
+        run_result.ending_reason,
+    )
+    contract_items: list[ExperimentalOneShotRecentTurnFinalizedSnapshotItem] = []
+    for record in selected_records:
+        finalized_snapshot = _build_experimental_one_shot_turn_finalized_internal_snapshot(
+            record=record,
+        )
+        is_final_turn = record.turn_index == final_turn_index
+        contract_items.append(
+            {
+                "turn_index": record.turn_index,
+                "status_label": final_status_label if is_final_turn else "已完成",
+                "finalized_kind": (
+                    finalized_snapshot["kind"]
+                    if finalized_snapshot is not None
+                    else "unavailable"
+                ),
+                "finalized_text": (
+                    _excerpt(finalized_snapshot["text"], limit=180)
+                    if finalized_snapshot is not None
+                    else "当前轮未产出 representative finalized internal snapshot。"
+                ),
+                "stop_reason": final_stop_reason if is_final_turn else "",
+            }
+        )
+    return contract_items
+
+
 def _build_experimental_one_shot_autoplay_turn_observer_snapshots(
     *,
     run_result: ExperimentalOneShotRunResult,
 ) -> list[dict[str, str]]:
     if not run_result.turn_records:
         return []
-    status_label = EXPERIMENTAL_ONE_SHOT_ENDING_STATUS_LABELS.get(
-        run_result.ending_status,
-        run_result.ending_status,
+    recent_turn_contract = (
+        _build_experimental_one_shot_recent_turn_finalized_snapshot_contract(
+            run_result=run_result,
+        )
     )
-    reason_label = EXPERIMENTAL_ONE_SHOT_ENDING_REASON_LABELS.get(
-        run_result.ending_reason,
-        run_result.ending_reason,
-    )
+    contract_by_turn_index = {
+        item["turn_index"]: item for item in recent_turn_contract
+    }
     final_turn_index = run_result.turn_records[-1].turn_index
     snapshots: list[dict[str, str]] = []
     for record in run_result.turn_records:
@@ -4369,27 +4428,33 @@ def _build_experimental_one_shot_autoplay_turn_observer_snapshots(
             or "当前无 continuity 摘要。",
             limit=140,
         )
-        finalized_snapshot = _build_experimental_one_shot_turn_finalized_internal_snapshot(
-            record=record,
-        )
+        finalized_contract = contract_by_turn_index.get(record.turn_index)
         snapshots.append(
             {
                 "title": f"第 {record.turn_index} 轮快照",
-                "badge": status_label if is_final_turn else "已完成",
+                "badge": (
+                    finalized_contract["status_label"]
+                    if finalized_contract is not None
+                    else ("已完成" if not is_final_turn else run_result.ending_status)
+                ),
                 "phase": "结束轮" if is_final_turn else "中间轮",
                 "run_local_summary": run_local_summary,
                 "continuity_summary": continuity_summary,
                 "finalized_kind": (
-                    finalized_snapshot["kind"]
-                    if finalized_snapshot is not None
+                    finalized_contract["finalized_kind"]
+                    if finalized_contract is not None
                     else "unavailable"
                 ),
                 "finalized_text": (
-                    _excerpt(finalized_snapshot["text"], limit=180)
-                    if finalized_snapshot is not None
+                    finalized_contract["finalized_text"]
+                    if finalized_contract is not None
                     else "当前轮未产出 representative finalized internal snapshot。"
                 ),
-                "stop_reason": reason_label if is_final_turn else "",
+                "stop_reason": (
+                    finalized_contract["stop_reason"]
+                    if finalized_contract is not None
+                    else ""
+                ),
             }
         )
     return snapshots
@@ -4489,7 +4554,7 @@ def _render_experimental_one_shot_autoplay_observer_panel(
             <h3>按轮内部快照</h3>
             <span class="tag">turn-by-turn</span>
           </div>
-          <p class="helper">当前 helper chain 仍是 run-result-level final snapshot；按轮列表只从现有 turn_records 提炼 1 个 settled 的 per-turn finalized object：优先 keeper continuity，其次 narrative_work_note，最后才回落到 run-local signature；不会为了 observer UI 再重跑一遍内部链。</p>
+          <p class="helper">当前 helper chain 仍是 run-result-level final snapshot；按轮 finalized 先收成 recent-turn contract，再由 observer 卡片复用。contract 只保留 turn_index、status_label、finalized_kind、finalized_text、stop_reason；底层仍只复用现有 turn_records，不会为了 observer UI 再重跑一遍内部链。</p>
           <div class="card-list">{turn_snapshot_html}</div>
         </article>
         <p class="helper">逐轮 run-local 结果仍看下方 Turn 卡片；这里的 internal chain 只代表当前 bounded autoplay run 的最终快照，不是 per-turn raw dump，也不是 authoritative state。</p>
