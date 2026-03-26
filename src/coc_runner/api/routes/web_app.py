@@ -336,6 +336,11 @@ class ExperimentalOneShotInternalAutopilotAgentMemoInput(TypedDict):
     input_text: str
 
 
+class ExperimentalOneShotTurnFinalizedInternalSnapshot(TypedDict):
+    kind: str
+    text: str
+
+
 @dataclass(slots=True)
 class ExperimentalOneShotTurnRecord:
     turn_index: int
@@ -4306,6 +4311,31 @@ def _build_experimental_one_shot_autoplay_observer_cards(
     return cards
 
 
+def _build_experimental_one_shot_turn_finalized_internal_snapshot(
+    *,
+    record: ExperimentalOneShotTurnRecord,
+) -> ExperimentalOneShotTurnFinalizedInternalSnapshot | None:
+    keeper_continuity = _normalize_form_text(record.keeper_continuity)
+    if keeper_continuity:
+        return {
+            "kind": "turn_memo",
+            "text": "整理为当前轮 finalized memo：" + keeper_continuity,
+        }
+    narrative_work_note = _normalize_form_text(record.narrative_work_note)
+    if narrative_work_note:
+        return {
+            "kind": "turn_note",
+            "text": "整理为当前轮 finalized note：" + narrative_work_note,
+        }
+    signature = _normalize_form_text(record.signature)
+    if signature:
+        return {
+            "kind": "run_local_signature",
+            "text": "回落到当前轮 run-local signature：" + signature,
+        }
+    return None
+
+
 def _build_experimental_one_shot_autoplay_turn_observer_snapshots(
     *,
     run_result: ExperimentalOneShotRunResult,
@@ -4339,6 +4369,9 @@ def _build_experimental_one_shot_autoplay_turn_observer_snapshots(
             or "当前无 continuity 摘要。",
             limit=140,
         )
+        finalized_snapshot = _build_experimental_one_shot_turn_finalized_internal_snapshot(
+            record=record,
+        )
         snapshots.append(
             {
                 "title": f"第 {record.turn_index} 轮快照",
@@ -4346,6 +4379,16 @@ def _build_experimental_one_shot_autoplay_turn_observer_snapshots(
                 "phase": "结束轮" if is_final_turn else "中间轮",
                 "run_local_summary": run_local_summary,
                 "continuity_summary": continuity_summary,
+                "finalized_kind": (
+                    finalized_snapshot["kind"]
+                    if finalized_snapshot is not None
+                    else "unavailable"
+                ),
+                "finalized_text": (
+                    _excerpt(finalized_snapshot["text"], limit=180)
+                    if finalized_snapshot is not None
+                    else "当前轮未产出 representative finalized internal snapshot。"
+                ),
                 "stop_reason": reason_label if is_final_turn else "",
             }
         )
@@ -4371,6 +4414,7 @@ def _render_experimental_one_shot_autoplay_observer_panel(
           <li>当前状态：尚未运行。</li>
           <li>停止边界：success / failure / aborted / max_turns。</li>
           <li>按轮快照：运行后会在这里追加 very small run-local snapshot 列表。</li>
+          <li>按轮 finalized：运行后会在每轮卡片里附加 1 个代表性的 finalized internal object。</li>
           <li>说明：这里只显示 keeper/internal observer 内容，不是公开 explainability contract，也不会写入 authoritative state。</li>
         </ul>
       </section>
@@ -4415,6 +4459,8 @@ def _render_experimental_one_shot_autoplay_observer_panel(
             <li>轮次阶段：{escape(snapshot["phase"])}</li>
             <li>run-local 摘要：{escape(snapshot["run_local_summary"])}</li>
             <li>continuity 摘要：{escape(snapshot["continuity_summary"])}</li>
+            <li>finalized object：{escape(snapshot["finalized_kind"])}</li>
+            <li>finalized 摘要：{escape(snapshot["finalized_text"])}</li>
             {f'<li>停止原因：{escape(snapshot["stop_reason"])}</li>' if snapshot["stop_reason"] else ''}
           </ul>
         </article>
@@ -4443,7 +4489,7 @@ def _render_experimental_one_shot_autoplay_observer_panel(
             <h3>按轮内部快照</h3>
             <span class="tag">turn-by-turn</span>
           </div>
-          <p class="helper">当前 helper chain 仍是 run-result-level final snapshot；按轮列表只复用现有 turn_records 的 run-local signature / continuity 摘要，不会为了 observer UI 再重跑一遍内部链。</p>
+          <p class="helper">当前 helper chain 仍是 run-result-level final snapshot；按轮列表只从现有 turn_records 提炼 1 个 settled 的 per-turn finalized object：优先 keeper continuity，其次 narrative_work_note，最后才回落到 run-local signature；不会为了 observer UI 再重跑一遍内部链。</p>
           <div class="card-list">{turn_snapshot_html}</div>
         </article>
         <p class="helper">逐轮 run-local 结果仍看下方 Turn 卡片；这里的 internal chain 只代表当前 bounded autoplay run 的最终快照，不是 per-turn raw dump，也不是 authoritative state。</p>

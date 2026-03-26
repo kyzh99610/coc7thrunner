@@ -615,6 +615,7 @@ def test_web_app_experimental_ai_demo_page_loads_without_breaking_keeper_shell_w
     assert "模式：bounded one-shot autoplay" in html
     assert "当前状态：尚未运行。" in html
     assert "按轮快照：运行后会在这里追加 very small run-local snapshot 列表。" in html
+    assert "按轮 finalized：运行后会在每轮卡片里附加 1 个代表性的 finalized internal object。" in html
     assert 'name="max_turns"' in html
     assert 'action="/app/sessions/' in html
     assert 'name="keeper_turn_outcome_note"' not in html
@@ -999,6 +1000,9 @@ def test_web_app_experimental_ai_demo_one_shot_run_can_finish_with_demo_success_
     assert "第 2 轮快照" in html
     assert "第 3 轮快照" in html
     assert "轮次阶段：结束轮" in html
+    assert "finalized object：turn_memo" in html
+    assert "finalized 摘要：整理为当前轮 finalized memo：" in html
+    assert "finalized object：input_pin_focus" not in html
     assert "停止原因：已形成连续、可读且带 continuity 的受控 demo mini-arc。" in html
     assert "种子上下文" in html
     assert "跟进提示" in html
@@ -1077,6 +1081,9 @@ def test_web_app_experimental_ai_demo_one_shot_run_stops_at_turn_limit_when_demo
     assert "按轮内部快照" in html
     assert "第 1 轮快照" in html
     assert "第 2 轮快照" in html
+    assert "finalized object：turn_memo" in html
+    assert "finalized 摘要：整理为当前轮 finalized memo：" in html
+    assert "finalized object：input_advance_focus" not in html
     assert "停止原因：达到当前受控 one-shot demo run 的最大轮数上限。" in html
     assert "结束状态：达到轮数上限。" in html
     assert "结束原因：达到当前受控 one-shot demo run 的最大轮数上限。" in html
@@ -1730,6 +1737,9 @@ def test_experimental_one_shot_preset_internal_diagnostic_exposes_keeper_only_te
     assert "第 1 轮快照" in html
     assert "第 2 轮快照" in html
     assert "第 3 轮快照" in html
+    assert "finalized object：turn_memo" in html
+    assert "finalized 摘要：整理为当前轮 finalized memo：" in html
+    assert "finalized object：input_pin_focus" not in html
     assert "种子上下文" in html
     assert "跟进提示" in html
     assert "执行意图" in html
@@ -1761,7 +1771,71 @@ def test_experimental_one_shot_preset_internal_diagnostic_exposes_keeper_only_te
     assert internal_diagnostic["keeper_only_explanatory_text"] not in investigator_html
     assert "Keeper 内部说明" not in investigator_html
     assert "封装为 internal agent memo 输入" not in investigator_html
+    assert "finalized object：turn_memo" not in investigator_html
+    assert "finalized 摘要：整理为当前轮 finalized memo：" not in investigator_html
     assert "Autoplay Observer" not in investigator_html
+
+
+@pytest.mark.parametrize(
+    ("record", "expected"),
+    [
+        (
+            web_app_route.ExperimentalOneShotTurnRecord(
+                turn_index=1,
+                kp_summary="KP 摘要",
+                investigator_summary="调查员摘要",
+                keeper_continuity="第 1 轮 keeper continuity：内部继续保留 204 房登记。",
+                visible_continuity="第 1 轮 visible continuity：公开继续围绕 204 房登记追问。",
+                narrative_work_note="第 1 轮 narrative note：先把焦点落到 204 房登记。",
+                signature="KP 摘要 | 调查员摘要",
+            ),
+            {
+                "kind": "turn_memo",
+                "text": "整理为当前轮 finalized memo：第 1 轮 keeper continuity：内部继续保留 204 房登记。",
+            },
+        ),
+        (
+            web_app_route.ExperimentalOneShotTurnRecord(
+                turn_index=2,
+                kp_summary="KP 摘要",
+                investigator_summary="调查员摘要",
+                keeper_continuity="",
+                visible_continuity="第 2 轮 visible continuity：公开继续围绕二楼脚步声追问。",
+                narrative_work_note="第 2 轮 narrative note：先把焦点落到二楼脚步声。",
+                signature="KP 摘要 | 调查员摘要",
+            ),
+            {
+                "kind": "turn_note",
+                "text": "整理为当前轮 finalized note：第 2 轮 narrative note：先把焦点落到二楼脚步声。",
+            },
+        ),
+        (
+            web_app_route.ExperimentalOneShotTurnRecord(
+                turn_index=3,
+                kp_summary="KP 摘要",
+                investigator_summary="调查员摘要",
+                keeper_continuity="",
+                visible_continuity="",
+                narrative_work_note="",
+                signature="KP 摘要 | 调查员摘要 | 第 3 轮签名",
+            ),
+            {
+                "kind": "run_local_signature",
+                "text": "回落到当前轮 run-local signature：KP 摘要 | 调查员摘要 | 第 3 轮签名",
+            },
+        ),
+    ],
+)
+def test_experimental_one_shot_turn_finalized_internal_snapshot_helper_prefers_keeper_local_settled_text(
+    record: web_app_route.ExperimentalOneShotTurnRecord,
+    expected: web_app_route.ExperimentalOneShotTurnFinalizedInternalSnapshot,
+) -> None:
+    assert (
+        web_app_route._build_experimental_one_shot_turn_finalized_internal_snapshot(
+            record=record
+        )
+        == expected
+    )
 
 
 def test_experimental_one_shot_autoplay_turn_observer_snapshot_helper_returns_bounded_run_local_snapshots(
@@ -1791,6 +1865,8 @@ def test_experimental_one_shot_autoplay_turn_observer_snapshot_helper_returns_bo
         "phase",
         "run_local_summary",
         "continuity_summary",
+        "finalized_kind",
+        "finalized_text",
         "stop_reason",
     }
     assert turn_snapshots[0]["title"] == "第 1 轮快照"
@@ -1799,10 +1875,15 @@ def test_experimental_one_shot_autoplay_turn_observer_snapshot_helper_returns_bo
     assert "第 1 轮把压力推进到204 房登记" in turn_snapshots[0]["run_local_summary"]
     assert "204 房" in turn_snapshots[0]["run_local_summary"]
     assert "第 1 轮 keeper continuity" in turn_snapshots[0]["continuity_summary"]
+    assert turn_snapshots[0]["finalized_kind"] == "turn_memo"
+    assert "整理为当前轮 finalized memo：" in turn_snapshots[0]["finalized_text"]
+    assert "第 1 轮 keeper continuity" in turn_snapshots[0]["finalized_text"]
     assert turn_snapshots[0]["stop_reason"] == ""
     assert turn_snapshots[-1]["title"] == "第 3 轮快照"
     assert turn_snapshots[-1]["badge"] == "成功"
     assert turn_snapshots[-1]["phase"] == "结束轮"
+    assert turn_snapshots[-1]["finalized_kind"] == "turn_memo"
+    assert "整理为当前轮 finalized memo：" in turn_snapshots[-1]["finalized_text"]
     assert (
         turn_snapshots[-1]["stop_reason"]
         == "已形成连续、可读且带 continuity 的受控 demo mini-arc。"
@@ -1810,6 +1891,8 @@ def test_experimental_one_shot_autoplay_turn_observer_snapshot_helper_returns_bo
     assert "keeper_only_explanatory_text" not in str(turn_snapshots)
     assert "旅店旧图纸" not in str(turn_snapshots)
     assert "储物间账本残页" not in str(turn_snapshots)
+    assert "input_pin_focus" not in str(turn_snapshots)
+    assert "封装为 internal agent memo 输入：" not in str(turn_snapshots)
 
 
 @pytest.mark.parametrize(
