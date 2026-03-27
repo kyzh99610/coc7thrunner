@@ -7,6 +7,7 @@ from pathlib import Path
 from urllib.parse import quote
 
 import coc_runner.api.routes.web_app as web_app_route
+import coc_runner.application.local_llm_service as local_llm_service_module
 import coc_runner.application.session_service as session_service_module
 import pytest
 from fastapi.testclient import TestClient
@@ -14,6 +15,8 @@ from coc_runner.application.dice_execution import LocalDiceExecutionBackend
 from coc_runner.application.local_llm_service import (
     LocalLLMAssistantPayload,
     LocalLLMAssistantResult,
+    LocalLLMService,
+    OllamaLocalLLMProvider,
 )
 from coc_runner.domain.dice import D100Roll, RollOutcome
 from coc_runner.domain.scenario_examples import (
@@ -98,6 +101,18 @@ def _collect_enclosing_functions_touching_attribute(
 
     _Visitor().visit(tree)
     return callers
+
+
+class _HTTPChatResponse:
+    def __init__(self, payload: dict[str, object]) -> None:
+        self._payload = payload
+        self.status_code = 200
+
+    def raise_for_status(self) -> None:
+        return None
+
+    def json(self) -> dict[str, object]:
+        return self._payload
 
 
 class _FakeLocalLLMService:
@@ -982,6 +997,95 @@ def test_web_app_experimental_ai_demo_run_keeps_kp_and_investigator_inputs_isola
     assert "keeper_workflow" not in serialized_investigator_context
     assert "private_notes" not in html
     assert "secret_state_refs" not in html
+    after_snapshot = _get_snapshot(client, session_id)
+    assert before_snapshot == after_snapshot
+
+
+def test_web_app_experimental_ai_demo_run_can_use_ollama_service_on_controlled_path(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    session_id = _start_keeper_dashboard_session(client)
+    _advance_keeper_dashboard_session(client, session_id)
+    recorded_calls: list[dict[str, object]] = []
+
+    def _fake_post(url: str, **kwargs):
+        payload = kwargs["json"]
+        recorded_calls.append(
+            {
+                "url": url,
+                "headers": kwargs["headers"],
+                "json": payload,
+                "timeout": kwargs["timeout"],
+            }
+        )
+        user_prompt = payload["messages"][1]["content"]
+        if "isolated experimental AI KP demo harness" in user_prompt:
+            content = {
+                "title": "AI KP 剧情支架提案",
+                "summary": "这是 experimental / non-authoritative 的 AI KP 候选叙事输出。",
+                "bullets": ["先立起账房压迫感。"],
+                "suggested_questions": ["是否先让老板回避 204 房登记？"],
+                "draft_text": "KP 可先用潮气、旧账册和老板的短暂失态开场。",
+                "source_context_label": "基于当前 keeper-side compressed context 与近期事件摘要。",
+                "safety_notes": ["不会自动推进剧情。"],
+            }
+        elif "isolated experimental AI investigator demo harness" in user_prompt:
+            content = {
+                "title": "AI Investigator 行动提案",
+                "summary": "这是 experimental / non-authoritative 的调查员行动提案。",
+                "bullets": ["先确认账册缺页编号。"],
+                "suggested_questions": ["老板为何回避 204 房？"],
+                "draft_text": "调查员会先追问账册缺页和 204 房登记。",
+                "source_context_label": "基于林舟的可见状态摘要。",
+                "safety_notes": ["只基于可见信息。"],
+            }
+        else:  # pragma: no cover - defensive test guard
+            raise AssertionError(user_prompt)
+        return _HTTPChatResponse(
+            {
+                "choices": [
+                    {
+                        "message": {
+                            "content": json.dumps(content, ensure_ascii=False)
+                        }
+                    }
+                ]
+            }
+        )
+
+    monkeypatch.setattr(local_llm_service_module.httpx, "post", _fake_post)
+    client.app.state.local_llm_service = LocalLLMService(
+        OllamaLocalLLMProvider(
+            base_url="http://127.0.0.1:11434",
+            model="qwen2.5:7b",
+            timeout_seconds=12.5,
+        ),
+        enabled=True,
+        max_output_tokens=1200,
+    )
+    before_snapshot = _get_snapshot(client, session_id)
+
+    response = client.post(
+        f"/app/sessions/{session_id}/experimental-ai-demo/run",
+        data={"investigator_id": "investigator-1"},
+    )
+
+    assert response.status_code == 200
+    html = response.text
+    assert "AI KP 剧情支架提案" in html
+    assert "AI Investigator 行动提案" in html
+    assert len(recorded_calls) == 2
+    assert all(
+        call["url"] == "http://127.0.0.1:11434/v1/chat/completions"
+        for call in recorded_calls
+    )
+    assert all(call["timeout"] == 12.5 for call in recorded_calls)
+    assert all(call["json"]["max_tokens"] == 700 for call in recorded_calls)
+    assert all(call["json"]["temperature"] == 0.2 for call in recorded_calls)
+    assert all("Authorization" not in call["headers"] for call in recorded_calls)
+    assert '"keeper_only_explanatory_text"' not in html
+    assert "private_notes" not in html
     after_snapshot = _get_snapshot(client, session_id)
     assert before_snapshot == after_snapshot
 

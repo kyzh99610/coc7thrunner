@@ -1,12 +1,25 @@
 from __future__ import annotations
 
+import os
+import shutil
+from pathlib import Path
+from uuid import uuid4
+from unittest.mock import patch
+
+from fastapi.testclient import TestClient
+
 from coc_runner.application.local_llm_service import (
     LocalLLMAssistantRequest,
     LocalLLMService,
+    OllamaLocalLLMProvider,
+    build_local_llm_generation_restriction,
 )
+from coc_runner.config import Settings, get_settings
+from coc_runner.main import create_app
 
 
 class _RecordingProvider:
+    provider_kind = "openai_compatible"
     provider_name = "stub-local"
     model = "stub-model"
 
@@ -15,6 +28,8 @@ class _RecordingProvider:
         self.called = False
         self.system_prompt = ""
         self.user_prompt = ""
+        self.temperature = None
+        self.max_output_tokens = None
 
     def generate_text(
         self,
@@ -27,10 +42,13 @@ class _RecordingProvider:
         self.called = True
         self.system_prompt = system_prompt
         self.user_prompt = user_prompt
+        self.temperature = temperature
+        self.max_output_tokens = max_output_tokens
         return self.response_text
 
 
 class _FailingProvider:
+    provider_kind = "openai_compatible"
     provider_name = "stub-local"
     model = "stub-model"
 
@@ -43,6 +61,18 @@ class _FailingProvider:
         max_output_tokens: int,
     ) -> str:
         raise RuntimeError("provider offline")
+
+
+class _HTTPXResponse:
+    def __init__(self, payload: dict[str, object]) -> None:
+        self._payload = payload
+        self.status_code = 200
+
+    def raise_for_status(self) -> None:
+        return None
+
+    def json(self) -> dict[str, object]:
+        return self._payload
 
 
 def _keeper_request() -> LocalLLMAssistantRequest:
@@ -322,3 +352,184 @@ def test_local_llm_service_supports_experimental_visible_continuity_draft_prompt
     assert result.assistant is not None
     assert "isolated experimental visible continuity drafting harness" in provider.user_prompt
     assert "当前任务：Visible continuity bridge 草稿" in provider.user_prompt
+
+
+def test_build_local_llm_generation_restriction_for_ollama_stays_small_and_experimental_only() -> None:
+    restriction = build_local_llm_generation_restriction(
+        provider_kind="ollama",
+        requested_temperature=0.9,
+        requested_max_output_tokens=1200,
+    )
+
+    assert restriction.provider_kind == "ollama"
+    assert restriction.temperature == 0.2
+    assert restriction.max_output_tokens == 700
+    assert restriction.structured_output_required is True
+    assert restriction.fallback_mode == "return_unavailable"
+    assert restriction.allowed_workspace_keys == {
+        "experimental_ai_kp_demo",
+        "experimental_ai_investigator_demo",
+        "experimental_ai_keeper_continuity_draft",
+        "experimental_ai_visible_continuity_draft",
+    }
+    assert "keeper_workspace" not in restriction.allowed_workspace_keys
+    assert "knowledge_detail" not in restriction.allowed_workspace_keys
+    assert "session_recap" not in restriction.allowed_workspace_keys
+
+
+def test_local_llm_service_ollama_restriction_blocks_non_experimental_workspace_with_fallback() -> None:
+    provider = _RecordingProvider(
+        '{"title":"t","summary":"s","bullets":[],"suggested_questions":[],"draft_text":null,"safety_notes":[]}'
+    )
+    provider.provider_kind = "ollama"
+    provider.provider_name = "ollama_local"
+    service = LocalLLMService(provider, enabled=True)
+
+    result = service.generate_assistant(_keeper_request())
+
+    assert result.status == "unavailable"
+    assert result.assistant is None
+    assert provider.called is False
+    assert "仅开放给 experimental AI demo / continuity 受控路径" in str(
+        result.error_message
+    )
+
+
+def test_local_llm_service_ollama_restriction_clamps_generation_args_for_experimental_workspace() -> None:
+    provider = _RecordingProvider(
+        """
+        {
+          "title": "AI KP 剧情支架提案",
+          "summary": "这是 experimental / non-authoritative 的 AI KP 候选叙事输出。",
+          "bullets": ["先立起账房压迫感。"],
+          "suggested_questions": ["要不要先把老板的回避写出来？"],
+          "draft_text": "可先从账房里的潮气和旧账册开场。",
+          "source_context_label": "基于当前 keeper-side compressed context 与近期事件摘要。",
+          "safety_notes": ["不会自动推进 session。"]
+        }
+        """
+    )
+    provider.provider_kind = "ollama"
+    provider.provider_name = "ollama_local"
+    service = LocalLLMService(
+        provider,
+        enabled=True,
+        temperature=0.9,
+        max_output_tokens=1200,
+    )
+
+    result = service.generate_assistant(_experimental_ai_kp_demo_request())
+
+    assert result.status == "success"
+    assert provider.called is True
+    assert provider.temperature == 0.2
+    assert provider.max_output_tokens == 700
+
+
+def test_ollama_local_llm_provider_normalizes_base_url_and_uses_chat_completions_api() -> None:
+    recorded: dict[str, object] = {}
+
+    def _fake_post(url: str, **kwargs):
+        recorded["url"] = url
+        recorded["headers"] = kwargs["headers"]
+        recorded["json"] = kwargs["json"]
+        recorded["timeout"] = kwargs["timeout"]
+        return _HTTPXResponse(
+            {
+                "choices": [
+                    {
+                        "message": {
+                            "content": '{"title":"t","summary":"s","bullets":[],"suggested_questions":[],"draft_text":null,"safety_notes":[]}'
+                        }
+                    }
+                ]
+            }
+        )
+
+    provider = OllamaLocalLLMProvider(
+        base_url="http://127.0.0.1:11434",
+        model="qwen2.5:7b",
+        timeout_seconds=12.5,
+    )
+
+    with patch("coc_runner.application.local_llm_service.httpx.post", side_effect=_fake_post):
+        raw_output = provider.generate_text(
+            system_prompt="system",
+            user_prompt="user",
+            temperature=0.2,
+            max_output_tokens=512,
+        )
+
+    assert provider.provider_name == "ollama_local"
+    assert provider.provider_kind == "ollama"
+    assert provider.base_url == "http://127.0.0.1:11434/v1"
+    assert raw_output.startswith("{")
+    assert recorded["url"] == "http://127.0.0.1:11434/v1/chat/completions"
+    assert recorded["timeout"] == 12.5
+    assert recorded["json"] == {
+        "model": "qwen2.5:7b",
+        "messages": [
+            {"role": "system", "content": "system"},
+            {"role": "user", "content": "user"},
+        ],
+        "temperature": 0.2,
+        "max_tokens": 512,
+    }
+    assert "Authorization" not in recorded["headers"]
+
+
+def test_get_settings_reads_ollama_provider_and_output_cap_from_env() -> None:
+    try:
+        with patch.dict(
+            os.environ,
+            {
+                "COC_RUNNER_LOCAL_LLM_ENABLED": "1",
+                "COC_RUNNER_LOCAL_LLM_PROVIDER": "ollama",
+                "COC_RUNNER_LOCAL_LLM_BASE_URL": "http://127.0.0.1:11434",
+                "COC_RUNNER_LOCAL_LLM_MODEL": "qwen2.5:7b",
+                "COC_RUNNER_LOCAL_LLM_TIMEOUT_SECONDS": "12.5",
+                "COC_RUNNER_LOCAL_LLM_MAX_OUTPUT_TOKENS": "640",
+            },
+            clear=False,
+        ):
+            get_settings.cache_clear()
+            settings = get_settings()
+    finally:
+        get_settings.cache_clear()
+
+    assert settings.local_llm_enabled is True
+    assert settings.local_llm_provider == "ollama"
+    assert settings.local_llm_base_url == "http://127.0.0.1:11434"
+    assert settings.local_llm_model == "qwen2.5:7b"
+    assert settings.local_llm_timeout_seconds == 12.5
+    assert settings.local_llm_max_output_tokens == 640
+
+
+def test_create_app_builds_ollama_local_llm_service_from_settings() -> None:
+    base_dir = Path("test-artifacts")
+    base_dir.mkdir(exist_ok=True)
+    run_dir = base_dir / f"ollama_local_llm_service_{uuid4().hex}"
+    run_dir.mkdir()
+    db_path = run_dir / "ollama-app.db"
+    try:
+        app = create_app(
+            Settings(
+                db_url=f"sqlite:///{db_path.as_posix()}",
+                local_llm_enabled=True,
+                local_llm_provider="ollama",
+                local_llm_base_url="http://127.0.0.1:11434",
+                local_llm_model="qwen2.5:7b",
+                local_llm_max_output_tokens=1200,
+            )
+        )
+
+        with TestClient(app):
+            service = app.state.local_llm_service
+
+        assert isinstance(service.provider, OllamaLocalLLMProvider)
+        assert service.provider.base_url == "http://127.0.0.1:11434/v1"
+        assert service.max_output_tokens == 700
+        assert service.generation_restriction.provider_kind == "ollama"
+        assert "keeper_workspace" not in service.generation_restriction.allowed_workspace_keys
+    finally:
+        shutil.rmtree(run_dir, ignore_errors=True)

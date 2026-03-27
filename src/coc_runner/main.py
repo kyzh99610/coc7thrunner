@@ -20,6 +20,7 @@ from coc_runner.application.dice_execution import (
 from coc_runner.application.knowledge_service import KnowledgeService
 from coc_runner.application.local_llm_service import (
     LocalLLMService,
+    OllamaLocalLLMProvider,
     OpenAICompatibleLocalLLMProvider,
 )
 from coc_runner.application.session_service import SessionService
@@ -46,14 +47,28 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         )
     if runtime_settings.local_llm_enabled:
         if runtime_settings.local_llm_base_url:
-            local_llm_provider = OpenAICompatibleLocalLLMProvider(
-                base_url=runtime_settings.local_llm_base_url,
-                model=runtime_settings.local_llm_model,
-                api_key=runtime_settings.local_llm_api_key,
-                timeout_seconds=runtime_settings.local_llm_timeout_seconds,
-            )
+            if runtime_settings.local_llm_provider == "ollama":
+                local_llm_provider = OllamaLocalLLMProvider(
+                    base_url=runtime_settings.local_llm_base_url,
+                    model=runtime_settings.local_llm_model,
+                    timeout_seconds=runtime_settings.local_llm_timeout_seconds,
+                )
+            else:
+                local_llm_provider = OpenAICompatibleLocalLLMProvider(
+                    base_url=runtime_settings.local_llm_base_url,
+                    model=runtime_settings.local_llm_model,
+                    api_key=runtime_settings.local_llm_api_key,
+                    timeout_seconds=runtime_settings.local_llm_timeout_seconds,
+                )
         else:
-            local_llm_configuration_error = "已启用本地 LLM，但尚未配置本地 OpenAI-compatible endpoint。"
+            if runtime_settings.local_llm_provider == "ollama":
+                local_llm_configuration_error = (
+                    "已启用本地 LLM，但尚未配置本地 Ollama endpoint。"
+                )
+            else:
+                local_llm_configuration_error = (
+                    "已启用本地 LLM，但尚未配置本地 OpenAI-compatible endpoint。"
+                )
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
@@ -75,6 +90,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             local_llm_provider,
             enabled=runtime_settings.local_llm_enabled,
             configuration_error=local_llm_configuration_error,
+            max_output_tokens=runtime_settings.local_llm_max_output_tokens,
         )
         app.state.settings = runtime_settings
         yield

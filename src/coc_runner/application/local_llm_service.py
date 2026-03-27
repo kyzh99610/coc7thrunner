@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
 from typing import Any, Literal, Protocol
@@ -15,19 +16,74 @@ PROMPT_DIR = Path(__file__).resolve().parents[1] / "prompts" / "local_llm"
 NON_AUTHORITATIVE_DISCLAIMER = (
     "仅供摘要、解释、建议或草稿参考，不会直接修改 authoritative state。"
 )
+OLLAMA_MAX_OUTPUT_TOKENS_CAP = 700
+OLLAMA_ALLOWED_WORKSPACE_KEYS = (
+    "experimental_ai_kp_demo",
+    "experimental_ai_investigator_demo",
+    "experimental_ai_keeper_continuity_draft",
+    "experimental_ai_visible_continuity_draft",
+)
+LocalLLMProviderKind = Literal["openai_compatible", "ollama"]
+LocalLLMWorkspaceKey = Literal[
+    "keeper_workspace",
+    "keeper_narrative_scaffolding",
+    "knowledge_detail",
+    "session_recap",
+    "experimental_ai_kp_demo",
+    "experimental_ai_investigator_demo",
+    "experimental_ai_keeper_continuity_draft",
+    "experimental_ai_visible_continuity_draft",
+]
+ALL_LOCAL_LLM_WORKSPACE_KEYS: tuple[LocalLLMWorkspaceKey, ...] = (
+    "keeper_workspace",
+    "keeper_narrative_scaffolding",
+    "knowledge_detail",
+    "session_recap",
+    "experimental_ai_kp_demo",
+    "experimental_ai_investigator_demo",
+    "experimental_ai_keeper_continuity_draft",
+    "experimental_ai_visible_continuity_draft",
+)
+
+
+@dataclass(frozen=True, slots=True)
+class LocalLLMGenerationRestriction:
+    provider_kind: LocalLLMProviderKind
+    allowed_workspace_keys: frozenset[LocalLLMWorkspaceKey]
+    temperature: float
+    max_output_tokens: int
+    structured_output_required: bool = True
+    fallback_mode: Literal["return_unavailable"] = "return_unavailable"
+
+
+def build_local_llm_generation_restriction(
+    *,
+    provider_kind: LocalLLMProviderKind,
+    requested_temperature: float,
+    requested_max_output_tokens: int,
+) -> LocalLLMGenerationRestriction:
+    normalized_temperature = max(0.0, float(requested_temperature))
+    normalized_max_output_tokens = max(1, int(requested_max_output_tokens))
+    if provider_kind == "ollama":
+        return LocalLLMGenerationRestriction(
+            provider_kind="ollama",
+            allowed_workspace_keys=frozenset(OLLAMA_ALLOWED_WORKSPACE_KEYS),
+            temperature=0.2,
+            max_output_tokens=min(
+                normalized_max_output_tokens,
+                OLLAMA_MAX_OUTPUT_TOKENS_CAP,
+            ),
+        )
+    return LocalLLMGenerationRestriction(
+        provider_kind="openai_compatible",
+        allowed_workspace_keys=frozenset(ALL_LOCAL_LLM_WORKSPACE_KEYS),
+        temperature=normalized_temperature,
+        max_output_tokens=normalized_max_output_tokens,
+    )
 
 
 class LocalLLMAssistantRequest(BaseModel):
-    workspace_key: Literal[
-        "keeper_workspace",
-        "keeper_narrative_scaffolding",
-        "knowledge_detail",
-        "session_recap",
-        "experimental_ai_kp_demo",
-        "experimental_ai_investigator_demo",
-        "experimental_ai_keeper_continuity_draft",
-        "experimental_ai_visible_continuity_draft",
-    ]
+    workspace_key: LocalLLMWorkspaceKey
     task_key: str = Field(min_length=1, max_length=80)
     task_label: str = Field(min_length=1, max_length=120)
     context: dict[str, Any]
@@ -88,6 +144,7 @@ class LocalLLMAssistantResult(BaseModel):
 
 
 class LocalLLMProvider(Protocol):
+    provider_kind: LocalLLMProviderKind
     provider_name: str
     model: str
 
@@ -114,6 +171,7 @@ class OpenAICompatibleLocalLLMProvider:
         self.model = model
         self.api_key = api_key
         self.timeout_seconds = timeout_seconds
+        self.provider_kind = "openai_compatible"
         self.provider_name = "openai_compatible_local"
 
     def generate_text(
@@ -157,6 +215,33 @@ class OpenAICompatibleLocalLLMProvider:
         return content
 
 
+def _normalize_ollama_chat_base_url(base_url: str) -> str:
+    normalized = base_url.rstrip("/")
+    if normalized.endswith("/chat/completions"):
+        normalized = normalized[: -len("/chat/completions")]
+    if not normalized.endswith("/v1"):
+        normalized = f"{normalized}/v1"
+    return normalized
+
+
+class OllamaLocalLLMProvider(OpenAICompatibleLocalLLMProvider):
+    def __init__(
+        self,
+        *,
+        base_url: str,
+        model: str,
+        timeout_seconds: float = 10.0,
+    ) -> None:
+        super().__init__(
+            base_url=_normalize_ollama_chat_base_url(base_url),
+            model=model,
+            api_key=None,
+            timeout_seconds=timeout_seconds,
+        )
+        self.provider_kind = "ollama"
+        self.provider_name = "ollama_local"
+
+
 class LocalLLMService:
     def __init__(
         self,
@@ -166,12 +251,19 @@ class LocalLLMService:
         configuration_error: str | None = None,
         temperature: float = 0.2,
         max_output_tokens: int = 700,
+        generation_restriction: LocalLLMGenerationRestriction | None = None,
     ) -> None:
         self.provider = provider
         self.enabled = enabled
         self.configuration_error = configuration_error
-        self.temperature = temperature
-        self.max_output_tokens = max_output_tokens
+        provider_kind = getattr(provider, "provider_kind", "openai_compatible")
+        self.generation_restriction = generation_restriction or build_local_llm_generation_restriction(
+            provider_kind=provider_kind,
+            requested_temperature=temperature,
+            requested_max_output_tokens=max_output_tokens,
+        )
+        self.temperature = self.generation_restriction.temperature
+        self.max_output_tokens = self.generation_restriction.max_output_tokens
 
     def generate_assistant(
         self,
@@ -195,6 +287,14 @@ class LocalLLMService:
                     self.configuration_error
                     or "本地 LLM 已启用，但当前 provider 不可用。"
                 ),
+                **result_base,
+            )
+        if request.workspace_key not in self.generation_restriction.allowed_workspace_keys:
+            return LocalLLMAssistantResult(
+                status="unavailable",
+                error_message=self._restriction_error_message(request.workspace_key),
+                provider_name=getattr(self.provider, "provider_name", None),
+                model=getattr(self.provider, "model", None),
                 **result_base,
             )
         try:
@@ -252,6 +352,14 @@ class LocalLLMService:
             )
         )
         return system_prompt, user_prompt
+
+    def _restriction_error_message(self, workspace_key: LocalLLMWorkspaceKey) -> str:
+        if self.generation_restriction.provider_kind == "ollama":
+            return (
+                "当前本地 Ollama 仅开放给 experimental AI demo / continuity 受控路径；"
+                "keeper workspace、knowledge、recap 等入口保持 fallback/no-op。"
+            )
+        return f"当前本地 LLM 配置不允许工作区 {workspace_key}。"
 
     @staticmethod
     def _parse_assistant_payload(raw_output: str) -> LocalLLMAssistantPayload:
