@@ -50,13 +50,13 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             if runtime_settings.local_llm_provider == "ollama":
                 local_llm_provider = OllamaLocalLLMProvider(
                     base_url=runtime_settings.local_llm_base_url,
-                    model=runtime_settings.local_llm_model,
+                    model=runtime_settings.local_llm_runtime_model,
                     timeout_seconds=runtime_settings.local_llm_timeout_seconds,
                 )
             else:
                 local_llm_provider = OpenAICompatibleLocalLLMProvider(
                     base_url=runtime_settings.local_llm_base_url,
-                    model=runtime_settings.local_llm_model,
+                    model=runtime_settings.local_llm_runtime_model,
                     api_key=runtime_settings.local_llm_api_key,
                     timeout_seconds=runtime_settings.local_llm_timeout_seconds,
                 )

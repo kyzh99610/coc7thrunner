@@ -6,6 +6,7 @@ from pathlib import Path
 from uuid import uuid4
 from unittest.mock import patch
 
+import httpx
 from fastapi.testclient import TestClient
 
 from coc_runner.application.local_llm_service import (
@@ -14,7 +15,7 @@ from coc_runner.application.local_llm_service import (
     OllamaLocalLLMProvider,
     build_local_llm_generation_restriction,
 )
-from coc_runner.config import Settings, get_settings
+from coc_runner.config import Settings, get_settings, resolve_ollama_model_selection
 from coc_runner.main import create_app
 
 
@@ -70,6 +71,24 @@ class _HTTPXResponse:
 
     def raise_for_status(self) -> None:
         return None
+
+    def json(self) -> dict[str, object]:
+        return self._payload
+
+
+class _HTTPXErrorResponse:
+    def __init__(self, *, status_code: int, payload: dict[str, object]) -> None:
+        self.status_code = status_code
+        self._payload = payload
+        self.text = str(payload)
+        self.request = httpx.Request("POST", "http://127.0.0.1:11434/v1/chat/completions")
+
+    def raise_for_status(self) -> None:
+        raise httpx.HTTPStatusError(
+            "mocked error",
+            request=self.request,
+            response=self,
+        )
 
     def json(self) -> dict[str, object]:
         return self._payload
@@ -377,6 +396,23 @@ def test_build_local_llm_generation_restriction_for_ollama_stays_small_and_exper
     assert "session_recap" not in restriction.allowed_workspace_keys
 
 
+def test_resolve_ollama_model_selection_defaults_to_qwen3_14b_and_exposes_quality_and_fallback() -> None:
+    selection = resolve_ollama_model_selection("local-model")
+
+    assert selection.selected_model == "qwen3:14b"
+    assert selection.selection_reason == "default_qwen3_14b"
+    assert selection.default_model == "qwen3:14b"
+    assert selection.quality_model == "qwen3:30b"
+    assert selection.fallback_model == "gemma3:12b"
+
+
+def test_resolve_ollama_model_selection_blocks_qwen3_coder_next_as_runtime_default() -> None:
+    selection = resolve_ollama_model_selection("qwen3-coder-next")
+
+    assert selection.selected_model == "qwen3:14b"
+    assert selection.selection_reason == "blocked_runtime_default"
+
+
 def test_local_llm_service_ollama_restriction_blocks_non_experimental_workspace_with_fallback() -> None:
     provider = _RecordingProvider(
         '{"title":"t","summary":"s","bullets":[],"suggested_questions":[],"draft_text":null,"safety_notes":[]}'
@@ -424,6 +460,58 @@ def test_local_llm_service_ollama_restriction_clamps_generation_args_for_experim
     assert provider.called is True
     assert provider.temperature == 0.2
     assert provider.max_output_tokens == 700
+
+
+def test_local_llm_service_surfaces_missing_ollama_model_cleanly() -> None:
+    provider = OllamaLocalLLMProvider(
+        base_url="http://127.0.0.1:11434",
+        model="qwen3:14b",
+    )
+    service = LocalLLMService(provider, enabled=True)
+
+    with patch(
+        "coc_runner.application.local_llm_service.httpx.post",
+        return_value=_HTTPXErrorResponse(
+            status_code=404,
+            payload={
+                "error": {
+                    "message": "model 'qwen3:14b' not found",
+                    "type": "not_found_error",
+                }
+            },
+        ),
+    ):
+        result = service.generate_assistant(_experimental_ai_kp_demo_request())
+
+    assert result.status == "unavailable"
+    assert result.assistant is None
+    assert "模型不可用" in str(result.error_message)
+    assert "qwen3:14b" in str(result.error_message)
+
+
+def test_local_llm_service_surfaces_timeout_cleanly() -> None:
+    provider = OllamaLocalLLMProvider(
+        base_url="http://127.0.0.1:11434",
+        model="qwen3:14b",
+    )
+    service = LocalLLMService(provider, enabled=True)
+
+    def _raise_timeout(url: str, **kwargs):  # pragma: no cover - exercised by service
+        del kwargs
+        raise httpx.ReadTimeout(
+            "timed out",
+            request=httpx.Request("POST", url),
+        )
+
+    with patch(
+        "coc_runner.application.local_llm_service.httpx.post",
+        side_effect=_raise_timeout,
+    ):
+        result = service.generate_assistant(_experimental_ai_kp_demo_request())
+
+    assert result.status == "unavailable"
+    assert result.assistant is None
+    assert result.error_message == "本地 LLM 调用超时。"
 
 
 def test_ollama_local_llm_provider_normalizes_base_url_and_uses_chat_completions_api() -> None:
@@ -474,6 +562,8 @@ def test_ollama_local_llm_provider_normalizes_base_url_and_uses_chat_completions
         ],
         "temperature": 0.2,
         "max_tokens": 512,
+        "response_format": {"type": "json_object"},
+        "reasoning_effort": "none",
     }
     assert "Authorization" not in recorded["headers"]
 
@@ -501,6 +591,7 @@ def test_get_settings_reads_ollama_provider_and_output_cap_from_env() -> None:
     assert settings.local_llm_provider == "ollama"
     assert settings.local_llm_base_url == "http://127.0.0.1:11434"
     assert settings.local_llm_model == "qwen2.5:7b"
+    assert settings.local_llm_runtime_model == "qwen2.5:7b"
     assert settings.local_llm_timeout_seconds == 12.5
     assert settings.local_llm_max_output_tokens == 640
 
@@ -518,7 +609,7 @@ def test_create_app_builds_ollama_local_llm_service_from_settings() -> None:
                 local_llm_enabled=True,
                 local_llm_provider="ollama",
                 local_llm_base_url="http://127.0.0.1:11434",
-                local_llm_model="qwen2.5:7b",
+                local_llm_model="local-model",
                 local_llm_max_output_tokens=1200,
             )
         )
@@ -528,6 +619,7 @@ def test_create_app_builds_ollama_local_llm_service_from_settings() -> None:
 
         assert isinstance(service.provider, OllamaLocalLLMProvider)
         assert service.provider.base_url == "http://127.0.0.1:11434/v1"
+        assert service.provider.model == "qwen3:14b"
         assert service.max_output_tokens == 700
         assert service.generation_restriction.provider_kind == "ollama"
         assert "keeper_workspace" not in service.generation_restriction.allowed_workspace_keys

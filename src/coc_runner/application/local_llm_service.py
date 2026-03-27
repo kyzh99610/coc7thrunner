@@ -174,6 +174,24 @@ class OpenAICompatibleLocalLLMProvider:
         self.provider_kind = "openai_compatible"
         self.provider_name = "openai_compatible_local"
 
+    def _build_request_payload(
+        self,
+        *,
+        system_prompt: str,
+        user_prompt: str,
+        temperature: float,
+        max_output_tokens: int,
+    ) -> dict[str, Any]:
+        return {
+            "model": self.model,
+            "messages": [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt},
+            ],
+            "temperature": temperature,
+            "max_tokens": max_output_tokens,
+        }
+
     def generate_text(
         self,
         *,
@@ -188,15 +206,12 @@ class OpenAICompatibleLocalLLMProvider:
         response = httpx.post(
             f"{self.base_url}/chat/completions",
             headers=headers,
-            json={
-                "model": self.model,
-                "messages": [
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": user_prompt},
-                ],
-                "temperature": temperature,
-                "max_tokens": max_output_tokens,
-            },
+            json=self._build_request_payload(
+                system_prompt=system_prompt,
+                user_prompt=user_prompt,
+                temperature=temperature,
+                max_output_tokens=max_output_tokens,
+            ),
             timeout=self.timeout_seconds,
         )
         response.raise_for_status()
@@ -240,6 +255,24 @@ class OllamaLocalLLMProvider(OpenAICompatibleLocalLLMProvider):
         )
         self.provider_kind = "ollama"
         self.provider_name = "ollama_local"
+
+    def _build_request_payload(
+        self,
+        *,
+        system_prompt: str,
+        user_prompt: str,
+        temperature: float,
+        max_output_tokens: int,
+    ) -> dict[str, Any]:
+        payload = super()._build_request_payload(
+            system_prompt=system_prompt,
+            user_prompt=user_prompt,
+            temperature=temperature,
+            max_output_tokens=max_output_tokens,
+        )
+        payload["response_format"] = {"type": "json_object"}
+        payload["reasoning_effort"] = "none"
+        return payload
 
 
 class LocalLLMService:
@@ -383,7 +416,24 @@ class LocalLLMService:
     def _error_message(exc: Exception) -> str:
         if isinstance(exc, ValidationError):
             return "本地 LLM 返回的结构化内容无效。"
+        if isinstance(exc, httpx.TimeoutException):
+            return "本地 LLM 调用超时。"
         if isinstance(exc, httpx.HTTPStatusError):
+            try:
+                payload = exc.response.json()
+            except ValueError:
+                payload = None
+            error_value = payload.get("error") if isinstance(payload, dict) else None
+            error_message = ""
+            if isinstance(error_value, dict):
+                error_message = " ".join(str(error_value.get("message") or "").split())
+            elif isinstance(error_value, str):
+                error_message = " ".join(error_value.split())
+            if error_message:
+                lowered = error_message.lower()
+                if "model" in lowered and "not found" in lowered:
+                    return f"本地 LLM 模型不可用：{error_message}"
+                return f"本地 LLM HTTP 调用失败：{error_message}"
             return f"本地 LLM HTTP 调用失败：{exc.response.status_code}"
         if isinstance(exc, httpx.RequestError):
             return "本地 LLM 当前不可连接。"

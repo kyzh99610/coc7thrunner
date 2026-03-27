@@ -85,6 +85,25 @@ def test_collect_environment_snapshot_reports_real_app_entry_and_local_llm_confi
     assert snapshot.error == ""
 
 
+def test_collect_environment_snapshot_resolves_default_ollama_runtime_model() -> None:
+    env = os.environ.copy()
+    env["COC_RUNNER_LOCAL_LLM_ENABLED"] = "1"
+    env["COC_RUNNER_LOCAL_LLM_PROVIDER"] = "ollama"
+    env["COC_RUNNER_LOCAL_LLM_BASE_URL"] = "http://127.0.0.1:11434"
+    env["COC_RUNNER_LOCAL_LLM_MODEL"] = "local-model"
+
+    snapshot = collect_environment_snapshot(
+        project_root=PROJECT_ROOT,
+        env=env,
+        service_python=Path(sys.executable),
+    )
+
+    assert snapshot.local_llm_enabled is True
+    assert snapshot.local_llm_base_url == "http://127.0.0.1:11434"
+    assert snapshot.local_llm_model == "qwen3:14b"
+    assert snapshot.error == ""
+
+
 def test_collect_environment_snapshot_returns_clear_error_when_service_python_missing() -> None:
     run_dir = _make_run_dir()
     try:

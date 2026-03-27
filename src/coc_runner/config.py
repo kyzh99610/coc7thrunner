@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
 import os
 from functools import lru_cache
 import json
@@ -8,6 +9,43 @@ from typing import Literal
 from pydantic import BaseModel, Field
 
 from coc_runner.domain.models import LanguagePreference
+
+OLLAMA_DEFAULT_MODEL = "qwen3:14b"
+OLLAMA_QUALITY_MODEL = "qwen3:30b"
+OLLAMA_FALLBACK_MODEL = "gemma3:12b"
+OLLAMA_BLOCKED_RUNTIME_DEFAULT_PREFIXES = ("qwen3-coder-next",)
+
+
+@dataclass(frozen=True, slots=True)
+class OllamaModelSelection:
+    selected_model: str
+    selection_reason: Literal[
+        "default_qwen3_14b",
+        "configured_model",
+        "blocked_runtime_default",
+    ]
+    default_model: str = OLLAMA_DEFAULT_MODEL
+    quality_model: str = OLLAMA_QUALITY_MODEL
+    fallback_model: str = OLLAMA_FALLBACK_MODEL
+
+
+def resolve_ollama_model_selection(configured_model: str | None) -> OllamaModelSelection:
+    normalized = " ".join(str(configured_model or "").split())
+    lowered = normalized.lower()
+    if not normalized or lowered == "local-model":
+        return OllamaModelSelection(
+            selected_model=OLLAMA_DEFAULT_MODEL,
+            selection_reason="default_qwen3_14b",
+        )
+    if any(lowered.startswith(prefix) for prefix in OLLAMA_BLOCKED_RUNTIME_DEFAULT_PREFIXES):
+        return OllamaModelSelection(
+            selected_model=OLLAMA_DEFAULT_MODEL,
+            selection_reason="blocked_runtime_default",
+        )
+    return OllamaModelSelection(
+        selected_model=normalized,
+        selection_reason="configured_model",
+    )
 
 
 class Settings(BaseModel):
@@ -25,6 +63,16 @@ class Settings(BaseModel):
     dice_backend_mode: Literal["local", "dice_style_subprocess"] = "local"
     dice_subprocess_timeout_seconds: float = Field(default=3.0, gt=0)
     dice_style_provider_command: tuple[str, ...] = ()
+
+    @property
+    def ollama_model_selection(self) -> OllamaModelSelection:
+        return resolve_ollama_model_selection(self.local_llm_model)
+
+    @property
+    def local_llm_runtime_model(self) -> str:
+        if self.local_llm_provider == "ollama":
+            return self.ollama_model_selection.selected_model
+        return self.local_llm_model
 
 
 @lru_cache(maxsize=1)

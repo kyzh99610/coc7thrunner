@@ -60,7 +60,7 @@ print(json.dumps({
     "uvicorn_available": True,
     "local_llm_enabled": settings.local_llm_enabled,
     "local_llm_base_url": settings.local_llm_base_url,
-    "local_llm_model": settings.local_llm_model,
+    "local_llm_model": settings.local_llm_runtime_model,
     "dice_backend_mode": settings.dice_backend_mode,
 }, ensure_ascii=False))
 """.strip()
