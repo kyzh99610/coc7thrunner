@@ -716,11 +716,20 @@ def test_web_app_experimental_ai_demo_page_loads_without_breaking_keeper_shell_w
     html = response.text
     assert "AI KP + AI Investigator Demo Harness" in html
     assert "Experimental / Non-authoritative" in html
-    assert "运行最小实验回合" in html
+    assert 'id="experimental-demo-workspace-strip"' in html
+    assert "Single-screen KP Workspace" in html
+    assert "单轮 / 预演入口" in html
+    assert "Observer Autoplay 入口" in html
+    assert 'id="experimental-demo-primary-workspace"' in html
+    assert "不是 full autopilot runtime，也不是最终消费者 app shell" in html
     assert "AI KP 输入：Compressed Context" in html
     assert "AI Investigator 输入摘要" in html
     assert "AI KP Demo Output" in html
     assert "AI Investigator Demo Output" in html
+    assert 'id="experimental-demo-secondary-inputs"' in html
+    assert 'id="experimental-demo-secondary-inputs" class="surface collapsible-surface" open' not in html
+    assert 'id="experimental-demo-secondary-outputs"' in html
+    assert 'id="experimental-demo-secondary-outputs" class="surface collapsible-surface" open' not in html
     assert "Local LLM 未启用" in html
     assert "不会自动写入主状态" in html
     assert "运行 self-play 预演链" in html
@@ -747,6 +756,8 @@ def test_web_app_experimental_ai_demo_page_demo_boot_surfaces_demo_ready_hint(
 
     assert response.status_code == 200
     html = response.text
+    assert 'id="experimental-demo-workspace-strip"' in html
+    assert 'id="experimental-demo-primary-workspace"' in html
     assert "launcher / demo boot 已就绪" in html
     assert 'id="experimental-demo-one-shot-control"' in html
     assert 'name="demo_boot" value="1"' in html
@@ -1217,6 +1228,8 @@ def test_web_app_experimental_ai_demo_one_shot_run_can_finish_with_demo_success_
     assert response.status_code == 200
     html = response.text
     assert "One-shot Self-play Demo Run" in html
+    assert "Single-screen KP Workspace" in html
+    assert 'id="experimental-demo-primary-workspace"' in html
     assert "one-shot self-play demo run 已结束：成功。" in html
     assert "结束状态：成功。" in html
     assert "结束原因：已形成连续、可读且带 continuity 的受控 demo mini-arc。" in html
@@ -1224,6 +1237,11 @@ def test_web_app_experimental_ai_demo_one_shot_run_can_finish_with_demo_success_
     assert "Autoplay Observer" in html
     assert "模式：bounded one-shot autoplay" in html
     assert "当前只显示 4 个代表性 internal helper object" in html
+    assert "最近一轮内部快照" in html
+    assert 'id="experimental-demo-observer-chain"' in html
+    assert 'id="experimental-demo-observer-chain" class="assistant-source-echo experimental-collapsible-block" open' not in html
+    assert 'id="experimental-demo-observer-turn-history"' in html
+    assert 'id="experimental-demo-observer-turn-history" class="assistant-source-echo experimental-collapsible-block" open' not in html
     assert "按轮内部快照" in html
     assert "第 1 轮快照" in html
     assert "第 2 轮快照" in html
@@ -1249,6 +1267,8 @@ def test_web_app_experimental_ai_demo_one_shot_run_can_finish_with_demo_success_
         in html
     )
     assert "共自动运行 3 轮 / 最大 6 轮。" in html
+    assert 'id="experimental-demo-run-transcript"' in html
+    assert 'id="experimental-demo-run-transcript" class="assistant-source-echo experimental-collapsible-block" open' not in html
     assert "Turn 1" in html
     assert "Turn 2" in html
     assert "Turn 3" in html

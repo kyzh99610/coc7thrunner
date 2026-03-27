@@ -4223,6 +4223,7 @@ def _render_experimental_ai_demo_one_shot_control(
     narrative_work_note_value: str = "",
     keeper_turn_note_value: str = "",
     visible_turn_note_value: str = "",
+    include_divider: bool = True,
 ) -> str:
     if not options_html:
         return ""
@@ -4231,8 +4232,9 @@ def _render_experimental_ai_demo_one_shot_control(
         if demo_boot
         else ""
     )
+    divider_html = '<div class="divider"></div>' if include_divider else ""
     return f"""
-      <div class="divider"></div>
+      {divider_html}
       <form id="experimental-demo-one-shot-control" method="post" action="/app/sessions/{escape(session_id)}/experimental-ai-demo/one-shot-run" class="form-stack">
         <label>
           Investigator 视角
@@ -4253,6 +4255,192 @@ def _render_experimental_ai_demo_one_shot_control(
           <button class="button-button ghost" type="submit">开始 one-shot self-play demo</button>
         </div>
       </form>
+    """
+
+
+def _render_experimental_demo_collapsible_block(
+    *,
+    section_id: str,
+    title: str,
+    badge: str,
+    body_html: str,
+    helper_text: str = "",
+    open_by_default: bool = False,
+) -> str:
+    if not body_html.strip():
+        return ""
+    open_attr = " open" if open_by_default else ""
+    helper_html = f'<p class="helper">{escape(helper_text)}</p>' if helper_text else ""
+    return f"""
+      <details id="{escape(section_id)}" class="assistant-source-echo experimental-collapsible-block"{open_attr}>
+        <summary class="list-head">
+          <h3>{escape(title)}</h3>
+          <span class="tag">{escape(badge)}</span>
+        </summary>
+        <div class="collapsible-body">
+          {helper_html}
+          <div class="card-list">{body_html}</div>
+        </div>
+      </details>
+    """
+
+
+def _render_experimental_demo_collapsible_surface(
+    *,
+    section_id: str,
+    title: str,
+    summary: str,
+    body_html: str,
+    badge: str = "secondary",
+    helper_text: str = "",
+    open_by_default: bool = False,
+) -> str:
+    if not body_html.strip():
+        return ""
+    open_attr = " open" if open_by_default else ""
+    helper_html = f'<p class="helper">{escape(helper_text)}</p>' if helper_text else ""
+    return f"""
+      <details id="{escape(section_id)}" class="surface collapsible-surface"{open_attr}>
+        <summary class="collapsible-summary">
+          <div>
+            <h2>{escape(title)}</h2>
+            <p>{escape(summary)}</p>
+          </div>
+          <span class="tag">{escape(badge)}</span>
+        </summary>
+        <div class="collapsible-body">
+          {helper_html}
+          {body_html}
+        </div>
+      </details>
+    """
+
+
+def _render_experimental_ai_demo_primary_controls(
+    *,
+    session_id: str,
+    options_html: str,
+    initial_run_button_label: str,
+    one_shot_max_turns: int,
+    demo_boot: bool = False,
+    selected_investigator_id: str = "",
+    evaluation_state: Mapping[str, str] | None = None,
+    narrative_work_note_value: str = "",
+    keeper_turn_note_value: str = "",
+    visible_turn_note_value: str = "",
+) -> str:
+    if not options_html:
+        return """
+          <article class="assistant-source-echo">
+            <div class="list-head">
+              <h3>主控制入口</h3>
+              <span class="tag warn">missing investigator</span>
+            </div>
+            <p class="empty">当前没有可用于实验 harness 的 investigator 视角。</p>
+          </article>
+        """
+    return f"""
+      <article class="assistant-source-echo">
+        <div class="list-head">
+          <h3>单轮 / 预演入口</h3>
+          <span class="tag">primary action</span>
+        </div>
+        <form method="post" action="/app/sessions/{escape(session_id)}/experimental-ai-demo/run" class="form-stack">
+          {('<input type="hidden" name="demo_boot" value="1" />' if demo_boot else '')}
+          <label>
+            Investigator 视角
+            <select name="investigator_id">{options_html}</select>
+          </label>
+          <div class="toolbar">
+            <button class="button-button secondary" type="submit">{escape(initial_run_button_label)}</button>
+            <button class="button-button ghost" type="submit" formaction="/app/sessions/{escape(session_id)}/experimental-ai-demo/self-play-preview">运行 self-play 预演链</button>
+          </div>
+        </form>
+      </article>
+      <article class="assistant-source-echo">
+        <div class="list-head">
+          <h3>Observer Autoplay 入口</h3>
+          <span class="tag warn">bounded demo</span>
+        </div>
+        {_render_experimental_ai_demo_one_shot_control(
+            session_id=session_id,
+            options_html=options_html,
+            selected_investigator_id=selected_investigator_id,
+            max_turns=one_shot_max_turns,
+            demo_boot=demo_boot,
+            evaluation_state=evaluation_state,
+            narrative_work_note_value=narrative_work_note_value,
+            keeper_turn_note_value=keeper_turn_note_value,
+            visible_turn_note_value=visible_turn_note_value,
+            include_divider=False,
+        )}
+      </article>
+    """
+
+
+def _render_experimental_ai_demo_workspace_strip(
+    *,
+    session_id: str,
+    investigator_candidates: list[dict[str, Any]],
+    selected_investigator_id: str | None,
+    current_turn_index: int,
+    controls_html: str,
+    demo_boot: bool = False,
+    one_shot_run_visible: bool = False,
+) -> str:
+    selected_label = "未选择"
+    for item in investigator_candidates:
+        actor_id = str(item.get("actor_id") or "")
+        if actor_id == (selected_investigator_id or ""):
+            selected_label = str(item.get("display_name") or actor_id or "调查员")
+            break
+    workspace_mode = "等待 Keeper 触发"
+    if current_turn_index > 0:
+        workspace_mode = f"第 {current_turn_index} 轮页内结果已就绪"
+    if one_shot_run_visible:
+        workspace_mode = "bounded autoplay run 已完成并可回看"
+    entry_label = "launcher demo-boot" if demo_boot else "direct experimental page"
+    return f"""
+      <section id="experimental-demo-workspace-strip" class="surface experimental-workspace-strip">
+        <div class="surface-header">
+          <div>
+            <h2>Single-screen KP Workspace</h2>
+            <p>首屏优先保留 autoplay 控制、observer 状态与最近结果；低频输入、输出、预演与评估细节收进下方折叠区。</p>
+          </div>
+          <span class="tag warn">single-screen MVP</span>
+        </div>
+        <p class="helper"><strong>Experimental / Non-authoritative</strong>：这仍是 keeper/internal experimental workspace，不是 full autopilot runtime，也不是最终消费者 app shell。</p>
+        <div class="experimental-workspace-grid">
+          <div class="card-list">
+            {controls_html}
+          </div>
+          <div class="card-list">
+            <article class="assistant-source-echo">
+              <div class="list-head">
+                <h3>首屏工作摘要</h3>
+                <span class="tag">workspace focus</span>
+              </div>
+              <div class="metric-grid">
+                <div class="metric">
+                  <p class="metric-label">当前视角</p>
+                  <strong>{escape(selected_label)}</strong>
+                  <span>{escape(entry_label)}</span>
+                </div>
+                <div class="metric">
+                  <p class="metric-label">当前实验轮次</p>
+                  <strong>{escape(str(current_turn_index or "未开始"))}</strong>
+                  <span>session {escape(session_id)}</span>
+                </div>
+                <div class="metric">
+                  <p class="metric-label">当前主模式</p>
+                  <strong>{escape(workspace_mode)}</strong>
+                  <span>keeper / internal only</span>
+                </div>
+              </div>
+            </article>
+          </div>
+        </div>
+      </section>
     """
 
 
@@ -4540,6 +4728,23 @@ def _render_experimental_one_shot_autoplay_observer_panel(
         """
         for snapshot in turn_snapshots
     )
+    latest_snapshot = turn_snapshots[-1]
+    latest_snapshot_html = f"""
+      <article class="assistant-source-echo">
+        <div class="list-head">
+          <h3>最近一轮内部快照</h3>
+          <span class="tag warn">{escape(latest_snapshot["badge"])}</span>
+        </div>
+        <ul class="meta-list">
+          <li>轮次阶段：{escape(latest_snapshot["phase"])}</li>
+          <li>run-local 摘要：{escape(latest_snapshot["run_local_summary"])}</li>
+          <li>continuity 摘要：{escape(latest_snapshot["continuity_summary"])}</li>
+          <li>finalized object：{escape(latest_snapshot["finalized_kind"])}</li>
+          <li>finalized 摘要：{escape(latest_snapshot["finalized_text"])}</li>
+          {f'<li>停止原因：{escape(latest_snapshot["stop_reason"])}</li>' if latest_snapshot["stop_reason"] else ''}
+        </ul>
+      </article>
+    """
     return f"""
       <section id="experimental-demo-observer" class="surface">
         <div class="surface-header">
@@ -4556,15 +4761,21 @@ def _render_experimental_one_shot_autoplay_observer_panel(
           <li>已跑轮次：{escape(str(len(run_result.turn_records)))} / 最大 {escape(str(run_result.max_turns))}</li>
           <li>当前只显示 4 个代表性 internal helper object：种子上下文、跟进提示、执行意图、Memo 输入。</li>
         </ul>
-        <div class="card-list">{chain_cards_html}</div>
-        <article class="assistant-source-echo">
-          <div class="list-head">
-            <h3>按轮内部快照</h3>
-            <span class="tag">turn-by-turn</span>
-          </div>
-          <p class="helper">当前 helper chain 仍是 run-result-level final snapshot；按轮 finalized 先收成 recent-turn contract，再由 observer 卡片复用。contract 只保留 turn_index、status_label、finalized_kind、finalized_text、stop_reason；底层仍只复用现有 turn_records，不会为了 observer UI 再重跑一遍内部链。</p>
-          <div class="card-list">{turn_snapshot_html}</div>
-        </article>
+        {latest_snapshot_html}
+        {_render_experimental_demo_collapsible_block(
+            section_id="experimental-demo-observer-chain",
+            title="internal helper chain 详情",
+            badge="4 items",
+            body_html=chain_cards_html,
+            helper_text="这些是当前 run 的 very small internal helper chain 摘要，不是公开 explainability contract。",
+        )}
+        {_render_experimental_demo_collapsible_block(
+            section_id="experimental-demo-observer-turn-history",
+            title="按轮内部快照",
+            badge="turn-by-turn",
+            body_html=turn_snapshot_html,
+            helper_text="当前 helper chain 仍是 run-result-level final snapshot；按轮 finalized 先收成 recent-turn contract，再由 observer 卡片复用。contract 只保留 turn_index、status_label、finalized_kind、finalized_text、stop_reason；底层仍只复用现有 turn_records，不会为了 observer UI 再重跑一遍内部链。",
+        )}
         <p class="helper">逐轮 run-local 结果仍看下方 Turn 卡片；这里的 internal chain 只代表当前 bounded autoplay run 的最终快照，不是 per-turn raw dump，也不是 authoritative state。</p>
       </section>
     """
@@ -4687,7 +4898,13 @@ def _render_experimental_one_shot_run_panel(
         </div>
         <ul class="meta-list">{summary_html}</ul>
         {scenario_preset_html}
-        <div class="card-list">{transcript_html}</div>
+        {_render_experimental_demo_collapsible_block(
+            section_id="experimental-demo-run-transcript",
+            title="完整 run-local transcript",
+            badge=f"{len(run_result.turn_records)} turns",
+            body_html=transcript_html,
+            helper_text="完整 turn transcript 继续保留，但默认收起，避免把首屏挤成长列表。",
+        )}
       </section>
     """
 
@@ -7829,67 +8046,45 @@ def _render_experimental_ai_demo_page(
         f'（{escape(str(item.get("kind") or "unknown"))}）</option>'
         for item in investigator_candidates
     )
-    demo_boot_hidden_input = (
-        '<input type="hidden" name="demo_boot" value="1" />' if demo_boot else ""
+    primary_controls_html = _render_experimental_ai_demo_primary_controls(
+        session_id=session_id,
+        options_html=options_html,
+        initial_run_button_label=initial_run_button_label,
+        one_shot_max_turns=one_shot_max_turns,
+        demo_boot=demo_boot,
+        selected_investigator_id=selected_investigator_id or "",
+        evaluation_state=evaluation_state,
+        narrative_work_note_value=narrative_work_note_value,
+        keeper_turn_note_value=keeper_turn_note_value,
+        visible_turn_note_value=visible_turn_note_value,
     )
-    body = (
-        _page_head(
-            eyebrow="Experimental AI Demo",
-            title="AI KP + AI Investigator Demo Harness",
-            summary="隔离实验页：同时运行 keeper-side AI KP 与 investigator-side AI proposal，验证现有 compressed context / visible state 底座是否能组成最小 narrative demo loop。不是主产品工作流。",
-            actions=[
-                ("Keeper Workspace", f"/app/sessions/{session_id}/keeper", "secondary"),
-                ("Session Overview", f"/app/sessions/{session_id}", "ghost"),
-                ("Recap / Review", f"/app/sessions/{session_id}/recap", "ghost"),
-            ],
-        )
-        + """
-        <section class="notice-panel">
-          <h2>Experimental / Non-authoritative</h2>
-          <p>这不是 full AI GM，也不会自动推进剧情、裁定规则或写入 authoritative session state。所有输出都只是实验性 narration draft / action proposal。</p>
-        </section>
-        """
-        + _notice_block(notice)
-        + _detail_block(detail)
-        + f"""
-        <section class="surface">
-          <div class="surface-header">
-            <div>
-              <h2>运行最小实验回合</h2>
-              <p>同一次人工触发中，同时生成 AI KP 剧情支架候选建议与 AI investigator 行动提案；两侧输入严格隔离。当前实验回合：{escape(str(current_turn_index or "尚未运行"))}</p>
-            </div>
-            <span class="tag warn">isolated harness</span>
-          </div>
-          {
-              f'''
-              <form method="post" action="/app/sessions/{escape(session_id)}/experimental-ai-demo/run" class="form-stack">
-                {demo_boot_hidden_input}
-                <label>
-                  Investigator 视角
-                  <select name="investigator_id">{options_html}</select>
-                </label>
-                <div class="toolbar">
-                  <button class="button-button secondary" type="submit">{initial_run_button_label}</button>
-                  <button class="button-button ghost" type="submit" formaction="/app/sessions/{escape(session_id)}/experimental-ai-demo/self-play-preview">运行 self-play 预演链</button>
-                </div>
-              </form>
-              {_render_experimental_ai_demo_one_shot_control(
-                  session_id=session_id,
-                  options_html=options_html,
-                  selected_investigator_id=selected_investigator_id or "",
-                  max_turns=one_shot_max_turns,
-                  demo_boot=demo_boot,
-                  evaluation_state=evaluation_state,
-                  narrative_work_note_value=narrative_work_note_value,
-                  keeper_turn_note_value=keeper_turn_note_value,
-                  visible_turn_note_value=visible_turn_note_value,
-              )}
-              '''
-              if options_html
-              else '<p class="empty">当前没有可用于实验 harness 的 investigator 视角。</p>'
-          }
-        </section>
-        <section class="content-grid">
+    primary_observer_html = (
+        one_shot_run_html or _render_experimental_one_shot_autoplay_observer_panel()
+    )
+    turn_loop_html = _render_experimental_ai_demo_turn_loop_form(
+        session_id=session_id,
+        selected_investigator_id=selected_investigator_id or "",
+        current_turn_index=current_turn_index,
+        kp_result=kp_result,
+        investigator_result=investigator_result,
+        kp_payload=kp_turn_payload,
+        investigator_payload=investigator_turn_payload,
+        kp_turn_bridge=kp_turn_bridge,
+        investigator_turn_bridge=investigator_turn_bridge,
+        evaluation_state=evaluation_state,
+        narrative_work_note_value=narrative_work_note_value,
+        keeper_turn_note_value=keeper_turn_note_value,
+        visible_turn_note_value=visible_turn_note_value,
+        keeper_draft_applied=keeper_draft_applied,
+        visible_draft_applied=visible_draft_applied,
+    )
+    secondary_inputs_html = _render_experimental_demo_collapsible_surface(
+        section_id="experimental-demo-secondary-inputs",
+        title="输入摘要与上下文",
+        summary="低频输入区：AI KP 的 compressed context 与 AI investigator 的 visible-only 输入摘要。",
+        badge="secondary inputs",
+        helper_text="这些输入块仍然保留，但默认后移，避免首屏被输入说明挤占。",
+        body_html=f"""
           <div class="card-list">
             {_render_keeper_compressed_context_block(
                 compressed_context=compressed_context,
@@ -7900,9 +8095,16 @@ def _render_experimental_ai_demo_page(
                 investigator_view=selected_investigator_view,
             )}
           </div>
+        """,
+    )
+    secondary_outputs_html = _render_experimental_demo_collapsible_surface(
+        section_id="experimental-demo-secondary-outputs",
+        title="实验输出详情",
+        summary="低频输出区：当前轮 AI KP / AI investigator 的候选输出与来源回显。",
+        badge="secondary outputs",
+        helper_text="输出能力未删除，只是默认收进折叠区；Keeper 需要细看时再展开。",
+        body_html=f"""
           <div class="card-list">
-            {one_shot_run_html or _render_experimental_one_shot_autoplay_observer_panel()}
-            {orchestration_preview_html}
             {_render_experimental_ai_demo_output_block(
                 title="AI KP Demo Output",
                 summary="候选的 scene framing / pressure / next beat / NPC reaction 草稿，仅供 Keeper 比较。",
@@ -7942,41 +8144,86 @@ def _render_experimental_ai_demo_page(
                     )
                 ),
             )}
-            {_render_experimental_ai_demo_turn_loop_form(
-                session_id=session_id,
-                selected_investigator_id=selected_investigator_id or "",
-                current_turn_index=current_turn_index,
-                kp_result=kp_result,
-                investigator_result=investigator_result,
-                kp_payload=kp_turn_payload,
-                investigator_payload=investigator_turn_payload,
-                kp_turn_bridge=kp_turn_bridge,
-                investigator_turn_bridge=investigator_turn_bridge,
-                evaluation_state=evaluation_state,
-                narrative_work_note_value=narrative_work_note_value,
-                keeper_turn_note_value=keeper_turn_note_value,
-                visible_turn_note_value=visible_turn_note_value,
-                keeper_draft_applied=keeper_draft_applied,
-                visible_draft_applied=visible_draft_applied,
-            )}
-            {_render_experimental_ai_demo_evaluation_rubric(
-                session_id=session_id,
-                selected_investigator_id=selected_investigator_id or "",
-                current_turn_index=current_turn_index,
-                kp_result=kp_result,
-                investigator_result=investigator_result,
-                kp_turn_bridge=kp_turn_bridge,
-                investigator_turn_bridge=investigator_turn_bridge,
-                evaluation_state=evaluation_state,
-                narrative_work_note_value=narrative_work_note_value,
-                keeper_turn_note_value=keeper_turn_note_value,
-                visible_turn_note_value=visible_turn_note_value,
-                keeper_draft_applied=keeper_draft_applied,
-                visible_draft_applied=visible_draft_applied,
-            )}
+          </div>
+        """,
+    )
+    secondary_preview_html = _render_experimental_demo_collapsible_surface(
+        section_id="experimental-demo-secondary-preview",
+        title="Self-play 预演链详情",
+        summary="低频预演区：串行 preview AI KP、AI investigator、keeper continuity draft 与 visible continuity draft。",
+        badge="preview chain",
+        helper_text="预演链继续保留，但默认收起，避免首屏被 step-by-step 预演明细占满。",
+        body_html=orchestration_preview_html,
+    )
+    secondary_evaluation_html = _render_experimental_demo_collapsible_surface(
+        section_id="experimental-demo-secondary-rubric",
+        title="当前页实验评估",
+        summary="低频评估区：只用于 Keeper 对当前页实验做 page-local rubric review。",
+        badge="page-local rubric",
+        helper_text="这仍是 page-local keeper review，不会写入 authoritative state。",
+        body_html=_render_experimental_ai_demo_evaluation_rubric(
+            session_id=session_id,
+            selected_investigator_id=selected_investigator_id or "",
+            current_turn_index=current_turn_index,
+            kp_result=kp_result,
+            investigator_result=investigator_result,
+            kp_turn_bridge=kp_turn_bridge,
+            investigator_turn_bridge=investigator_turn_bridge,
+            evaluation_state=evaluation_state,
+            narrative_work_note_value=narrative_work_note_value,
+            keeper_turn_note_value=keeper_turn_note_value,
+            visible_turn_note_value=visible_turn_note_value,
+            keeper_draft_applied=keeper_draft_applied,
+            visible_draft_applied=visible_draft_applied,
+        ),
+    )
+    primary_workspace_html = (
+        f"""
+        <section id="experimental-demo-primary-workspace" class="experimental-primary-workspace two-column">
+          <div class="card-list">
+            {primary_observer_html}
+          </div>
+          <div class="card-list">
+            {turn_loop_html}
           </div>
         </section>
         """
+        if turn_loop_html
+        else f"""
+        <section id="experimental-demo-primary-workspace" class="experimental-primary-workspace">
+          <div class="card-list">
+            {primary_observer_html}
+          </div>
+        </section>
+        """
+    )
+    body = (
+        _page_head(
+            eyebrow="Experimental AI Demo",
+            title="AI KP + AI Investigator Demo Harness",
+            summary="隔离实验页：同时运行 keeper-side AI KP 与 investigator-side AI proposal，验证现有 compressed context / visible state 底座是否能组成最小 narrative demo loop。不是主产品工作流。",
+            actions=[
+                ("Keeper Workspace", f"/app/sessions/{session_id}/keeper", "secondary"),
+                ("Session Overview", f"/app/sessions/{session_id}", "ghost"),
+                ("Recap / Review", f"/app/sessions/{session_id}/recap", "ghost"),
+            ],
+        )
+        + _notice_block(notice)
+        + _detail_block(detail)
+        + _render_experimental_ai_demo_workspace_strip(
+            session_id=session_id,
+            investigator_candidates=investigator_candidates,
+            selected_investigator_id=selected_investigator_id,
+            current_turn_index=current_turn_index,
+            controls_html=primary_controls_html,
+            demo_boot=demo_boot,
+            one_shot_run_visible=bool(one_shot_run_html),
+        )
+        + primary_workspace_html
+        + secondary_inputs_html
+        + secondary_outputs_html
+        + secondary_preview_html
+        + secondary_evaluation_html
     )
     return render_web_app_shell(
         title=f"Session {session_id} Experimental AI Demo",

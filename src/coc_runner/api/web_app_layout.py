@@ -520,6 +520,89 @@ legend {
 .assistant-source-echo .meta-list {
   margin: 8px 0 0;
 }
+.experimental-workspace-strip {
+  position: sticky;
+  top: 20px;
+  z-index: 4;
+}
+.experimental-workspace-grid,
+.experimental-primary-workspace.two-column {
+  display: grid;
+  gap: 12px;
+  grid-template-columns: minmax(0, 1.2fr) minmax(280px, 0.8fr);
+  align-items: start;
+}
+.experimental-primary-workspace {
+  margin-top: 18px;
+}
+.collapsible-surface {
+  padding: 0;
+  overflow: hidden;
+}
+.collapsible-summary {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 14px;
+  padding: 18px;
+  cursor: pointer;
+  list-style: none;
+}
+.collapsible-summary::-webkit-details-marker {
+  display: none;
+}
+.collapsible-summary h2 {
+  margin: 0 0 8px;
+}
+.collapsible-summary p {
+  color: var(--muted);
+}
+.collapsible-summary::after {
+  content: "展开";
+  flex: none;
+  padding: 5px 10px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.72);
+  border: 1px solid var(--line);
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 700;
+}
+.collapsible-surface[open] > .collapsible-summary::after,
+.experimental-collapsible-block[open] > summary::after {
+  content: "收起";
+}
+.collapsible-body {
+  display: grid;
+  gap: 12px;
+  padding: 0 18px 18px;
+}
+.experimental-collapsible-block {
+  padding: 0;
+  overflow: hidden;
+}
+.experimental-collapsible-block > summary {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 12px;
+  padding: 12px;
+  cursor: pointer;
+  list-style: none;
+}
+.experimental-collapsible-block > summary::-webkit-details-marker {
+  display: none;
+}
+.experimental-collapsible-block > summary::after {
+  content: "展开";
+  flex: none;
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 700;
+}
+.experimental-collapsible-block .collapsible-body {
+  padding: 0 12px 12px;
+}
 .assistant-flow-status {
   margin: 10px 0 0;
   padding-top: 10px;
@@ -565,6 +648,13 @@ code,
     padding: 22px 18px 42px;
   }
   .content-grid {
+    grid-template-columns: 1fr;
+  }
+  .experimental-workspace-strip {
+    position: static;
+  }
+  .experimental-workspace-grid,
+  .experimental-primary-workspace.two-column {
     grid-template-columns: 1fr;
   }
 }
