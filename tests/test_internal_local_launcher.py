@@ -223,6 +223,31 @@ def test_local_service_manager_open_browser_uses_target_url() -> None:
     assert opened_urls == [manager.web_url]
 
 
+def test_local_service_manager_snapshot_stays_reuse_first_for_default_demo_entry() -> None:
+    manager = LocalServiceManager(
+        project_root=PROJECT_ROOT,
+        service_python=Path(sys.executable),
+    )
+
+    snapshot = manager.snapshot()
+
+    assert snapshot.url == manager.experimental_demo_boot_url
+    assert snapshot.url != manager.experimental_demo_fresh_boot_url
+
+
+def test_local_service_manager_fresh_demo_url_stays_small_launcher_level_bypass() -> None:
+    manager = LocalServiceManager(
+        project_root=PROJECT_ROOT,
+        service_python=Path(sys.executable),
+    )
+
+    assert manager.experimental_demo_boot_url.endswith("?demo_boot=1")
+    assert manager.experimental_demo_fresh_boot_url == (
+        f"{manager.experimental_demo_boot_url}&fresh=1"
+    )
+    assert manager.experimental_demo_fresh_boot_url.startswith(manager.experimental_demo_url)
+
+
 def test_local_service_manager_open_experimental_demo_uses_launcher_deep_link() -> None:
     opened_urls: list[str] = []
 
@@ -241,6 +266,25 @@ def test_local_service_manager_open_experimental_demo_uses_launcher_deep_link() 
 
     assert manager.experimental_demo_url.endswith(DEFAULT_EXPERIMENTAL_DEMO_PATH)
     assert opened_urls == [manager.experimental_demo_boot_url]
+
+
+def test_local_service_manager_open_experimental_demo_fresh_uses_fresh_bypass_deep_link() -> None:
+    opened_urls: list[str] = []
+
+    def fake_opener(url: str) -> bool:
+        opened_urls.append(url)
+        return True
+
+    manager = LocalServiceManager(
+        project_root=PROJECT_ROOT,
+        service_python=Path(sys.executable),
+        browser_opener=fake_opener,
+    )
+
+    with patch("coc_runner.internal_local_launcher.probe_healthz", return_value=True):
+        assert manager.open_experimental_demo(fresh=True) is True
+
+    assert opened_urls == [manager.experimental_demo_fresh_boot_url]
 
 
 def test_local_service_manager_open_experimental_demo_requires_running_service() -> None:

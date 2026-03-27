@@ -23,6 +23,7 @@ DEFAULT_PORT = 8000
 DEFAULT_WEB_PATH = "/app/sessions"
 DEFAULT_EXPERIMENTAL_DEMO_PATH = "/app/experimental-ai-demo"
 DEFAULT_EXPERIMENTAL_DEMO_BOOT_QUERY = "?demo_boot=1"
+DEFAULT_EXPERIMENTAL_DEMO_FRESH_BOOT_QUERY = "?demo_boot=1&fresh=1"
 DEFAULT_HEALTH_PATH = "/healthz"
 MAX_LOG_LINES = 200
 ENV_PROBE_TIMEOUT_SECONDS = 15.0
@@ -430,9 +431,21 @@ class LocalServiceManager:
     def experimental_demo_url(self) -> str:
         return f"http://{self.host}:{self.port}{DEFAULT_EXPERIMENTAL_DEMO_PATH}"
 
+    def build_experimental_demo_boot_url(self, *, fresh: bool = False) -> str:
+        query = (
+            DEFAULT_EXPERIMENTAL_DEMO_FRESH_BOOT_QUERY
+            if fresh
+            else DEFAULT_EXPERIMENTAL_DEMO_BOOT_QUERY
+        )
+        return f"{self.experimental_demo_url}{query}"
+
     @property
     def experimental_demo_boot_url(self) -> str:
-        return f"{self.experimental_demo_url}{DEFAULT_EXPERIMENTAL_DEMO_BOOT_QUERY}"
+        return self.build_experimental_demo_boot_url()
+
+    @property
+    def experimental_demo_fresh_boot_url(self) -> str:
+        return self.build_experimental_demo_boot_url(fresh=True)
 
     @property
     def health_url(self) -> str:
@@ -539,12 +552,12 @@ class LocalServiceManager:
     def open_browser(self) -> bool:
         return self._open_url(self.web_url)
 
-    def open_experimental_demo(self) -> bool:
+    def open_experimental_demo(self, *, fresh: bool = False) -> bool:
         if not probe_healthz(self.health_url):
             self.poll()
             self._last_error = "当前服务未运行；请先启动本地应用后再打开 experimental AI demo。"
             return False
-        return self._open_url(self.experimental_demo_boot_url)
+        return self._open_url(self.build_experimental_demo_boot_url(fresh=fresh))
 
     def _open_url(self, url: str) -> bool:
         try:
@@ -749,7 +762,8 @@ def run_launcher_window(
     root.minsize(680, 520)
 
     status_var = tk.StringVar(value=manager.snapshot().status_text)
-    url_var = tk.StringVar(value=manager.experimental_demo_boot_url)
+    reuse_url_var = tk.StringVar(value=manager.experimental_demo_boot_url)
+    fresh_url_var = tk.StringVar(value=manager.experimental_demo_fresh_boot_url)
     port_var = tk.StringVar(value=str(manager.port))
     error_var = tk.StringVar(value="")
     env_var = tk.StringVar(value=_environment_display_text(manager.snapshot().environment))
@@ -766,26 +780,29 @@ def run_launcher_window(
     ).pack(anchor="w")
     ttk.Label(
         header,
-        text="仅供本地 / internal 使用：一键启动本地服务并打开 experimental observer demo，也可手动回到 Sessions 首页做 very small 环境检查。",
+        text="仅供本地 / internal 使用：默认续看最近 experimental observer demo，也可显式从 fresh demo 重新开始；仍只复用现有 demo boot 主链。",
     ).pack(anchor="w", pady=(4, 10))
 
     controls = ttk.Frame(frame)
     controls.pack(fill="x", pady=(0, 10))
     ttk.Button(controls, text="检查环境", command=lambda: _refresh_environment()).pack(side="left")
-    ttk.Button(controls, text="启动并打开 Observer Demo", command=lambda: _start_service()).pack(side="left", padx=(8, 0))
+    ttk.Button(controls, text="启动并续看 Demo", command=lambda: _start_service()).pack(side="left", padx=(8, 0))
+    ttk.Button(controls, text="启动全新 Demo", command=lambda: _start_service(fresh=True)).pack(side="left", padx=(8, 0))
     ttk.Button(controls, text="停止本地应用", command=lambda: _stop_service()).pack(side="left", padx=(8, 0))
     ttk.Button(controls, text="打开 Sessions 首页", command=lambda: _open_browser()).pack(side="left", padx=(8, 0))
     ttk.Button(
         controls,
-        text="重新打开 Observer Demo",
+        text="重新打开最近 Demo",
         command=lambda: _open_experimental_demo(),
     ).pack(side="left", padx=(8, 0))
 
     status_frame = ttk.LabelFrame(frame, text="服务状态", padding=10)
     status_frame.pack(fill="x", pady=(0, 10))
     ttk.Label(status_frame, textvariable=status_var).pack(anchor="w")
-    ttk.Label(status_frame, text="URL：").pack(anchor="w")
-    ttk.Label(status_frame, textvariable=url_var).pack(anchor="w", padx=(18, 0))
+    ttk.Label(status_frame, text="默认 Demo URL：").pack(anchor="w")
+    ttk.Label(status_frame, textvariable=reuse_url_var).pack(anchor="w", padx=(18, 0))
+    ttk.Label(status_frame, text="全新 Demo URL：").pack(anchor="w", pady=(6, 0))
+    ttk.Label(status_frame, textvariable=fresh_url_var).pack(anchor="w", padx=(18, 0))
     ttk.Label(status_frame, text="端口：").pack(anchor="w", pady=(6, 0))
     ttk.Label(status_frame, textvariable=port_var).pack(anchor="w", padx=(18, 0))
     ttk.Label(
@@ -819,7 +836,8 @@ def run_launcher_window(
 
     def _apply_snapshot(snapshot: LauncherSnapshot) -> None:
         status_var.set(snapshot.status_text)
-        url_var.set(snapshot.url)
+        reuse_url_var.set(snapshot.url)
+        fresh_url_var.set(manager.experimental_demo_fresh_boot_url)
         port_var.set(str(snapshot.port))
         error_var.set(snapshot.last_error)
         env_var.set(_environment_display_text(snapshot.environment))
@@ -831,13 +849,13 @@ def run_launcher_window(
         if snapshot.error and manager.snapshot().status not in {"running", "running_external"}:
             status_var.set("环境未就绪")
 
-    def _start_service() -> None:
+    def _start_service(*, fresh: bool = False) -> None:
         started = manager.start()
         if started:
             manager.wait_until_running(timeout_seconds=STARTUP_TIMEOUT_SECONDS)
         snapshot = manager.poll()
         if snapshot.status in {"running", "running_external"}:
-            manager.open_experimental_demo()
+            manager.open_experimental_demo(fresh=fresh)
         _apply_snapshot(manager.snapshot())
 
     def _stop_service() -> None:
@@ -848,8 +866,8 @@ def run_launcher_window(
         manager.open_browser()
         _apply_snapshot(manager.snapshot())
 
-    def _open_experimental_demo() -> None:
-        manager.open_experimental_demo()
+    def _open_experimental_demo(*, fresh: bool = False) -> None:
+        manager.open_experimental_demo(fresh=fresh)
         _apply_snapshot(manager.snapshot())
 
     def _poll() -> None:
