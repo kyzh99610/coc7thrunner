@@ -4399,12 +4399,98 @@ def _render_experimental_ai_demo_workspace_strip(
         workspace_mode = f"第 {current_turn_index} 轮页内结果已就绪"
     if one_shot_run_visible:
         workspace_mode = "bounded autoplay run 已完成并可回看"
-    entry_label = "launcher demo-boot" if demo_boot else "direct experimental page"
+    entry_label = "Launcher Demo Boot" if demo_boot else "直接实验页"
+    stage_label = "实验工作台待启动"
+    next_action_label = "先选 investigator，再运行单轮实验、self-play 预演或 one-shot autoplay。"
+    workflow_step_tones = {
+        "launcher": "success" if demo_boot else "",
+        "setup": "warn" if demo_boot else "",
+        "run": "warn" if not demo_boot else "",
+        "observe": "",
+        "rerun": "",
+    }
+    if current_turn_index > 0:
+        stage_label = f"第 {current_turn_index} 轮结果已就绪"
+        next_action_label = "先审阅当前轮 observer / 输出结果，再决定 continuity、rerun 或 fresh。"
+        workflow_step_tones = {
+            "launcher": "success" if demo_boot else "",
+            "setup": "success",
+            "run": "success",
+            "observe": "warn",
+            "rerun": "",
+        }
+    if one_shot_run_visible:
+        stage_label = "Observer 回看阶段"
+        next_action_label = "先回看 bounded autoplay 结果，再决定 rerun 当前 session 或 fresh 重开。"
+        workflow_step_tones = {
+            "launcher": "success" if demo_boot else "",
+            "setup": "success",
+            "run": "success",
+            "observe": "warn",
+            "rerun": "",
+        }
+    workflow_tags_html = "".join(
+        f'<span class="tag{(" " + tone) if tone else ""}">{label}</span>'
+        for label, tone in (
+            ("Launcher 入口壳", workflow_step_tones["launcher"]),
+            ("Setup / Reuse", workflow_step_tones["setup"]),
+            ("Run / Preview", workflow_step_tones["run"]),
+            ("Observer / 回看", workflow_step_tones["observe"]),
+            ("Rerun / Fresh", workflow_step_tones["rerun"]),
+        )
+    )
     return f"""
       <section id="experimental-demo-workspace-strip" class="surface experimental-workspace-strip">
         <div class="surface-header">
           <div>
-            <h2>Single-screen KP Workspace</h2>
+            <p class="eyebrow">Local Web App Shell</p>
+            <h2>Demo Control Surface</h2>
+            <p>Launcher 小窗只负责打开当前本地 Web 工作台；setup、run、observe、rerun 与 fresh 的主操作都收在这页完成。</p>
+          </div>
+          <span class="tag warn">workflow-first MVP</span>
+        </div>
+        <article id="experimental-demo-shell-identity" class="assistant-source-echo">
+          <div class="list-head">
+            <h3>本地 Web App 壳身份</h3>
+            <span class="tag">shell identity</span>
+          </div>
+          <p>当前页是 keeper/internal demo 的主表面；launcher 只是 very small opener，不承担更多 workflow。</p>
+          <div class="metric-grid">
+            <div class="metric">
+              <p class="metric-label">当前 Demo</p>
+              <strong>session {escape(session_id)}</strong>
+              <span>{escape(entry_label)}</span>
+            </div>
+            <div class="metric">
+              <p class="metric-label">当前阶段</p>
+              <strong>{escape(stage_label)}</strong>
+              <span>{escape(workspace_mode)}</span>
+            </div>
+            <div class="metric">
+              <p class="metric-label">当前视角</p>
+              <strong>{escape(selected_label)}</strong>
+              <span>keeper / internal only</span>
+            </div>
+            <div class="metric">
+              <p class="metric-label">下一步</p>
+              <strong>{escape(next_action_label)}</strong>
+              <span>setup -> run -> observe -> rerun / fresh</span>
+            </div>
+          </div>
+          <div id="experimental-demo-workflow-strip" class="pill-row">
+            {workflow_tags_html}
+          </div>
+          <p class="helper"><strong>Workflow-first</strong>：setup 用于建新 demo 或 fresh 重开；单轮、预演和 bounded autoplay 在当前页运行，observer 回看也留在当前页完成。</p>
+          <div class="toolbar">
+            <a class="button-link secondary" href="/app/setup?demo_boot=1">Demo Setup</a>
+            <a class="button-link ghost" href="/app/sessions/{escape(session_id)}">当前 Session 总览</a>
+            <a class="button-link ghost" href="/app/experimental-ai-demo?demo_boot=1">续看最近 Demo</a>
+            <a class="button-link ghost" href="/app/experimental-ai-demo?demo_boot=1&amp;fresh=1">启动全新 Demo</a>
+          </div>
+        </article>
+        <div class="surface-header experimental-workspace-section-head">
+          <div>
+            <h3>Single-screen KP Workspace</h3>
             <p>首屏优先保留 autoplay 控制、observer 状态与最近结果；低频输入、输出、预演与评估细节收进下方折叠区。</p>
           </div>
           <span class="tag warn">single-screen MVP</span>
@@ -5339,8 +5425,8 @@ def _render_sidebar(
     return f"""
       <section class="brand">
         <p class="brand-kicker">Call of Cthulhu 7e</p>
-        <h1>Web GUI MVP</h1>
-        <p>先把 sessions / keeper / investigator / knowledge / recap 收成统一工作壳，详细动作继续渐进接到现有主链。</p>
+        <h1>Local Web App Shell</h1>
+        <p>Launcher 只负责打开本地服务与 demo 入口；sessions / keeper / investigator / demo workspace 才是主要 workflow 表面。</p>
       </section>
       <section class="nav-group">
         <h2>Navigation</h2>
@@ -8199,13 +8285,13 @@ def _render_experimental_ai_demo_page(
     )
     body = (
         _page_head(
-            eyebrow="Experimental AI Demo",
+            eyebrow="Local Web App Shell",
             title="AI KP + AI Investigator Demo Harness",
-            summary="隔离实验页：同时运行 keeper-side AI KP 与 investigator-side AI proposal，验证现有 compressed context / visible state 底座是否能组成最小 narrative demo loop。不是主产品工作流。",
+            summary="当前本地 Web App Shell 的受控 demo 操作台：把 launcher demo boot、bounded autoplay observer、单轮实验与 rerun / fresh 回链收进同一工作表面。仍是 experimental / non-authoritative，不是 full autopilot runtime。",
             actions=[
-                ("Keeper Workspace", f"/app/sessions/{session_id}/keeper", "secondary"),
+                ("Demo Setup / Fresh", "/app/setup?demo_boot=1&fresh=1", "secondary"),
+                ("Keeper Workspace", f"/app/sessions/{session_id}/keeper", "ghost"),
                 ("Session Overview", f"/app/sessions/{session_id}", "ghost"),
-                ("Recap / Review", f"/app/sessions/{session_id}/recap", "ghost"),
             ],
         )
         + _notice_block(notice)

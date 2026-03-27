@@ -520,7 +520,8 @@ def test_web_app_sessions_and_group_pages_unify_navigation_shell(
 
     assert response.status_code == 200
     html = response.text
-    assert "Web GUI MVP" in html
+    assert "Local Web App Shell" in html
+    assert "Launcher 只负责打开本地服务与 demo 入口" in html
     assert "Session Workspace Index" in html
     assert "Sessions" in html
     assert "Keeper" in html
@@ -625,6 +626,8 @@ def test_web_app_setup_demo_boot_can_create_session_and_run_one_shot_observer(
     assert response.status_code == 200
     html = response.text
     assert "AI KP + AI Investigator Demo Harness" in html
+    assert "Local Web App Shell" in html
+    assert 'id="experimental-demo-shell-identity"' in html
     assert "launcher / demo boot 已创建 sample session" in html
     assert "Autoplay Observer" in html
     assert "模式：bounded one-shot autoplay" in html
@@ -730,9 +733,19 @@ def test_web_app_experimental_ai_demo_page_loads_without_breaking_keeper_shell_w
     assert response.status_code == 200
     html = response.text
     assert "AI KP + AI Investigator Demo Harness" in html
+    assert "Local Web App Shell" in html
     assert "Experimental / Non-authoritative" in html
     assert 'id="experimental-demo-workspace-strip"' in html
+    assert 'id="experimental-demo-shell-identity"' in html
+    assert 'id="experimental-demo-workflow-strip"' in html
     assert "Single-screen KP Workspace" in html
+    assert "本地 Web App 壳身份" in html
+    assert "Launcher 小窗只负责打开当前本地 Web 工作台" in html
+    assert "Setup / Reuse" in html
+    assert "Observer / 回看" in html
+    assert "Demo Setup" in html
+    assert "续看最近 Demo" in html
+    assert "启动全新 Demo" in html
     assert "单轮 / 预演入口" in html
     assert "Observer Autoplay 入口" in html
     assert 'id="experimental-demo-primary-workspace"' in html
@@ -772,6 +785,7 @@ def test_web_app_experimental_ai_demo_page_demo_boot_surfaces_demo_ready_hint(
     assert response.status_code == 200
     html = response.text
     assert 'id="experimental-demo-workspace-strip"' in html
+    assert 'id="experimental-demo-shell-identity"' in html
     assert 'id="experimental-demo-primary-workspace"' in html
     assert "launcher / demo boot 已就绪" in html
     assert 'id="experimental-demo-one-shot-control"' in html
@@ -950,6 +964,8 @@ def test_web_app_experimental_ai_demo_run_keeps_kp_and_investigator_inputs_isola
     assert response.status_code == 200
     html = response.text
     assert "AI KP + AI Investigator Demo Harness" in html
+    assert "Local Web App Shell" in html
+    assert 'id="experimental-demo-shell-identity"' in html
     assert "已生成第 1 轮 isolated experimental AI demo 输出" in html
     assert "AI KP Demo Output" in html
     assert "AI KP 剧情支架提案" in html

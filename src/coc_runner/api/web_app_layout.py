@@ -525,6 +525,9 @@ legend {
   top: 20px;
   z-index: 4;
 }
+.experimental-workspace-section-head {
+  margin-top: 12px;
+}
 .experimental-workspace-grid,
 .experimental-primary-workspace.two-column {
   display: grid;
