@@ -762,6 +762,19 @@ def test_web_app_experimental_ai_demo_page_loads_without_breaking_keeper_shell_w
     assert "不会自动写入主状态" in html
     assert "运行 self-play 预演链" in html
     assert "一键开始 bounded autopilot run" in html
+    assert 'id="experimental-demo-autopilot-token-surface"' in html
+    assert 'data-autopilot-token-phase="ready"' in html
+    assert "Autopilot Request Token" in html
+    assert "当前还没有运行中的 bounded autopilot request。" in html
+    assert "不是后台 job 系统" in html
+    assert "cancel-like" in html
+    assert (
+        "当前 request-bounded run 不支持 mid-run cancel；如果已经发出请求，只能等待响应完成后再决定 rerun 或启动全新 Demo。"
+        in html
+    )
+    assert 'data-running-status-form="bounded-autopilot"' in html
+    assert 'data-running-status-label="running"' in html
+    assert 'data-running-submit-text="running：正在等待当前响应"' in html
     assert "Autoplay Observer" in html
     assert "模式：bounded one-shot autoplay" in html
     assert "当前状态：尚未运行。" in html
@@ -789,6 +802,8 @@ def test_web_app_experimental_ai_demo_page_demo_boot_surfaces_demo_ready_hint(
     assert 'id="experimental-demo-primary-workspace"' in html
     assert "launcher / demo boot 已就绪" in html
     assert 'id="experimental-demo-one-shot-control"' in html
+    assert 'id="experimental-demo-autopilot-token-surface"' in html
+    assert 'data-autopilot-token-phase="ready"' in html
     assert 'name="demo_boot" value="1"' in html
     assert 'id="experimental-demo-observer"' in html
     assert "demo-ready：当前页已默认选好 sample investigator 与 bounded turn limit。" in html
@@ -808,8 +823,45 @@ def test_web_app_experimental_ai_demo_page_promotes_one_click_bounded_autopilot_
     assert "一键 Bounded Autopilot" in html
     assert "受控 bounded autopilot run" in html
     assert f'action="/app/sessions/{session_id}/experimental-ai-demo/one-shot-run"' in html
+    assert 'data-running-status-form="bounded-autopilot"' in html
+    assert 'data-running-status-text-value="当前 bounded autopilot request 已发出，正在等待服务器响应。"' in html
     assert html.index("一键 Bounded Autopilot") < html.index("单轮 / 预演入口")
     assert "不是 full autopilot runtime，也不是最终消费者 app shell" in html
+
+
+def test_experimental_ai_demo_autopilot_token_surface_contract_stays_request_bounded_and_honest_about_cancel() -> None:
+    ready_surface = web_app_route._build_experimental_ai_demo_autopilot_token_surface()
+    done_surface = web_app_route._build_experimental_ai_demo_autopilot_token_surface(
+        run_result=web_app_route.ExperimentalOneShotRunResult(
+            ending_status="max_turns",
+            ending_reason="turn_limit_reached",
+            max_turns=2,
+            turn_records=[],
+            kp_result=None,
+            investigator_result=None,
+            keeper_draft_result=None,
+            visible_draft_result=None,
+            current_turn_index=2,
+            narrative_work_note_value="",
+            keeper_turn_note_value="",
+            visible_turn_note_value="",
+            kp_turn_bridge=None,
+            investigator_turn_bridge=None,
+            keeper_draft_applied=False,
+            visible_draft_applied=False,
+        )
+    )
+
+    assert ready_surface.phase == "ready"
+    assert ready_surface.badge_label == "ready"
+    assert "request-bounded 页面请求" in ready_surface.detail_text
+    assert "不是后台 job 系统" in ready_surface.detail_text
+    assert "不支持 mid-run cancel" in ready_surface.cancel_like_text
+    assert done_surface.phase == "done"
+    assert done_surface.badge_label == "done"
+    assert done_surface.badge_tone == "warn"
+    assert "已完成：达到轮数上限。" in done_surface.status_text
+    assert "停止原因：达到当前受控 one-shot demo run 的最大轮数上限。" == done_surface.stop_reason_text
 
 
 def test_web_app_experimental_ai_demo_launcher_entry_redirects_to_latest_session_demo(
@@ -1368,6 +1420,15 @@ def test_web_app_experimental_ai_demo_one_shot_run_can_finish_with_demo_success_
     assert "One-click Bounded Autopilot Run" in html
     assert "Single-screen KP Workspace" in html
     assert 'id="experimental-demo-primary-workspace"' in html
+    assert 'id="experimental-demo-autopilot-token-surface"' in html
+    assert 'data-autopilot-token-phase="done"' in html
+    assert ">done</span>" in html
+    assert "当前 bounded autopilot request 已完成：成功。" in html
+    assert 'id="experimental-demo-autopilot-stop-reason"' in html
+    assert (
+        "当前 request 已完成；如果你想放弃这次结果，请直接点击“启动全新 Demo”重新开始。"
+        in html
+    )
     assert "bounded autopilot run 已结束：成功。" in html
     assert "结束状态：成功。" in html
     assert "结束原因：已形成连续、可读且带 continuity 的受控 demo mini-arc。" in html
@@ -1460,6 +1521,14 @@ def test_web_app_experimental_ai_demo_one_shot_run_stops_at_turn_limit_when_demo
 
     assert response.status_code == 200
     html = response.text
+    assert 'id="experimental-demo-autopilot-token-surface"' in html
+    assert 'data-autopilot-token-phase="done"' in html
+    assert ">done</span>" in html
+    assert "当前 bounded autopilot request 已完成：达到轮数上限。" in html
+    assert (
+        "当前 request 已完成；如果你想放弃这次结果，请直接点击“启动全新 Demo”重新开始。"
+        in html
+    )
     assert "bounded autopilot run 已结束：达到轮数上限。" in html
     assert "Autoplay Observer" in html
     assert "模式：bounded one-shot autoplay" in html

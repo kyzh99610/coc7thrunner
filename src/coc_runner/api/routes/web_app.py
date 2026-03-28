@@ -387,6 +387,17 @@ class ExperimentalOneShotRunResult:
     secret_breach_term: str = ""
 
 
+@dataclass(slots=True)
+class ExperimentalAutopilotTokenSurface:
+    phase: str
+    badge_label: str
+    badge_tone: str
+    status_text: str
+    detail_text: str
+    cancel_like_text: str
+    stop_reason_text: str = ""
+
+
 EXPERIMENTAL_ONE_SHOT_VISIBLE_SAFE_FORBIDDEN_MARKERS: tuple[str, ...] = (
     "private_notes",
     "secret_state_refs",
@@ -4218,6 +4229,7 @@ def _render_experimental_ai_demo_one_shot_control(
     options_html: str,
     selected_investigator_id: str,
     max_turns: int,
+    autopilot_token_surface_html: str = "",
     demo_boot: bool = False,
     evaluation_state: Mapping[str, str] | None = None,
     narrative_work_note_value: str = "",
@@ -4235,7 +4247,8 @@ def _render_experimental_ai_demo_one_shot_control(
     divider_html = '<div class="divider"></div>' if include_divider else ""
     return f"""
       {divider_html}
-      <form id="experimental-demo-one-shot-control" method="post" action="/app/sessions/{escape(session_id)}/experimental-ai-demo/one-shot-run" class="form-stack">
+      {autopilot_token_surface_html}
+      <form id="experimental-demo-one-shot-control" method="post" action="/app/sessions/{escape(session_id)}/experimental-ai-demo/one-shot-run" class="form-stack" data-running-status-form="bounded-autopilot" data-running-status-surface="experimental-demo-autopilot-token-surface" data-running-status-badge="experimental-demo-autopilot-status-badge" data-running-status-text="experimental-demo-autopilot-status-text" data-running-status-detail="experimental-demo-autopilot-status-detail" data-running-cancel-like="experimental-demo-autopilot-cancel-like" data-running-status-label="running" data-running-status-tone="warn" data-running-status-text-value="当前 bounded autopilot request 已发出，正在等待服务器响应。" data-running-status-detail-value="当前仍是 request-bounded 页面请求；observer / per-turn snapshots / finalized snapshots 会在响应完成后一起回填，不是后台 job 系统。" data-running-cancel-like-value="当前 request-bounded run 不支持 mid-run cancel；如果已经发出请求，只能等待响应完成后再决定 rerun 或启动全新 Demo。" data-running-submit-text="running：正在等待当前响应">
         <label>
           Investigator 视角
           <select name="investigator_id">{options_html}</select>
@@ -4322,6 +4335,7 @@ def _render_experimental_ai_demo_primary_controls(
     options_html: str,
     initial_run_button_label: str,
     one_shot_max_turns: int,
+    autopilot_token_surface_html: str = "",
     demo_boot: bool = False,
     selected_investigator_id: str = "",
     evaluation_state: Mapping[str, str] | None = None,
@@ -4350,6 +4364,7 @@ def _render_experimental_ai_demo_primary_controls(
             options_html=options_html,
             selected_investigator_id=selected_investigator_id,
             max_turns=one_shot_max_turns,
+            autopilot_token_surface_html=autopilot_token_surface_html,
             demo_boot=demo_boot,
             evaluation_state=evaluation_state,
             narrative_work_note_value=narrative_work_note_value,
@@ -4530,6 +4545,85 @@ def _render_experimental_ai_demo_workspace_strip(
           </div>
         </div>
       </section>
+    """
+
+
+def _build_experimental_ai_demo_autopilot_token_surface(
+    *,
+    run_result: ExperimentalOneShotRunResult | None = None,
+) -> ExperimentalAutopilotTokenSurface:
+    ready_cancel_like_text = (
+        "当前 request-bounded run 不支持 mid-run cancel；"
+        "如果已经发出请求，只能等待响应完成后再决定 rerun 或启动全新 Demo。"
+    )
+    if run_result is None:
+        return ExperimentalAutopilotTokenSurface(
+            phase="ready",
+            badge_label="ready",
+            badge_tone="",
+            status_text="当前还没有运行中的 bounded autopilot request。",
+            detail_text=(
+                "点击主按钮后，当前页会先显示 running token；observer / per-turn "
+                "snapshots / finalized snapshots 会在响应完成后回填。"
+                "当前仍是 request-bounded 页面请求，不是后台 job 系统。"
+            ),
+            cancel_like_text=ready_cancel_like_text,
+        )
+    status_label = EXPERIMENTAL_ONE_SHOT_ENDING_STATUS_LABELS.get(
+        run_result.ending_status,
+        run_result.ending_status,
+    )
+    reason_label = EXPERIMENTAL_ONE_SHOT_ENDING_REASON_LABELS.get(
+        run_result.ending_reason,
+        run_result.ending_reason,
+    )
+    badge_tone = "success"
+    if run_result.ending_status == "max_turns":
+        badge_tone = "warn"
+    elif run_result.ending_status in {"failure", "aborted"}:
+        badge_tone = "danger"
+    return ExperimentalAutopilotTokenSurface(
+        phase="done",
+        badge_label="done",
+        badge_tone=badge_tone,
+        status_text=f"当前 bounded autopilot request 已完成：{status_label}。",
+        detail_text=(
+            "observer、per-turn snapshots 与 finalized snapshots 已按当前 run "
+            "回填；当前结果仍然只是 run-local transcript，不会写入 authoritative state。"
+        ),
+        stop_reason_text=f"停止原因：{reason_label}",
+        cancel_like_text=(
+            "当前 request 已完成；如果你想放弃这次结果，请直接点击“启动全新 Demo”重新开始。"
+        ),
+    )
+
+
+def _render_experimental_ai_demo_autopilot_token_surface(
+    *,
+    token_surface: ExperimentalAutopilotTokenSurface,
+) -> str:
+    badge_class = "tag"
+    if token_surface.badge_tone:
+        badge_class += f" {token_surface.badge_tone}"
+    stop_reason_html = ""
+    if token_surface.stop_reason_text:
+        stop_reason_html = (
+            f'<li id="experimental-demo-autopilot-stop-reason">'
+            f"{escape(token_surface.stop_reason_text)}</li>"
+        )
+    return f"""
+      <article id="experimental-demo-autopilot-token-surface" class="assistant-source-echo" data-autopilot-token-phase="{escape(token_surface.phase)}">
+        <div class="list-head">
+          <h3>Autopilot Request Token</h3>
+          <span id="experimental-demo-autopilot-status-badge" class="{escape(badge_class)}">{escape(token_surface.badge_label)}</span>
+        </div>
+        <p id="experimental-demo-autopilot-status-text">{escape(token_surface.status_text)}</p>
+        <ul class="meta-list">
+          <li id="experimental-demo-autopilot-status-detail">{escape(token_surface.detail_text)}</li>
+          {stop_reason_html}
+        </ul>
+        <p class="helper"><span class="tag warn">cancel-like</span> <span id="experimental-demo-autopilot-cancel-like">{escape(token_surface.cancel_like_text)}</span></p>
+      </article>
     """
 
 
@@ -8117,6 +8211,7 @@ def _render_experimental_ai_demo_page(
     visible_draft_applied: bool = False,
     orchestration_preview_html: str = "",
     one_shot_max_turns: int = EXPERIMENTAL_ONE_SHOT_DEFAULT_MAX_TURNS,
+    one_shot_run_result: ExperimentalOneShotRunResult | None = None,
     one_shot_run_html: str = "",
     demo_boot: bool = False,
     notice: str | None = None,
@@ -8135,11 +8230,17 @@ def _render_experimental_ai_demo_page(
         f'（{escape(str(item.get("kind") or "unknown"))}）</option>'
         for item in investigator_candidates
     )
+    autopilot_token_surface_html = _render_experimental_ai_demo_autopilot_token_surface(
+        token_surface=_build_experimental_ai_demo_autopilot_token_surface(
+            run_result=one_shot_run_result,
+        )
+    )
     primary_controls_html = _render_experimental_ai_demo_primary_controls(
         session_id=session_id,
         options_html=options_html,
         initial_run_button_label=initial_run_button_label,
         one_shot_max_turns=one_shot_max_turns,
+        autopilot_token_surface_html=autopilot_token_surface_html,
         demo_boot=demo_boot,
         selected_investigator_id=selected_investigator_id or "",
         evaluation_state=evaluation_state,
@@ -8532,6 +8633,7 @@ def _render_app_experimental_ai_demo_from_service(
     visible_draft_applied: bool = False,
     orchestration_preview_html: str = "",
     one_shot_max_turns: int = EXPERIMENTAL_ONE_SHOT_DEFAULT_MAX_TURNS,
+    one_shot_run_result: ExperimentalOneShotRunResult | None = None,
     one_shot_run_html: str = "",
     demo_boot: bool = False,
     notice: str | None = None,
@@ -8617,6 +8719,7 @@ def _render_app_experimental_ai_demo_from_service(
         visible_draft_applied=visible_draft_applied,
         orchestration_preview_html=orchestration_preview_html,
         one_shot_max_turns=one_shot_max_turns,
+        one_shot_run_result=one_shot_run_result,
         one_shot_run_html=one_shot_run_html,
         demo_boot=demo_boot,
         notice=notice,
@@ -8747,6 +8850,7 @@ def _render_experimental_ai_demo_one_shot_run_from_service(
             visible_draft_result=run_result.visible_draft_result,
         ),
         one_shot_max_turns=max_turns,
+        one_shot_run_result=run_result,
         one_shot_run_html=_render_experimental_one_shot_run_panel(
             run_result=run_result,
         ),

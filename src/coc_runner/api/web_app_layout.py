@@ -696,6 +696,69 @@ WEB_APP_SHELL_SCRIPT = """
       flowStatusNode.textContent = flowStatusText;
     }
   });
+  document.addEventListener("submit", (event) => {
+    const form = event.target instanceof HTMLFormElement
+      ? event.target.closest("form[data-running-status-form]")
+      : null;
+    if (!(form instanceof HTMLFormElement)) {
+      return;
+    }
+    if (form.dataset.runningStatusReplay === "1") {
+      delete form.dataset.runningStatusReplay;
+      return;
+    }
+    event.preventDefault();
+    const surfaceId = form.getAttribute("data-running-status-surface") || "";
+    const badgeId = form.getAttribute("data-running-status-badge") || "";
+    const textId = form.getAttribute("data-running-status-text") || "";
+    const detailId = form.getAttribute("data-running-status-detail") || "";
+    const cancelId = form.getAttribute("data-running-cancel-like") || "";
+    const badgeLabel = form.getAttribute("data-running-status-label") || "running";
+    const badgeTone = form.getAttribute("data-running-status-tone") || "warn";
+    const statusText = form.getAttribute("data-running-status-text-value") || "";
+    const detailText = form.getAttribute("data-running-status-detail-value") || "";
+    const cancelText = form.getAttribute("data-running-cancel-like-value") || "";
+    const submitText = form.getAttribute("data-running-submit-text") || "";
+    const surface = surfaceId ? document.getElementById(surfaceId) : null;
+    if (surface) {
+      surface.setAttribute("data-autopilot-token-phase", "running");
+      surface.setAttribute("aria-busy", "true");
+    }
+    const badgeNode = badgeId ? document.getElementById(badgeId) : null;
+    if (badgeNode) {
+      badgeNode.textContent = badgeLabel;
+      badgeNode.className = `tag ${badgeTone}`.trim();
+    }
+    const textNode = textId ? document.getElementById(textId) : null;
+    if (textNode) {
+      textNode.textContent = statusText;
+    }
+    const detailNode = detailId ? document.getElementById(detailId) : null;
+    if (detailNode) {
+      detailNode.textContent = detailText;
+    }
+    const cancelNode = cancelId ? document.getElementById(cancelId) : null;
+    if (cancelNode) {
+      cancelNode.textContent = cancelText;
+    }
+    const submitter = event.submitter instanceof HTMLButtonElement
+      ? event.submitter
+      : form.querySelector('button[type="submit"]');
+    if (submitter instanceof HTMLButtonElement) {
+      submitter.disabled = true;
+      if (submitText) {
+        submitter.textContent = submitText;
+      }
+    }
+    form.dataset.runningStatusReplay = "1";
+    window.requestAnimationFrame(() => {
+      if (typeof form.requestSubmit === "function") {
+        form.requestSubmit(submitter instanceof HTMLButtonElement ? submitter : undefined);
+        return;
+      }
+      form.submit();
+    });
+  });
 })();
 """
 
