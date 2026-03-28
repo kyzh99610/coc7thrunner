@@ -591,7 +591,7 @@ def test_web_app_setup_demo_boot_prefills_demo_ready_defaults(
 
     assert response.status_code == 200
     html = response.text
-    assert "创建 Demo Session 并直接进入 Observer Demo" in html
+    assert "创建 Demo Session 并进入 Bounded Autopilot Demo" in html
     assert "Launcher Demo Boot" in html
     assert 'name="demo_boot" value="1"' in html
     assert 'name="launch_target" value="experimental_ai_demo"' in html
@@ -600,7 +600,7 @@ def test_web_app_setup_demo_boot_prefills_demo_ready_defaults(
     assert 'value="内部演示KP"' in html
     assert 'name="investigator_1_name"' in html
     assert 'value="演示调查员"' in html
-    assert "创建 Demo Session 并运行 Observer Demo" in html
+    assert "创建 Demo Session 并运行 Bounded Autopilot" in html
 
 
 def test_web_app_setup_demo_boot_can_create_session_and_run_one_shot_observer(
@@ -747,7 +747,7 @@ def test_web_app_experimental_ai_demo_page_loads_without_breaking_keeper_shell_w
     assert "续看最近 Demo" in html
     assert "启动全新 Demo" in html
     assert "单轮 / 预演入口" in html
-    assert "Observer Autoplay 入口" in html
+    assert "一键 Bounded Autopilot" in html
     assert 'id="experimental-demo-primary-workspace"' in html
     assert "不是 full autopilot runtime，也不是最终消费者 app shell" in html
     assert "AI KP 输入：Compressed Context" in html
@@ -761,7 +761,7 @@ def test_web_app_experimental_ai_demo_page_loads_without_breaking_keeper_shell_w
     assert "Local LLM 未启用" in html
     assert "不会自动写入主状态" in html
     assert "运行 self-play 预演链" in html
-    assert "开始 one-shot self-play demo" in html
+    assert "一键开始 bounded autopilot run" in html
     assert "Autoplay Observer" in html
     assert "模式：bounded one-shot autoplay" in html
     assert "当前状态：尚未运行。" in html
@@ -792,6 +792,24 @@ def test_web_app_experimental_ai_demo_page_demo_boot_surfaces_demo_ready_hint(
     assert 'name="demo_boot" value="1"' in html
     assert 'id="experimental-demo-observer"' in html
     assert "demo-ready：当前页已默认选好 sample investigator 与 bounded turn limit。" in html
+    assert "一键开始 bounded autopilot run" in html
+
+
+def test_web_app_experimental_ai_demo_page_promotes_one_click_bounded_autopilot_before_manual_paths(
+    client: TestClient,
+) -> None:
+    session_id = _start_keeper_dashboard_session(client)
+    _advance_keeper_dashboard_session(client, session_id)
+
+    response = client.get(f"/app/sessions/{session_id}/experimental-ai-demo")
+
+    assert response.status_code == 200
+    html = response.text
+    assert "一键 Bounded Autopilot" in html
+    assert "受控 bounded autopilot run" in html
+    assert f'action="/app/sessions/{session_id}/experimental-ai-demo/one-shot-run"' in html
+    assert html.index("一键 Bounded Autopilot") < html.index("单轮 / 预演入口")
+    assert "不是 full autopilot runtime，也不是最终消费者 app shell" in html
 
 
 def test_web_app_experimental_ai_demo_launcher_entry_redirects_to_latest_session_demo(
@@ -1347,10 +1365,10 @@ def test_web_app_experimental_ai_demo_one_shot_run_can_finish_with_demo_success_
 
     assert response.status_code == 200
     html = response.text
-    assert "One-shot Self-play Demo Run" in html
+    assert "One-click Bounded Autopilot Run" in html
     assert "Single-screen KP Workspace" in html
     assert 'id="experimental-demo-primary-workspace"' in html
-    assert "one-shot self-play demo run 已结束：成功。" in html
+    assert "bounded autopilot run 已结束：成功。" in html
     assert "结束状态：成功。" in html
     assert "结束原因：已形成连续、可读且带 continuity 的受控 demo mini-arc。" in html
     assert "Scenario Preset Ending Judge" in html
@@ -1442,7 +1460,7 @@ def test_web_app_experimental_ai_demo_one_shot_run_stops_at_turn_limit_when_demo
 
     assert response.status_code == 200
     html = response.text
-    assert "one-shot self-play demo run 已结束：达到轮数上限。" in html
+    assert "bounded autopilot run 已结束：达到轮数上限。" in html
     assert "Autoplay Observer" in html
     assert "模式：bounded one-shot autoplay" in html
     assert "当前状态：达到轮数上限。" in html
@@ -1491,7 +1509,7 @@ def test_web_app_experimental_ai_demo_one_shot_run_can_fail_on_stagnation_withou
 
     assert response.status_code == 200
     html = response.text
-    assert "one-shot self-play demo run 已结束：失败。" in html
+    assert "bounded autopilot run 已结束：失败。" in html
     assert "结束状态：失败。" in html
     assert "结束原因：连续多轮没有出现新的 run-local 推进点，判定为空转。" in html
     assert "场景结局判定：停滞 / 未决。" in html
@@ -1529,7 +1547,7 @@ def test_web_app_experimental_ai_demo_one_shot_run_aborts_on_visible_secret_brea
 
     assert response.status_code == 200
     html = response.text
-    assert "one-shot self-play demo run 已结束：中止。" in html
+    assert "bounded autopilot run 已结束：中止。" in html
     assert "结束状态：中止。" in html
     assert "结束原因：visible-side 输出触碰 keeper-only 线索标题，当前 run 中止。" in html
     assert "场景结局判定：中止。" in html
@@ -1565,7 +1583,7 @@ def test_web_app_experimental_ai_demo_one_shot_run_aborts_cleanly_when_llm_disab
 
     assert response.status_code == 200
     html = response.text
-    assert "one-shot self-play demo run 已结束：中止。" in html
+    assert "bounded autopilot run 已结束：中止。" in html
     assert "结束状态：中止。" in html
     assert "结束原因：实验块未返回可用结构化输出，当前 run 中止。" in html
     assert "场景结局判定：中止。" in html
@@ -1609,7 +1627,7 @@ def test_web_app_experimental_ai_demo_one_shot_run_reuses_ending_judge_for_midni
 
     assert response.status_code == 200
     html = response.text
-    assert "one-shot self-play demo run 已结束：成功。" in html
+    assert "bounded autopilot run 已结束：成功。" in html
     assert "结束状态：成功。" in html
     assert "Scenario Preset Ending Judge" in html
     assert "场景 preset：雨夜档案馆（scenario.midnight_archive）" in html
@@ -1664,7 +1682,7 @@ def test_web_app_experimental_ai_demo_one_shot_run_reuses_ending_judge_for_midni
 
     assert response.status_code == 200
     html = response.text
-    assert "one-shot self-play demo run 已结束：达到轮数上限。" in html
+    assert "bounded autopilot run 已结束：达到轮数上限。" in html
     assert "结束状态：达到轮数上限。" in html
     assert "场景 preset：雨夜档案馆（scenario.midnight_archive）" in html
     assert "场景结局判定：部分成功。" in html

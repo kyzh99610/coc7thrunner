@@ -4228,7 +4228,7 @@ def _render_experimental_ai_demo_one_shot_control(
     if not options_html:
         return ""
     demo_boot_hint_html = (
-        '<p class="helper">demo-ready：当前页已默认选好 sample investigator 与 bounded turn limit。点击一次“开始 one-shot self-play demo”即可直接观察 observer autoplay。</p>'
+        '<p class="helper">demo-ready：当前页已默认选好 sample investigator 与 bounded turn limit。点击一次“一键开始 bounded autopilot run”即可直接观察 observer autoplay。</p>'
         if demo_boot
         else ""
     )
@@ -4250,9 +4250,9 @@ def _render_experimental_ai_demo_one_shot_control(
         <input type="hidden" name="seed_visible_turn_outcome_note" value="{escape(visible_turn_note_value)}">
         {_render_hidden_experimental_demo_evaluation_state_inputs(evaluation_state)}
         {demo_boot_hint_html}
-        <p class="helper">受控 one-shot self-play demo run：每轮顺序复用 AI KP、AI investigator、keeper continuity draft 与 visible continuity draft，直到成功 / 失败 / 中止 / 达到轮数上限；只保留当前页 run-local transcript，不会写入 authoritative state。</p>
+        <p class="helper">受控 bounded autopilot run：每轮顺序复用 AI KP、AI investigator、keeper continuity draft 与 visible continuity draft，直到成功 / 失败 / 中止 / 达到轮数上限；只保留当前页 run-local transcript，不会写入 authoritative state。</p>
         <div class="toolbar">
-          <button class="button-button ghost" type="submit">开始 one-shot self-play demo</button>
+          <button class="button-button" type="submit">一键开始 bounded autopilot run</button>
         </div>
       </form>
     """
@@ -4342,25 +4342,8 @@ def _render_experimental_ai_demo_primary_controls(
     return f"""
       <article class="assistant-source-echo">
         <div class="list-head">
-          <h3>单轮 / 预演入口</h3>
-          <span class="tag">primary action</span>
-        </div>
-        <form method="post" action="/app/sessions/{escape(session_id)}/experimental-ai-demo/run" class="form-stack">
-          {('<input type="hidden" name="demo_boot" value="1" />' if demo_boot else '')}
-          <label>
-            Investigator 视角
-            <select name="investigator_id">{options_html}</select>
-          </label>
-          <div class="toolbar">
-            <button class="button-button secondary" type="submit">{escape(initial_run_button_label)}</button>
-            <button class="button-button ghost" type="submit" formaction="/app/sessions/{escape(session_id)}/experimental-ai-demo/self-play-preview">运行 self-play 预演链</button>
-          </div>
-        </form>
-      </article>
-      <article class="assistant-source-echo">
-        <div class="list-head">
-          <h3>Observer Autoplay 入口</h3>
-          <span class="tag warn">bounded demo</span>
+          <h3>一键 Bounded Autopilot</h3>
+          <span class="tag warn">one-click CTA</span>
         </div>
         {_render_experimental_ai_demo_one_shot_control(
             session_id=session_id,
@@ -4374,6 +4357,23 @@ def _render_experimental_ai_demo_primary_controls(
             visible_turn_note_value=visible_turn_note_value,
             include_divider=False,
         )}
+      </article>
+      <article class="assistant-source-echo">
+        <div class="list-head">
+          <h3>单轮 / 预演入口</h3>
+          <span class="tag">secondary path</span>
+        </div>
+        <form method="post" action="/app/sessions/{escape(session_id)}/experimental-ai-demo/run" class="form-stack">
+          {('<input type="hidden" name="demo_boot" value="1" />' if demo_boot else '')}
+          <label>
+            Investigator 视角
+            <select name="investigator_id">{options_html}</select>
+          </label>
+          <div class="toolbar">
+            <button class="button-button secondary" type="submit">{escape(initial_run_button_label)}</button>
+            <button class="button-button ghost" type="submit" formaction="/app/sessions/{escape(session_id)}/experimental-ai-demo/self-play-preview">运行 self-play 预演链</button>
+          </div>
+        </form>
       </article>
     """
 
@@ -4401,7 +4401,7 @@ def _render_experimental_ai_demo_workspace_strip(
         workspace_mode = "bounded autoplay run 已完成并可回看"
     entry_label = "Launcher Demo Boot" if demo_boot else "直接实验页"
     stage_label = "实验工作台待启动"
-    next_action_label = "先选 investigator，再运行单轮实验、self-play 预演或 one-shot autoplay。"
+    next_action_label = "点击一次一键 bounded autopilot run，或先切到单轮实验 / self-play 预演。"
     workflow_step_tones = {
         "launcher": "success" if demo_boot else "",
         "setup": "warn" if demo_boot else "",
@@ -4409,9 +4409,12 @@ def _render_experimental_ai_demo_workspace_strip(
         "observe": "",
         "rerun": "",
     }
+    if demo_boot:
+        stage_label = "一键 bounded autopilot 就绪"
+        next_action_label = "当前页已默认选好 investigator 与 bounded turn limit；点击一次一键 bounded autopilot run 即可。"
     if current_turn_index > 0:
         stage_label = f"第 {current_turn_index} 轮结果已就绪"
-        next_action_label = "先审阅当前轮 observer / 输出结果，再决定 continuity、rerun 或 fresh。"
+        next_action_label = "先审阅当前轮 observer / 输出结果，再决定 continuity、rerun、fresh 或再次一键 bounded autopilot run。"
         workflow_step_tones = {
             "launcher": "success" if demo_boot else "",
             "setup": "success",
@@ -4421,7 +4424,7 @@ def _render_experimental_ai_demo_workspace_strip(
         }
     if one_shot_run_visible:
         stage_label = "Observer 回看阶段"
-        next_action_label = "先回看 bounded autoplay 结果，再决定 rerun 当前 session 或 fresh 重开。"
+        next_action_label = "先回看 bounded autopilot 结果，再决定 rerun 当前 session、fresh 重开或再次一键自动跑。"
         workflow_step_tones = {
             "launcher": "success" if demo_boot else "",
             "setup": "success",
@@ -4752,7 +4755,7 @@ def _render_experimental_one_shot_autoplay_observer_panel(
         <div class="surface-header">
           <div>
             <h2>Autoplay Observer</h2>
-            <p>观察型 keeper/internal 面板：点击一次 one-shot self-play demo 后，会在这里显示 bounded autoplay 状态、逐轮 transcript 与 very small internal helper chain 快照。</p>
+            <p>观察型 keeper/internal 面板：点击一次 bounded autopilot run 后，会在这里显示 bounded autoplay 状态、逐轮 transcript 与 very small internal helper chain 快照。</p>
           </div>
           <span class="tag">idle</span>
         </div>
@@ -4977,7 +4980,7 @@ def _render_experimental_one_shot_run_panel(
       <section class="surface">
         <div class="surface-header">
           <div>
-            <h2>One-shot Self-play Demo Run</h2>
+            <h2>One-click Bounded Autopilot Run</h2>
             <p>当前页受控自动 run：只复用 experimental blocks 与 run-local bridge，不会写入 authoritative state，也不是 full AI GM。上方 observer 只展示当前 run 的 very small internal chain 快照。</p>
           </div>
           <span class="tag warn">{escape(status_label)}</span>
@@ -5654,21 +5657,21 @@ def _render_setup_page(
     hidden_fields_html = ""
     demo_boot_intro_html = ""
     if demo_boot:
-        page_title = "创建 Demo Session 并直接进入 Observer Demo"
+        page_title = "创建 Demo Session 并进入 Bounded Autopilot Demo"
         page_summary = (
-            "launcher / exe demo boot 只补一条 internal 引导链：复用现有模板建局与 bounded one-shot autoplay，"
+            "launcher / exe demo boot 只补一条 internal 引导链：复用现有模板建局与 bounded autopilot run，"
             "让 keeper 不必先翻 Session 列表再找 experimental observer。"
         )
         section_title = "Demo-ready setup"
         section_summary = (
-            "只为 internal observer demo 预填 very small sample session：创建后直接进入 bounded autoplay observer，"
+            "只为 internal observer demo 预填 very small sample session：创建后直接进入 bounded autopilot observer，"
             "不扩成最终产品级 launcher 或 full autopilot runtime。"
         )
         helper_text = (
             "这条入口只服务 keeper/internal demo boot。提交后会先创建 sample session，"
-            "再直接复用现有 one-shot 主链展示 observer autoplay run；不会自动改写该 session 的 authoritative 历史。"
+            "再直接复用现有 bounded autopilot 主链展示 observer autoplay run；不会自动改写该 session 的 authoritative 历史。"
         )
-        submit_label = "创建 Demo Session 并运行 Observer Demo"
+        submit_label = "创建 Demo Session 并运行 Bounded Autopilot"
         hidden_fields_html = """
             <input type="hidden" name="demo_boot" value="1" />
             <input type="hidden" name="launch_target" value="experimental_ai_demo" />
@@ -5677,7 +5680,7 @@ def _render_setup_page(
         demo_boot_intro_html = """
         <section class="notice-panel">
           <h2>Launcher Demo Boot</h2>
-          <p>当前是 keeper/internal 的 demo boot 引导页。默认使用 sample template 与 sample investigator；点击一次即可创建 demo session 并直接看到 bounded autoplay observer 的过程与结果。</p>
+          <p>当前是 keeper/internal 的 demo boot 引导页。默认使用 sample template 与 sample investigator；点击一次即可创建 demo session 并直接看到 bounded autopilot observer 的过程与结果。</p>
         </section>
         """
     body = (
@@ -8714,7 +8717,7 @@ def _render_experimental_ai_demo_one_shot_run_from_service(
     notice_parts = [
         _normalize_form_text(notice_prefix) or "",
         (
-            f"one-shot self-play demo run 已结束：{ending_status_label}。"
+            f"bounded autopilot run 已结束：{ending_status_label}。"
             "当前只保留 run-local transcript / ending summary，不会写入 authoritative state。"
         ),
     ]
@@ -8963,7 +8966,7 @@ def web_app_experimental_ai_demo(
         demo_boot=demo_boot_enabled,
         notice=(
             "launcher / demo boot 已就绪：当前页默认用于 observer autoplay demo。"
-            "已自动选中首个 investigator，并保留 bounded one-shot 参数；点击一次“开始 one-shot self-play demo”即可观察过程与结果。"
+            "已自动选中首个 investigator，并保留 bounded one-click 参数；点击一次“一键开始 bounded autopilot run”即可观察过程与结果。"
             if demo_boot_enabled
             else None
         ),
