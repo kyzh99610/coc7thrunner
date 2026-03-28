@@ -4,7 +4,7 @@ import json
 from dataclasses import dataclass
 from html import escape
 from typing import Any, Callable, Mapping, TypedDict
-from urllib.parse import quote, urlencode
+from urllib.parse import parse_qsl, quote, urlencode, urlsplit, urlunsplit
 
 from fastapi import APIRouter, Depends, Request, status
 from fastapi.responses import HTMLResponse, RedirectResponse
@@ -396,6 +396,14 @@ class ExperimentalAutopilotTokenSurface:
     detail_text: str
     cancel_like_text: str
     stop_reason_text: str = ""
+
+
+@dataclass(slots=True)
+class ExperimentalAutopilotLastRunRecall:
+    ending_status: str
+    ending_reason: str
+    provider_name: str = ""
+    model: str = ""
 
 
 EXPERIMENTAL_ONE_SHOT_VISIBLE_SAFE_FORBIDDEN_MARKERS: tuple[str, ...] = (
@@ -4230,6 +4238,8 @@ def _render_experimental_ai_demo_one_shot_control(
     selected_investigator_id: str,
     max_turns: int,
     autopilot_token_surface_html: str = "",
+    last_run_recall_html: str = "",
+    last_run_recall_hidden_inputs_html: str = "",
     demo_boot: bool = False,
     evaluation_state: Mapping[str, str] | None = None,
     narrative_work_note_value: str = "",
@@ -4248,6 +4258,7 @@ def _render_experimental_ai_demo_one_shot_control(
     return f"""
       {divider_html}
       {autopilot_token_surface_html}
+      {last_run_recall_html}
       <form id="experimental-demo-one-shot-control" method="post" action="/app/sessions/{escape(session_id)}/experimental-ai-demo/one-shot-run" class="form-stack" data-running-status-form="bounded-autopilot" data-running-status-surface="experimental-demo-autopilot-token-surface" data-running-status-badge="experimental-demo-autopilot-status-badge" data-running-status-text="experimental-demo-autopilot-status-text" data-running-status-detail="experimental-demo-autopilot-status-detail" data-running-cancel-like="experimental-demo-autopilot-cancel-like" data-running-status-label="running" data-running-status-tone="warn" data-running-status-text-value="当前 bounded autopilot request 已发出，正在等待服务器响应。" data-running-status-detail-value="当前仍是 request-bounded 页面请求；observer / per-turn snapshots / finalized snapshots 会在响应完成后一起回填，不是后台 job 系统。" data-running-cancel-like-value="当前 request-bounded run 不支持 mid-run cancel；如果已经发出请求，只能等待响应完成后再决定 rerun 或启动全新 Demo。" data-running-submit-text="running：正在等待当前响应">
         <label>
           Investigator 视角
@@ -4261,6 +4272,7 @@ def _render_experimental_ai_demo_one_shot_control(
         <input type="hidden" name="seed_narrative_work_note" value="{escape(narrative_work_note_value)}">
         <input type="hidden" name="seed_keeper_turn_outcome_note" value="{escape(keeper_turn_note_value)}">
         <input type="hidden" name="seed_visible_turn_outcome_note" value="{escape(visible_turn_note_value)}">
+        {last_run_recall_hidden_inputs_html}
         {_render_hidden_experimental_demo_evaluation_state_inputs(evaluation_state)}
         {demo_boot_hint_html}
         <p class="helper">受控 bounded autopilot run：每轮顺序复用 AI KP、AI investigator、keeper continuity draft 与 visible continuity draft，直到成功 / 失败 / 中止 / 达到轮数上限；只保留当前页 run-local transcript，不会写入 authoritative state。</p>
@@ -4336,6 +4348,8 @@ def _render_experimental_ai_demo_primary_controls(
     initial_run_button_label: str,
     one_shot_max_turns: int,
     autopilot_token_surface_html: str = "",
+    last_run_recall_html: str = "",
+    last_run_recall_hidden_inputs_html: str = "",
     demo_boot: bool = False,
     selected_investigator_id: str = "",
     evaluation_state: Mapping[str, str] | None = None,
@@ -4365,6 +4379,8 @@ def _render_experimental_ai_demo_primary_controls(
             selected_investigator_id=selected_investigator_id,
             max_turns=one_shot_max_turns,
             autopilot_token_surface_html=autopilot_token_surface_html,
+            last_run_recall_html=last_run_recall_html,
+            last_run_recall_hidden_inputs_html=last_run_recall_hidden_inputs_html,
             demo_boot=demo_boot,
             evaluation_state=evaluation_state,
             narrative_work_note_value=narrative_work_note_value,
@@ -4400,6 +4416,7 @@ def _render_experimental_ai_demo_workspace_strip(
     selected_investigator_id: str | None,
     current_turn_index: int,
     controls_html: str,
+    next_last_run_recall: ExperimentalAutopilotLastRunRecall | None = None,
     demo_boot: bool = False,
     one_shot_run_visible: bool = False,
 ) -> str:
@@ -4457,6 +4474,17 @@ def _render_experimental_ai_demo_workspace_strip(
             ("Rerun / Fresh", workflow_step_tones["rerun"]),
         )
     )
+    demo_setup_href = _experimental_ai_demo_setup_boot_href_with_recall(
+        recall=next_last_run_recall
+    )
+    recent_demo_href = _append_query_params(
+        "/app/experimental-ai-demo?demo_boot=1",
+        _experimental_autopilot_last_run_recall_query_params(next_last_run_recall),
+    )
+    fresh_demo_href = _experimental_ai_demo_setup_boot_href_with_recall(
+        fresh=True,
+        recall=next_last_run_recall,
+    )
     return f"""
       <section id="experimental-demo-workspace-strip" class="surface experimental-workspace-strip">
         <div class="surface-header">
@@ -4500,10 +4528,10 @@ def _render_experimental_ai_demo_workspace_strip(
           </div>
           <p class="helper"><strong>Workflow-first</strong>：setup 用于建新 demo 或 fresh 重开；单轮、预演和 bounded autoplay 在当前页运行，observer 回看也留在当前页完成。</p>
           <div class="toolbar">
-            <a class="button-link secondary" href="/app/setup?demo_boot=1">Demo Setup</a>
+            <a class="button-link secondary" href="{escape(demo_setup_href)}">Demo Setup</a>
             <a class="button-link ghost" href="/app/sessions/{escape(session_id)}">当前 Session 总览</a>
-            <a class="button-link ghost" href="/app/experimental-ai-demo?demo_boot=1">续看最近 Demo</a>
-            <a class="button-link ghost" href="/app/experimental-ai-demo?demo_boot=1&amp;fresh=1">启动全新 Demo</a>
+            <a class="button-link ghost" href="{escape(recent_demo_href)}">续看最近 Demo</a>
+            <a class="button-link ghost" href="{escape(fresh_demo_href)}">启动全新 Demo</a>
           </div>
         </article>
         <div class="surface-header experimental-workspace-section-head">
@@ -5682,10 +5710,158 @@ def _experimental_ai_demo_setup_boot_href(*, fresh: bool = False) -> str:
     return "/app/setup?demo_boot=1&fresh=1" if fresh else "/app/setup?demo_boot=1"
 
 
+def _build_experimental_autopilot_last_run_recall_from_run_result(
+    run_result: ExperimentalOneShotRunResult,
+) -> ExperimentalAutopilotLastRunRecall:
+    provider_name = ""
+    model = ""
+    for result in (
+        run_result.kp_result,
+        run_result.investigator_result,
+        run_result.keeper_draft_result,
+        run_result.visible_draft_result,
+    ):
+        if result is None:
+            continue
+        if result.provider_name or result.model:
+            provider_name = _normalize_form_text(result.provider_name) or ""
+            model = _normalize_form_text(result.model) or ""
+            break
+    return ExperimentalAutopilotLastRunRecall(
+        ending_status=run_result.ending_status,
+        ending_reason=run_result.ending_reason,
+        provider_name=provider_name,
+        model=model,
+    )
+
+
+def _read_experimental_autopilot_last_run_recall(
+    source: Mapping[str, Any],
+) -> ExperimentalAutopilotLastRunRecall | None:
+    ending_status = _normalize_form_text(source.get("last_run_status")) or ""
+    if not ending_status:
+        return None
+    return ExperimentalAutopilotLastRunRecall(
+        ending_status=ending_status,
+        ending_reason=_normalize_form_text(source.get("last_run_reason")) or "",
+        provider_name=_normalize_form_text(source.get("last_run_provider")) or "",
+        model=_normalize_form_text(source.get("last_run_model")) or "",
+    )
+
+
+def _experimental_autopilot_last_run_recall_query_params(
+    recall: ExperimentalAutopilotLastRunRecall | None,
+) -> dict[str, str]:
+    if recall is None:
+        return {}
+    params = {
+        "last_run_status": recall.ending_status,
+        "last_run_reason": recall.ending_reason,
+    }
+    if recall.provider_name:
+        params["last_run_provider"] = recall.provider_name
+    if recall.model:
+        params["last_run_model"] = recall.model
+    return params
+
+
+def _append_query_params(url: str, params: Mapping[str, str]) -> str:
+    normalized_params = {
+        key: value
+        for key, value in params.items()
+        if _normalize_form_text(value)
+    }
+    if not normalized_params:
+        return url
+    split = urlsplit(url)
+    query_items = dict(parse_qsl(split.query, keep_blank_values=True))
+    query_items.update(normalized_params)
+    return urlunsplit(
+        (
+            split.scheme,
+            split.netloc,
+            split.path,
+            urlencode(query_items),
+            split.fragment,
+        )
+    )
+
+
+def _experimental_ai_demo_session_boot_href_with_recall(
+    session_id: str,
+    *,
+    recall: ExperimentalAutopilotLastRunRecall | None = None,
+) -> str:
+    return _append_query_params(
+        _experimental_ai_demo_session_boot_href(session_id),
+        _experimental_autopilot_last_run_recall_query_params(recall),
+    )
+
+
+def _experimental_ai_demo_setup_boot_href_with_recall(
+    *,
+    fresh: bool = False,
+    recall: ExperimentalAutopilotLastRunRecall | None = None,
+) -> str:
+    return _append_query_params(
+        _experimental_ai_demo_setup_boot_href(fresh=fresh),
+        _experimental_autopilot_last_run_recall_query_params(recall),
+    )
+
+
+def _render_experimental_autopilot_last_run_recall_hidden_inputs(
+    recall: ExperimentalAutopilotLastRunRecall | None,
+) -> str:
+    if recall is None:
+        return ""
+    params = _experimental_autopilot_last_run_recall_query_params(recall)
+    return "".join(
+        f'<input type="hidden" name="{escape(name)}" value="{escape(value)}">'
+        for name, value in params.items()
+    )
+
+
+def _render_experimental_autopilot_last_run_recall_surface(
+    recall: ExperimentalAutopilotLastRunRecall | None,
+) -> str:
+    if recall is None:
+        return ""
+    status_label = EXPERIMENTAL_ONE_SHOT_ENDING_STATUS_LABELS.get(
+        recall.ending_status,
+        recall.ending_status,
+    )
+    reason_label = EXPERIMENTAL_ONE_SHOT_ENDING_REASON_LABELS.get(
+        recall.ending_reason,
+        recall.ending_reason,
+    )
+    runtime_lines = ""
+    if recall.provider_name:
+        runtime_lines += (
+            f"<li>上一轮 provider：{escape(recall.provider_name)}</li>"
+        )
+    if recall.model:
+        runtime_lines += f"<li>上一轮 model：{escape(recall.model)}</li>"
+    return f"""
+      <article id="experimental-demo-last-run-token-history" class="assistant-source-echo">
+        <div class="list-head">
+          <h3>Last Autopilot Recall</h3>
+          <span class="tag">last run</span>
+        </div>
+        <ul class="meta-list">
+          <li>上一轮状态：{escape(status_label)}</li>
+          <li>上一轮停止原因：{escape(reason_label or '未记录')}</li>
+          {runtime_lines}
+        </ul>
+        <p class="helper">只保留最近一次 autopilot run 的 very small recall，不是 full runtime history，也不是 diagnostics dashboard。</p>
+      </article>
+    """
+
+
 def _render_setup_page(
     *,
     form_values: dict[str, Any] | None = None,
     demo_boot: bool = False,
+    last_run_recall: ExperimentalAutopilotLastRunRecall | None = None,
     detail: dict[str, Any] | str | None = None,
     status_code: int = status.HTTP_200_OK,
 ) -> HTMLResponse:
@@ -5771,6 +5947,9 @@ def _render_setup_page(
             <input type="hidden" name="launch_target" value="experimental_ai_demo" />
             <input type="hidden" name="autorun_one_shot" value="1" />
         """
+        hidden_fields_html += _render_experimental_autopilot_last_run_recall_hidden_inputs(
+            last_run_recall
+        )
         demo_boot_intro_html = """
         <section class="notice-panel">
           <h2>Launcher Demo Boot</h2>
@@ -8211,6 +8390,7 @@ def _render_experimental_ai_demo_page(
     visible_draft_applied: bool = False,
     orchestration_preview_html: str = "",
     one_shot_max_turns: int = EXPERIMENTAL_ONE_SHOT_DEFAULT_MAX_TURNS,
+    last_run_recall: ExperimentalAutopilotLastRunRecall | None = None,
     one_shot_run_result: ExperimentalOneShotRunResult | None = None,
     one_shot_run_html: str = "",
     demo_boot: bool = False,
@@ -8235,12 +8415,29 @@ def _render_experimental_ai_demo_page(
             run_result=one_shot_run_result,
         )
     )
+    last_run_recall_html = _render_experimental_autopilot_last_run_recall_surface(
+        last_run_recall
+    )
+    next_last_run_recall = (
+        _build_experimental_autopilot_last_run_recall_from_run_result(
+            one_shot_run_result
+        )
+        if one_shot_run_result is not None
+        else last_run_recall
+    )
+    last_run_recall_hidden_inputs_html = (
+        _render_experimental_autopilot_last_run_recall_hidden_inputs(
+            next_last_run_recall
+        )
+    )
     primary_controls_html = _render_experimental_ai_demo_primary_controls(
         session_id=session_id,
         options_html=options_html,
         initial_run_button_label=initial_run_button_label,
         one_shot_max_turns=one_shot_max_turns,
         autopilot_token_surface_html=autopilot_token_surface_html,
+        last_run_recall_html=last_run_recall_html,
+        last_run_recall_hidden_inputs_html=last_run_recall_hidden_inputs_html,
         demo_boot=demo_boot,
         selected_investigator_id=selected_investigator_id or "",
         evaluation_state=evaluation_state,
@@ -8393,7 +8590,14 @@ def _render_experimental_ai_demo_page(
             title="AI KP + AI Investigator Demo Harness",
             summary="当前本地 Web App Shell 的受控 demo 操作台：把 launcher demo boot、bounded autoplay observer、单轮实验与 rerun / fresh 回链收进同一工作表面。仍是 experimental / non-authoritative，不是 full autopilot runtime。",
             actions=[
-                ("Demo Setup / Fresh", "/app/setup?demo_boot=1&fresh=1", "secondary"),
+                (
+                    "Demo Setup / Fresh",
+                    _experimental_ai_demo_setup_boot_href_with_recall(
+                        fresh=True,
+                        recall=next_last_run_recall,
+                    ),
+                    "secondary",
+                ),
                 ("Keeper Workspace", f"/app/sessions/{session_id}/keeper", "ghost"),
                 ("Session Overview", f"/app/sessions/{session_id}", "ghost"),
             ],
@@ -8406,6 +8610,7 @@ def _render_experimental_ai_demo_page(
             selected_investigator_id=selected_investigator_id,
             current_turn_index=current_turn_index,
             controls_html=primary_controls_html,
+            next_last_run_recall=next_last_run_recall,
             demo_boot=demo_boot,
             one_shot_run_visible=bool(one_shot_run_html),
         )
@@ -8633,6 +8838,7 @@ def _render_app_experimental_ai_demo_from_service(
     visible_draft_applied: bool = False,
     orchestration_preview_html: str = "",
     one_shot_max_turns: int = EXPERIMENTAL_ONE_SHOT_DEFAULT_MAX_TURNS,
+    last_run_recall: ExperimentalAutopilotLastRunRecall | None = None,
     one_shot_run_result: ExperimentalOneShotRunResult | None = None,
     one_shot_run_html: str = "",
     demo_boot: bool = False,
@@ -8719,6 +8925,7 @@ def _render_app_experimental_ai_demo_from_service(
         visible_draft_applied=visible_draft_applied,
         orchestration_preview_html=orchestration_preview_html,
         one_shot_max_turns=one_shot_max_turns,
+        last_run_recall=last_run_recall,
         one_shot_run_result=one_shot_run_result,
         one_shot_run_html=one_shot_run_html,
         demo_boot=demo_boot,
@@ -8736,6 +8943,7 @@ def _render_experimental_ai_demo_one_shot_run_from_service(
     session_id: str,
     selected_investigator_id: str = "",
     max_turns: int = EXPERIMENTAL_ONE_SHOT_DEFAULT_MAX_TURNS,
+    last_run_recall: ExperimentalAutopilotLastRunRecall | None = None,
     evaluation_state: Mapping[str, str] | None = None,
     narrative_work_note_value: str = "",
     keeper_turn_note_value: str = "",
@@ -8782,6 +8990,7 @@ def _render_experimental_ai_demo_one_shot_run_from_service(
             session_id=session_id,
             local_llm_service=local_llm_service,
             selected_investigator_id=resolved_investigator_id,
+            last_run_recall=last_run_recall,
             one_shot_max_turns=max_turns,
             demo_boot=demo_boot,
             narrative_work_note_value=narrative_work_note_value,
@@ -8830,6 +9039,7 @@ def _render_experimental_ai_demo_one_shot_run_from_service(
         session_id=session_id,
         local_llm_service=local_llm_service,
         selected_investigator_id=resolved_investigator_id,
+        last_run_recall=last_run_recall,
         kp_result=run_result.kp_result,
         investigator_result=run_result.investigator_result,
         current_turn_index=run_result.current_turn_index,
@@ -8909,9 +9119,21 @@ def web_app_root() -> RedirectResponse:
 def web_app_setup(
     playtest_group: str | None = None,
     demo_boot: str | None = None,
+    last_run_status: str | None = None,
+    last_run_reason: str | None = None,
+    last_run_provider: str | None = None,
+    last_run_model: str | None = None,
 ) -> HTMLResponse:
     demo_boot_enabled = _is_demo_boot_enabled(demo_boot)
     normalized_group = _normalize_form_text(playtest_group)
+    last_run_recall = _read_experimental_autopilot_last_run_recall(
+        {
+            "last_run_status": last_run_status,
+            "last_run_reason": last_run_reason,
+            "last_run_provider": last_run_provider,
+            "last_run_model": last_run_model,
+        }
+    )
     form_values = (
         _build_demo_boot_setup_form_values(playtest_group=normalized_group)
         if demo_boot_enabled
@@ -8919,7 +9141,11 @@ def web_app_setup(
     )
     if normalized_group:
         form_values["playtest_group"] = normalized_group
-    return _render_setup_page(form_values=form_values, demo_boot=demo_boot_enabled)
+    return _render_setup_page(
+        form_values=form_values,
+        demo_boot=demo_boot_enabled,
+        last_run_recall=last_run_recall,
+    )
 
 
 @router.post("/setup", response_class=HTMLResponse)
@@ -8932,6 +9158,7 @@ async def web_app_create_session(
     demo_boot_enabled = _is_demo_boot_enabled(raw_form.get("demo_boot"))
     launch_target = _normalize_form_text(raw_form.get("launch_target")) or ""
     autorun_one_shot = _is_demo_boot_enabled(raw_form.get("autorun_one_shot"))
+    last_run_recall = _read_experimental_autopilot_last_run_recall(raw_form)
     form = _normalize_playtest_setup_form_values(raw_form)
     try:
         start_request = _build_playtest_setup_request(form)
@@ -8943,13 +9170,17 @@ async def web_app_create_session(
                     local_llm_service=local_llm_service,
                     session_id=response.session_id,
                     max_turns=EXPERIMENTAL_ONE_SHOT_DEFAULT_MAX_TURNS,
+                    last_run_recall=last_run_recall,
                     demo_boot=True,
                     notice_prefix=(
                         "launcher / demo boot 已创建 sample session，并直接复用现有 bounded autoplay observer 主链。"
                     ),
                 )
             return RedirectResponse(
-                url=_experimental_ai_demo_session_boot_href(response.session_id),
+                url=_experimental_ai_demo_session_boot_href_with_recall(
+                    response.session_id,
+                    recall=last_run_recall,
+                ),
                 status_code=status.HTTP_303_SEE_OTHER,
             )
         return RedirectResponse(
@@ -8960,6 +9191,7 @@ async def web_app_create_session(
         return _render_setup_page(
             form_values=form,
             demo_boot=demo_boot_enabled,
+            last_run_recall=last_run_recall,
             detail=extract_error_detail(exc),
             status_code=_exception_status_code(exc),
         )
@@ -8978,21 +9210,39 @@ def web_app_sessions(
 def web_app_experimental_ai_demo_launcher_entry(
     demo_boot: str | None = None,
     fresh: str | None = None,
+    last_run_status: str | None = None,
+    last_run_reason: str | None = None,
+    last_run_provider: str | None = None,
+    last_run_model: str | None = None,
     service: SessionService = Depends(get_session_service),
 ) -> RedirectResponse:
     demo_boot_enabled = _is_demo_boot_enabled(demo_boot)
     fresh_requested = _is_demo_boot_enabled(fresh)
+    last_run_recall = _read_experimental_autopilot_last_run_recall(
+        {
+            "last_run_status": last_run_status,
+            "last_run_reason": last_run_reason,
+            "last_run_provider": last_run_provider,
+            "last_run_model": last_run_model,
+        }
+    )
     sessions = [session.model_dump(mode="json") for session in service.list_sessions()]
     if demo_boot_enabled:
         if not fresh_requested:
             recent_demo_session_id = _resolve_recent_demo_boot_session_id(sessions)
             if recent_demo_session_id:
                 return RedirectResponse(
-                    url=_experimental_ai_demo_session_boot_href(recent_demo_session_id),
+                    url=_experimental_ai_demo_session_boot_href_with_recall(
+                        recent_demo_session_id,
+                        recall=last_run_recall,
+                    ),
                     status_code=status.HTTP_303_SEE_OTHER,
                 )
         return RedirectResponse(
-            url=_experimental_ai_demo_setup_boot_href(fresh=fresh_requested),
+            url=_experimental_ai_demo_setup_boot_href_with_recall(
+                fresh=fresh_requested,
+                recall=last_run_recall,
+            ),
             status_code=status.HTTP_303_SEE_OTHER,
         )
     if not sessions:
@@ -9058,15 +9308,28 @@ def web_app_experimental_ai_demo(
     session_id: str,
     investigator_id: str | None = None,
     demo_boot: str | None = None,
+    last_run_status: str | None = None,
+    last_run_reason: str | None = None,
+    last_run_provider: str | None = None,
+    last_run_model: str | None = None,
     service: SessionService = Depends(get_session_service),
     local_llm_service: LocalLLMService = Depends(get_local_llm_service),
 ) -> HTMLResponse:
     demo_boot_enabled = _is_demo_boot_enabled(demo_boot)
+    last_run_recall = _read_experimental_autopilot_last_run_recall(
+        {
+            "last_run_status": last_run_status,
+            "last_run_reason": last_run_reason,
+            "last_run_provider": last_run_provider,
+            "last_run_model": last_run_model,
+        }
+    )
     return _render_app_experimental_ai_demo_from_service(
         service=service,
         session_id=session_id,
         local_llm_service=local_llm_service,
         selected_investigator_id=_normalize_form_text(investigator_id),
+        last_run_recall=last_run_recall,
         demo_boot=demo_boot_enabled,
         notice=(
             "launcher / demo boot 已就绪：当前页默认用于 observer autoplay demo。"
@@ -9409,6 +9672,7 @@ async def web_app_experimental_ai_demo_one_shot_run(
         session_id=session_id,
         selected_investigator_id=_normalize_form_text(form.get("investigator_id")) or "",
         max_turns=_parse_one_shot_max_turns(form.get("max_turns")),
+        last_run_recall=_read_experimental_autopilot_last_run_recall(form),
         evaluation_state=_normalize_experimental_demo_rubric_state(form),
         narrative_work_note_value=_normalize_form_text(form.get("seed_narrative_work_note"))
         or "",

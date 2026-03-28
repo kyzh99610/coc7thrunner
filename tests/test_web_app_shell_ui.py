@@ -601,6 +601,31 @@ def test_web_app_setup_demo_boot_prefills_demo_ready_defaults(
     assert 'name="investigator_1_name"' in html
     assert 'value="演示调查员"' in html
     assert "创建 Demo Session 并运行 Bounded Autopilot" in html
+    assert 'name="last_run_status"' not in html
+    assert 'name="last_run_reason"' not in html
+    assert 'name="last_run_provider"' not in html
+    assert 'name="last_run_model"' not in html
+
+
+def test_web_app_setup_demo_boot_preserves_last_run_recall_hidden_inputs(
+    client: TestClient,
+) -> None:
+    response = client.get(
+        "/app/setup"
+        "?demo_boot=1"
+        "&fresh=1"
+        "&last_run_status=max_turns"
+        "&last_run_reason=turn_limit_reached"
+        "&last_run_provider=ollama_local"
+        "&last_run_model=qwen3:14b"
+    )
+
+    assert response.status_code == 200
+    html = response.text
+    assert 'name="last_run_status" value="max_turns"' in html
+    assert 'name="last_run_reason" value="turn_limit_reached"' in html
+    assert 'name="last_run_provider" value="ollama_local"' in html
+    assert 'name="last_run_model" value="qwen3:14b"' in html
 
 
 def test_web_app_setup_demo_boot_can_create_session_and_run_one_shot_observer(
@@ -772,6 +797,7 @@ def test_web_app_experimental_ai_demo_page_loads_without_breaking_keeper_shell_w
         "当前 request-bounded run 不支持 mid-run cancel；如果已经发出请求，只能等待响应完成后再决定 rerun 或启动全新 Demo。"
         in html
     )
+    assert 'id="experimental-demo-last-run-token-history"' not in html
     assert 'data-running-status-form="bounded-autopilot"' in html
     assert 'data-running-status-label="running"' in html
     assert 'data-running-submit-text="running：正在等待当前响应"' in html
@@ -864,6 +890,86 @@ def test_experimental_ai_demo_autopilot_token_surface_contract_stays_request_bou
     assert "停止原因：达到当前受控 one-shot demo run 的最大轮数上限。" == done_surface.stop_reason_text
 
 
+def test_experimental_ai_demo_last_run_recall_contract_stays_single_entry_and_small() -> None:
+    run_result = web_app_route.ExperimentalOneShotRunResult(
+        ending_status="max_turns",
+        ending_reason="turn_limit_reached",
+        max_turns=2,
+        turn_records=[],
+        kp_result=LocalLLMAssistantResult(
+            status="success",
+            workspace_key="experimental_ai_kp_demo",
+            task_key="demo_loop",
+            task_label="AI KP Demo Loop",
+            provider_name="stub-local",
+            model="stub-model",
+        ),
+        investigator_result=None,
+        keeper_draft_result=None,
+        visible_draft_result=None,
+        current_turn_index=2,
+        narrative_work_note_value="",
+        keeper_turn_note_value="",
+        visible_turn_note_value="",
+        kp_turn_bridge=None,
+        investigator_turn_bridge=None,
+        keeper_draft_applied=False,
+        visible_draft_applied=False,
+    )
+
+    recall = web_app_route._build_experimental_autopilot_last_run_recall_from_run_result(
+        run_result
+    )
+    params = web_app_route._experimental_autopilot_last_run_recall_query_params(recall)
+
+    assert recall == web_app_route.ExperimentalAutopilotLastRunRecall(
+        ending_status="max_turns",
+        ending_reason="turn_limit_reached",
+        provider_name="stub-local",
+        model="stub-model",
+    )
+    assert params == {
+        "last_run_status": "max_turns",
+        "last_run_reason": "turn_limit_reached",
+        "last_run_provider": "stub-local",
+        "last_run_model": "stub-model",
+    }
+    assert "turn_records" not in params
+    assert "current_turn_index" not in params
+    assert "ending_judgment" not in params
+
+
+def test_web_app_experimental_ai_demo_page_can_recall_last_autopilot_run_near_current_token_surface(
+    client: TestClient,
+) -> None:
+    session_id = _start_keeper_dashboard_session(client)
+    _advance_keeper_dashboard_session(client, session_id)
+
+    response = client.get(
+        f"/app/sessions/{session_id}/experimental-ai-demo"
+        "?last_run_status=max_turns"
+        "&last_run_reason=turn_limit_reached"
+        "&last_run_provider=ollama_local"
+        "&last_run_model=qwen3:14b"
+    )
+
+    assert response.status_code == 200
+    html = response.text
+    assert 'id="experimental-demo-last-run-token-history"' in html
+    assert "Last Autopilot Recall" in html
+    assert "上一轮状态：达到轮数上限" in html
+    assert "上一轮停止原因：达到当前受控 one-shot demo run 的最大轮数上限。" in html
+    assert "上一轮 provider：ollama_local" in html
+    assert "上一轮 model：qwen3:14b" in html
+    assert (
+        "只保留最近一次 autopilot run 的 very small recall，不是 full runtime history，也不是 diagnostics dashboard。"
+        in html
+    )
+    assert html.index('id="experimental-demo-last-run-token-history"') < html.index(
+        'id="experimental-demo-one-shot-control"'
+    )
+
+
 def test_web_app_experimental_ai_demo_launcher_entry_redirects_to_latest_session_demo(
     client: TestClient,
 ) -> None:
@@ -901,6 +1007,29 @@ def test_web_app_experimental_ai_demo_launcher_entry_demo_boot_redirects_to_setu
 
     assert response.status_code == 303
     assert response.headers["location"] == "/app/setup?demo_boot=1"
+
+
+def test_web_app_experimental_ai_demo_launcher_entry_demo_boot_preserves_last_run_recall_when_redirecting_to_setup(
+    client: TestClient,
+) -> None:
+    response = client.get(
+        "/app/experimental-ai-demo"
+        "?demo_boot=1"
+        "&last_run_status=max_turns"
+        "&last_run_reason=turn_limit_reached"
+        "&last_run_provider=ollama_local"
+        "&last_run_model=qwen3:14b",
+        follow_redirects=False,
+    )
+
+    assert response.status_code == 303
+    assert response.headers["location"] == (
+        "/app/setup?demo_boot=1"
+        "&last_run_status=max_turns"
+        "&last_run_reason=turn_limit_reached"
+        "&last_run_provider=ollama_local"
+        "&last_run_model=qwen3%3A14b"
+    )
 
 
 def test_web_app_experimental_ai_demo_launcher_entry_demo_boot_fresh_redirects_to_setup_without_session(
@@ -986,6 +1115,45 @@ def test_web_app_experimental_ai_demo_launcher_entry_demo_boot_reuses_recent_dem
     assert response.headers["location"] != (
         f"/app/sessions/{non_demo_session_id}/experimental-ai-demo"
         "?demo_boot=1#experimental-demo-one-shot-control"
+    )
+
+
+def test_web_app_experimental_ai_demo_launcher_entry_demo_boot_reuse_preserves_last_run_recall(
+    client: TestClient,
+) -> None:
+    demo_create_response = client.post(
+        "/app/setup",
+        data={
+            "keeper_name": "内部演示KP",
+            "playtest_group": web_app_route.DEMO_BOOT_PLAYTEST_GROUP,
+            "scenario_template": "whispering_guesthouse",
+            "investigator_1_name": "演示调查员",
+        },
+        follow_redirects=False,
+    )
+    assert demo_create_response.status_code == 303
+    demo_session_location = demo_create_response.headers["location"]
+    demo_session_id = demo_session_location.rsplit("/", 1)[-1]
+
+    response = client.get(
+        "/app/experimental-ai-demo"
+        "?demo_boot=1"
+        "&last_run_status=success"
+        "&last_run_reason=completed_demo_arc"
+        "&last_run_provider=ollama_local"
+        "&last_run_model=qwen3:14b",
+        follow_redirects=False,
+    )
+
+    assert response.status_code == 303
+    assert response.headers["location"] == (
+        f"/app/sessions/{demo_session_id}/experimental-ai-demo"
+        "?demo_boot=1"
+        "&last_run_status=success"
+        "&last_run_reason=completed_demo_arc"
+        "&last_run_provider=ollama_local"
+        "&last_run_model=qwen3%3A14b"
+        "#experimental-demo-one-shot-control"
     )
 
 
@@ -1429,6 +1597,22 @@ def test_web_app_experimental_ai_demo_one_shot_run_can_finish_with_demo_success_
         "当前 request 已完成；如果你想放弃这次结果，请直接点击“启动全新 Demo”重新开始。"
         in html
     )
+    assert 'name="last_run_status" value="success"' in html
+    assert 'name="last_run_reason" value="completed_demo_arc"' in html
+    assert 'name="last_run_provider" value="stub-local"' in html
+    assert 'name="last_run_model" value="stub-model"' in html
+    assert (
+        'href="/app/setup?demo_boot=1&amp;last_run_status=success&amp;last_run_reason=completed_demo_arc&amp;last_run_provider=stub-local&amp;last_run_model=stub-model"'
+        in html
+    )
+    assert (
+        'href="/app/experimental-ai-demo?demo_boot=1&amp;last_run_status=success&amp;last_run_reason=completed_demo_arc&amp;last_run_provider=stub-local&amp;last_run_model=stub-model"'
+        in html
+    )
+    assert (
+        'href="/app/setup?demo_boot=1&amp;fresh=1&amp;last_run_status=success&amp;last_run_reason=completed_demo_arc&amp;last_run_provider=stub-local&amp;last_run_model=stub-model"'
+        in html
+    )
     assert "bounded autopilot run 已结束：成功。" in html
     assert "结束状态：成功。" in html
     assert "结束原因：已形成连续、可读且带 continuity 的受控 demo mini-arc。" in html
@@ -1529,6 +1713,10 @@ def test_web_app_experimental_ai_demo_one_shot_run_stops_at_turn_limit_when_demo
         "当前 request 已完成；如果你想放弃这次结果，请直接点击“启动全新 Demo”重新开始。"
         in html
     )
+    assert 'name="last_run_status" value="max_turns"' in html
+    assert 'name="last_run_reason" value="turn_limit_reached"' in html
+    assert 'name="last_run_provider" value="stub-local"' in html
+    assert 'name="last_run_model" value="stub-model"' in html
     assert "bounded autopilot run 已结束：达到轮数上限。" in html
     assert "Autoplay Observer" in html
     assert "模式：bounded one-shot autoplay" in html
