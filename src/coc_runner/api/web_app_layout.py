@@ -528,6 +528,21 @@ legend {
 .experimental-workspace-section-head {
   margin-top: 12px;
 }
+.experimental-observer-recall-strip {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 10px;
+  margin: 12px 0 0;
+  padding: 10px 12px;
+  border-radius: 12px;
+  border: 1px dashed rgba(133, 94, 60, 0.28);
+  background: rgba(255, 249, 243, 0.9);
+  align-items: center;
+}
+.experimental-observer-recall-item {
+  color: var(--muted);
+  font-size: 14px;
+}
 .experimental-workspace-grid,
 .experimental-primary-workspace.two-column {
   display: grid;

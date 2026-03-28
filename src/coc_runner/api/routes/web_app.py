@@ -4870,9 +4870,13 @@ def _build_experimental_one_shot_autoplay_turn_observer_snapshots(
 def _render_experimental_one_shot_autoplay_observer_panel(
     *,
     run_result: ExperimentalOneShotRunResult | None = None,
+    last_run_recall: ExperimentalAutopilotLastRunRecall | None = None,
 ) -> str:
+    observer_last_run_recall_html = _render_experimental_observer_last_run_recall_row(
+        last_run_recall
+    )
     if run_result is None or not run_result.turn_records:
-        return """
+        return f"""
       <section id="experimental-demo-observer" class="surface">
         <div class="surface-header">
           <div>
@@ -4881,6 +4885,7 @@ def _render_experimental_one_shot_autoplay_observer_panel(
           </div>
           <span class="tag">idle</span>
         </div>
+        {observer_last_run_recall_html}
         <ul class="meta-list">
           <li>模式：bounded one-shot autoplay</li>
           <li>当前状态：尚未运行。</li>
@@ -4965,6 +4970,7 @@ def _render_experimental_one_shot_autoplay_observer_panel(
           </div>
           <span class="tag warn">{escape(status_label)}</span>
         </div>
+        {observer_last_run_recall_html}
         <ul class="meta-list">
           <li>模式：bounded one-shot autoplay</li>
           <li>当前状态：{escape(status_label)}。</li>
@@ -5042,11 +5048,13 @@ def _build_experimental_one_shot_run_summary_lines(
 def _render_experimental_one_shot_run_panel(
     *,
     run_result: ExperimentalOneShotRunResult,
+    last_run_recall: ExperimentalAutopilotLastRunRecall | None = None,
 ) -> str:
     if not run_result.turn_records:
         return ""
     observer_html = _render_experimental_one_shot_autoplay_observer_panel(
         run_result=run_result,
+        last_run_recall=last_run_recall,
     )
     status_label = EXPERIMENTAL_ONE_SHOT_ENDING_STATUS_LABELS.get(
         run_result.ending_status,
@@ -5854,6 +5862,42 @@ def _render_experimental_autopilot_last_run_recall_surface(
         </ul>
         <p class="helper">只保留最近一次 autopilot run 的 very small recall，不是 full runtime history，也不是 diagnostics dashboard。</p>
       </article>
+    """
+
+
+def _render_experimental_observer_last_run_recall_row(
+    recall: ExperimentalAutopilotLastRunRecall | None,
+) -> str:
+    if recall is None:
+        return ""
+    status_label = EXPERIMENTAL_ONE_SHOT_ENDING_STATUS_LABELS.get(
+        recall.ending_status,
+        recall.ending_status,
+    )
+    reason_label = EXPERIMENTAL_ONE_SHOT_ENDING_REASON_LABELS.get(
+        recall.ending_reason,
+        recall.ending_reason,
+    )
+    runtime_parts: list[str] = []
+    if recall.provider_name:
+        runtime_parts.append(f"provider：{recall.provider_name}")
+    if recall.model:
+        runtime_parts.append(f"model：{recall.model}")
+    runtime_html = ""
+    if runtime_parts:
+        runtime_html = (
+            '<span class="experimental-observer-recall-item">'
+            f'上一轮 runtime：{escape(" / ".join(runtime_parts))}'
+            "</span>"
+        )
+    return f"""
+      <div id="experimental-demo-observer-last-run-recall" class="experimental-observer-recall-strip">
+        <span class="tag">last run</span>
+        <span class="experimental-observer-recall-item">上一轮状态：{escape(status_label)}</span>
+        <span class="experimental-observer-recall-item">上一轮停止原因：{escape(reason_label or "未记录")}</span>
+        {runtime_html}
+        <span class="experimental-observer-recall-item">single-entry recall，不是 history system，也不是 diagnostics dashboard。</span>
+      </div>
     """
 
 
@@ -8446,7 +8490,10 @@ def _render_experimental_ai_demo_page(
         visible_turn_note_value=visible_turn_note_value,
     )
     primary_observer_html = (
-        one_shot_run_html or _render_experimental_one_shot_autoplay_observer_panel()
+        one_shot_run_html
+        or _render_experimental_one_shot_autoplay_observer_panel(
+            last_run_recall=last_run_recall
+        )
     )
     turn_loop_html = _render_experimental_ai_demo_turn_loop_form(
         session_id=session_id,
@@ -9063,6 +9110,7 @@ def _render_experimental_ai_demo_one_shot_run_from_service(
         one_shot_run_result=run_result,
         one_shot_run_html=_render_experimental_one_shot_run_panel(
             run_result=run_result,
+            last_run_recall=last_run_recall,
         ),
         demo_boot=demo_boot,
         notice=notice,

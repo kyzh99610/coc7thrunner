@@ -798,6 +798,7 @@ def test_web_app_experimental_ai_demo_page_loads_without_breaking_keeper_shell_w
         in html
     )
     assert 'id="experimental-demo-last-run-token-history"' not in html
+    assert 'id="experimental-demo-observer-last-run-recall"' not in html
     assert 'data-running-status-form="bounded-autopilot"' in html
     assert 'data-running-status-label="running"' in html
     assert 'data-running-submit-text="running：正在等待当前响应"' in html
@@ -939,6 +940,25 @@ def test_experimental_ai_demo_last_run_recall_contract_stays_single_entry_and_sm
     assert "ending_judgment" not in params
 
 
+def test_experimental_ai_demo_observer_header_recall_stays_single_entry_and_small() -> None:
+    recall_html = web_app_route._render_experimental_observer_last_run_recall_row(
+        web_app_route.ExperimentalAutopilotLastRunRecall(
+            ending_status="max_turns",
+            ending_reason="turn_limit_reached",
+            provider_name="ollama_local",
+            model="qwen3:14b",
+        )
+    )
+
+    assert 'id="experimental-demo-observer-last-run-recall"' in recall_html
+    assert "上一轮状态：达到轮数上限" in recall_html
+    assert "上一轮停止原因：达到当前受控 one-shot demo run 的最大轮数上限。" in recall_html
+    assert "上一轮 runtime：provider：ollama_local / model：qwen3:14b" in recall_html
+    assert "single-entry recall，不是 history system，也不是 diagnostics dashboard。" in recall_html
+    assert "Turn 1" not in recall_html
+    assert "finalized object" not in recall_html
+
+
 def test_web_app_experimental_ai_demo_page_can_recall_last_autopilot_run_near_current_token_surface(
     client: TestClient,
 ) -> None:
@@ -956,17 +976,23 @@ def test_web_app_experimental_ai_demo_page_can_recall_last_autopilot_run_near_cu
     assert response.status_code == 200
     html = response.text
     assert 'id="experimental-demo-last-run-token-history"' in html
+    assert 'id="experimental-demo-observer-last-run-recall"' in html
     assert "Last Autopilot Recall" in html
     assert "上一轮状态：达到轮数上限" in html
     assert "上一轮停止原因：达到当前受控 one-shot demo run 的最大轮数上限。" in html
     assert "上一轮 provider：ollama_local" in html
     assert "上一轮 model：qwen3:14b" in html
+    assert "上一轮 runtime：provider：ollama_local / model：qwen3:14b" in html
+    assert "single-entry recall，不是 history system，也不是 diagnostics dashboard。" in html
     assert (
         "只保留最近一次 autopilot run 的 very small recall，不是 full runtime history，也不是 diagnostics dashboard。"
         in html
     )
     assert html.index('id="experimental-demo-last-run-token-history"') < html.index(
         'id="experimental-demo-one-shot-control"'
+    )
+    assert html.index('id="experimental-demo-observer-last-run-recall"') > html.index(
+        'id="experimental-demo-observer"'
     )
 
 
