@@ -396,6 +396,7 @@ class ExperimentalAutopilotTokenSurface:
     detail_text: str
     cancel_like_text: str
     stop_reason_text: str = ""
+    runtime_text: str = ""
 
 
 @dataclass(slots=True)
@@ -407,9 +408,9 @@ class ExperimentalAutopilotLastRunRecall:
 
 
 @dataclass(slots=True)
-class ExperimentalAutopilotLastRunCopy:
+class ExperimentalAutopilotRuntimeCopy:
     status_text: str
-    stop_reason_text: str
+    stop_reason_text: str = ""
     runtime_text: str = ""
 
 
@@ -4262,11 +4263,14 @@ def _render_experimental_ai_demo_one_shot_control(
         else ""
     )
     divider_html = '<div class="divider"></div>' if include_divider else ""
+    running_token_surface = _build_experimental_ai_demo_autopilot_token_surface(
+        phase="running"
+    )
     return f"""
       {divider_html}
       {autopilot_token_surface_html}
       {last_run_recall_html}
-      <form id="experimental-demo-one-shot-control" method="post" action="/app/sessions/{escape(session_id)}/experimental-ai-demo/one-shot-run" class="form-stack" data-running-status-form="bounded-autopilot" data-running-status-surface="experimental-demo-autopilot-token-surface" data-running-status-badge="experimental-demo-autopilot-status-badge" data-running-status-text="experimental-demo-autopilot-status-text" data-running-status-detail="experimental-demo-autopilot-status-detail" data-running-cancel-like="experimental-demo-autopilot-cancel-like" data-running-status-label="running" data-running-status-tone="warn" data-running-status-text-value="当前 bounded autopilot request 已发出，正在等待服务器响应。" data-running-status-detail-value="当前仍是 request-bounded 页面请求；observer / per-turn snapshots / finalized snapshots 会在响应完成后一起回填，不是后台 job 系统。" data-running-cancel-like-value="当前 request-bounded run 不支持 mid-run cancel；如果已经发出请求，只能等待响应完成后再决定 rerun 或启动全新 Demo。" data-running-submit-text="running：正在等待当前响应">
+      <form id="experimental-demo-one-shot-control" method="post" action="/app/sessions/{escape(session_id)}/experimental-ai-demo/one-shot-run" class="form-stack" data-running-status-form="bounded-autopilot" data-running-status-surface="experimental-demo-autopilot-token-surface" data-running-status-badge="experimental-demo-autopilot-status-badge" data-running-status-text="experimental-demo-autopilot-status-text" data-running-status-detail="experimental-demo-autopilot-status-detail" data-running-cancel-like="experimental-demo-autopilot-cancel-like" data-running-status-label="{escape(running_token_surface.badge_label)}" data-running-status-tone="{escape(running_token_surface.badge_tone)}" data-running-status-text-value="{escape(running_token_surface.status_text)}" data-running-status-detail-value="{escape(running_token_surface.detail_text)}" data-running-cancel-like-value="{escape(running_token_surface.cancel_like_text)}" data-running-submit-text="running：正在等待当前响应">
         <label>
           Investigator 视角
           <select name="investigator_id">{options_html}</select>
@@ -4585,24 +4589,44 @@ def _render_experimental_ai_demo_workspace_strip(
 
 def _build_experimental_ai_demo_autopilot_token_surface(
     *,
+    phase: str | None = None,
     run_result: ExperimentalOneShotRunResult | None = None,
 ) -> ExperimentalAutopilotTokenSurface:
-    ready_cancel_like_text = (
-        "当前 request-bounded run 不支持 mid-run cancel；"
-        "如果已经发出请求，只能等待响应完成后再决定 rerun 或启动全新 Demo。"
+    active_cancel_like_text = (
+        "当前请求不支持 mid-run cancel；如果已经发出，只能等待响应完成后再决定 rerun 或启动全新 Demo。"
     )
+    if phase == "running":
+        current_copy = _build_experimental_autopilot_runtime_copy(
+            subject_label="当前请求",
+            status_label="运行中",
+        )
+        return ExperimentalAutopilotTokenSurface(
+            phase="running",
+            badge_label="running",
+            badge_tone="warn",
+            status_text=current_copy.status_text,
+            detail_text=(
+                "当前请求仍是 request-bounded 页面请求；observer / per-turn "
+                "snapshots / finalized snapshots 会在响应完成后一起回填，不是后台 job 系统。"
+            ),
+            cancel_like_text=active_cancel_like_text,
+        )
     if run_result is None:
+        current_copy = _build_experimental_autopilot_runtime_copy(
+            subject_label="当前请求",
+            status_label="尚未开始",
+        )
         return ExperimentalAutopilotTokenSurface(
             phase="ready",
             badge_label="ready",
             badge_tone="",
-            status_text="当前还没有运行中的 bounded autopilot request。",
+            status_text=current_copy.status_text,
             detail_text=(
                 "点击主按钮后，当前页会先显示 running token；observer / per-turn "
                 "snapshots / finalized snapshots 会在响应完成后回填。"
                 "当前仍是 request-bounded 页面请求，不是后台 job 系统。"
             ),
-            cancel_like_text=ready_cancel_like_text,
+            cancel_like_text=active_cancel_like_text,
         )
     status_label = EXPERIMENTAL_ONE_SHOT_ENDING_STATUS_LABELS.get(
         run_result.ending_status,
@@ -4617,18 +4641,29 @@ def _build_experimental_ai_demo_autopilot_token_surface(
         badge_tone = "warn"
     elif run_result.ending_status in {"failure", "aborted"}:
         badge_tone = "danger"
+    runtime_recall = _build_experimental_autopilot_last_run_recall_from_run_result(
+        run_result
+    )
+    current_copy = _build_experimental_autopilot_runtime_copy(
+        subject_label="当前请求",
+        status_label=status_label,
+        reason_label=reason_label,
+        provider_name=runtime_recall.provider_name,
+        model=runtime_recall.model,
+    )
     return ExperimentalAutopilotTokenSurface(
         phase="done",
         badge_label="done",
         badge_tone=badge_tone,
-        status_text=f"当前 bounded autopilot request 已完成：{status_label}。",
+        status_text=current_copy.status_text,
         detail_text=(
             "observer、per-turn snapshots 与 finalized snapshots 已按当前 run "
             "回填；当前结果仍然只是 run-local transcript，不会写入 authoritative state。"
         ),
-        stop_reason_text=f"停止原因：{reason_label}",
+        stop_reason_text=current_copy.stop_reason_text,
+        runtime_text=current_copy.runtime_text,
         cancel_like_text=(
-            "当前 request 已完成；如果你想放弃这次结果，请直接点击“启动全新 Demo”重新开始。"
+            "当前请求已完成；如果你想放弃这次结果，请直接点击“启动全新 Demo”重新开始。"
         ),
     )
 
@@ -4646,6 +4681,12 @@ def _render_experimental_ai_demo_autopilot_token_surface(
             f'<li id="experimental-demo-autopilot-stop-reason">'
             f"{escape(token_surface.stop_reason_text)}</li>"
         )
+    runtime_html = ""
+    if token_surface.runtime_text:
+        runtime_html = (
+            f'<li id="experimental-demo-autopilot-runtime-text">'
+            f"{escape(token_surface.runtime_text)}</li>"
+        )
     return f"""
       <article id="experimental-demo-autopilot-token-surface" class="assistant-source-echo" data-autopilot-token-phase="{escape(token_surface.phase)}">
         <div class="list-head">
@@ -4656,6 +4697,7 @@ def _render_experimental_ai_demo_autopilot_token_surface(
         <ul class="meta-list">
           <li id="experimental-demo-autopilot-status-detail">{escape(token_surface.detail_text)}</li>
           {stop_reason_html}
+          {runtime_html}
         </ul>
         <p class="helper"><span class="tag warn">cancel-like</span> <span id="experimental-demo-autopilot-cancel-like">{escape(token_surface.cancel_like_text)}</span></p>
       </article>
@@ -5863,7 +5905,7 @@ def _render_experimental_autopilot_last_run_recall_surface(
 
 def _build_experimental_autopilot_last_run_copy(
     recall: ExperimentalAutopilotLastRunRecall,
-) -> ExperimentalAutopilotLastRunCopy:
+) -> ExperimentalAutopilotRuntimeCopy:
     status_label = EXPERIMENTAL_ONE_SHOT_ENDING_STATUS_LABELS.get(
         recall.ending_status,
         recall.ending_status,
@@ -5872,17 +5914,37 @@ def _build_experimental_autopilot_last_run_copy(
         recall.ending_reason,
         recall.ending_reason,
     )
+    return _build_experimental_autopilot_runtime_copy(
+        subject_label="上一轮",
+        status_label=status_label,
+        reason_label=reason_label or "未记录",
+        provider_name=recall.provider_name,
+        model=recall.model,
+    )
+
+
+def _build_experimental_autopilot_runtime_copy(
+    *,
+    subject_label: str,
+    status_label: str,
+    reason_label: str | None = None,
+    provider_name: str = "",
+    model: str = "",
+) -> ExperimentalAutopilotRuntimeCopy:
     runtime_parts: list[str] = []
-    if recall.provider_name:
-        runtime_parts.append(f"provider：{recall.provider_name}")
-    if recall.model:
-        runtime_parts.append(f"model：{recall.model}")
+    if provider_name:
+        runtime_parts.append(f"provider：{provider_name}")
+    if model:
+        runtime_parts.append(f"model：{model}")
     runtime_text = ""
     if runtime_parts:
-        runtime_text = "上一轮 runtime：" + " / ".join(runtime_parts)
-    return ExperimentalAutopilotLastRunCopy(
-        status_text=f"上一轮状态：{status_label}",
-        stop_reason_text=f"上一轮停止原因：{reason_label or '未记录'}",
+        runtime_text = f"{subject_label} runtime：" + " / ".join(runtime_parts)
+    stop_reason_text = ""
+    if reason_label:
+        stop_reason_text = f"{subject_label}停止原因：{reason_label}"
+    return ExperimentalAutopilotRuntimeCopy(
+        status_text=f"{subject_label}状态：{status_label}",
+        stop_reason_text=stop_reason_text,
         runtime_text=runtime_text,
     )
 

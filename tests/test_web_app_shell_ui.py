@@ -790,11 +790,11 @@ def test_web_app_experimental_ai_demo_page_loads_without_breaking_keeper_shell_w
     assert 'id="experimental-demo-autopilot-token-surface"' in html
     assert 'data-autopilot-token-phase="ready"' in html
     assert "Autopilot Request Token" in html
-    assert "当前还没有运行中的 bounded autopilot request。" in html
+    assert "当前请求状态：尚未开始" in html
     assert "不是后台 job 系统" in html
     assert "cancel-like" in html
     assert (
-        "当前 request-bounded run 不支持 mid-run cancel；如果已经发出请求，只能等待响应完成后再决定 rerun 或启动全新 Demo。"
+        "当前请求不支持 mid-run cancel；如果已经发出，只能等待响应完成后再决定 rerun 或启动全新 Demo。"
         in html
     )
     assert 'id="experimental-demo-last-run-token-history"' not in html
@@ -851,13 +851,16 @@ def test_web_app_experimental_ai_demo_page_promotes_one_click_bounded_autopilot_
     assert "受控 bounded autopilot run" in html
     assert f'action="/app/sessions/{session_id}/experimental-ai-demo/one-shot-run"' in html
     assert 'data-running-status-form="bounded-autopilot"' in html
-    assert 'data-running-status-text-value="当前 bounded autopilot request 已发出，正在等待服务器响应。"' in html
+    assert 'data-running-status-text-value="当前请求状态：运行中"' in html
     assert html.index("一键 Bounded Autopilot") < html.index("单轮 / 预演入口")
     assert "不是 full autopilot runtime，也不是最终消费者 app shell" in html
 
 
 def test_experimental_ai_demo_autopilot_token_surface_contract_stays_request_bounded_and_honest_about_cancel() -> None:
     ready_surface = web_app_route._build_experimental_ai_demo_autopilot_token_surface()
+    running_surface = web_app_route._build_experimental_ai_demo_autopilot_token_surface(
+        phase="running"
+    )
     done_surface = web_app_route._build_experimental_ai_demo_autopilot_token_surface(
         run_result=web_app_route.ExperimentalOneShotRunResult(
             ending_status="max_turns",
@@ -881,14 +884,25 @@ def test_experimental_ai_demo_autopilot_token_surface_contract_stays_request_bou
 
     assert ready_surface.phase == "ready"
     assert ready_surface.badge_label == "ready"
+    assert ready_surface.status_text == "当前请求状态：尚未开始"
     assert "request-bounded 页面请求" in ready_surface.detail_text
     assert "不是后台 job 系统" in ready_surface.detail_text
-    assert "不支持 mid-run cancel" in ready_surface.cancel_like_text
+    assert "当前请求不支持 mid-run cancel" in ready_surface.cancel_like_text
+    assert running_surface.phase == "running"
+    assert running_surface.badge_label == "running"
+    assert running_surface.badge_tone == "warn"
+    assert running_surface.status_text == "当前请求状态：运行中"
+    assert "当前请求仍是 request-bounded 页面请求" in running_surface.detail_text
+    assert "当前请求不支持 mid-run cancel" in running_surface.cancel_like_text
     assert done_surface.phase == "done"
     assert done_surface.badge_label == "done"
     assert done_surface.badge_tone == "warn"
-    assert "已完成：达到轮数上限。" in done_surface.status_text
-    assert "停止原因：达到当前受控 one-shot demo run 的最大轮数上限。" == done_surface.stop_reason_text
+    assert done_surface.status_text == "当前请求状态：达到轮数上限"
+    assert (
+        "当前请求停止原因：达到当前受控 one-shot demo run 的最大轮数上限。"
+        == done_surface.stop_reason_text
+    )
+    assert done_surface.runtime_text == ""
 
 
 def test_experimental_ai_demo_last_run_recall_contract_stays_single_entry_and_small() -> None:
@@ -941,6 +955,13 @@ def test_experimental_ai_demo_last_run_recall_contract_stays_single_entry_and_sm
 
 
 def test_experimental_ai_demo_last_run_copy_mapping_aligns_status_reason_and_runtime_wording() -> None:
+    current_copy = web_app_route._build_experimental_autopilot_runtime_copy(
+        subject_label="当前请求",
+        status_label="达到轮数上限",
+        reason_label="达到当前受控 one-shot demo run 的最大轮数上限。",
+        provider_name="ollama_local",
+        model="qwen3:14b",
+    )
     recall_copy = web_app_route._build_experimental_autopilot_last_run_copy(
         web_app_route.ExperimentalAutopilotLastRunRecall(
             ending_status="max_turns",
@@ -950,7 +971,12 @@ def test_experimental_ai_demo_last_run_copy_mapping_aligns_status_reason_and_run
         )
     )
 
-    assert recall_copy == web_app_route.ExperimentalAutopilotLastRunCopy(
+    assert current_copy == web_app_route.ExperimentalAutopilotRuntimeCopy(
+        status_text="当前请求状态：达到轮数上限",
+        stop_reason_text="当前请求停止原因：达到当前受控 one-shot demo run 的最大轮数上限。",
+        runtime_text="当前请求 runtime：provider：ollama_local / model：qwen3:14b",
+    )
+    assert recall_copy == web_app_route.ExperimentalAutopilotRuntimeCopy(
         status_text="上一轮状态：达到轮数上限",
         stop_reason_text="上一轮停止原因：达到当前受控 one-shot demo run 的最大轮数上限。",
         runtime_text="上一轮 runtime：provider：ollama_local / model：qwen3:14b",
@@ -1632,12 +1658,14 @@ def test_web_app_experimental_ai_demo_one_shot_run_can_finish_with_demo_success_
     assert 'id="experimental-demo-autopilot-token-surface"' in html
     assert 'data-autopilot-token-phase="done"' in html
     assert ">done</span>" in html
-    assert "当前 bounded autopilot request 已完成：成功。" in html
+    assert "当前请求状态：成功" in html
     assert 'id="experimental-demo-autopilot-stop-reason"' in html
     assert (
-        "当前 request 已完成；如果你想放弃这次结果，请直接点击“启动全新 Demo”重新开始。"
+        "当前请求已完成；如果你想放弃这次结果，请直接点击“启动全新 Demo”重新开始。"
         in html
     )
+    assert 'id="experimental-demo-autopilot-runtime-text"' in html
+    assert "当前请求 runtime：provider：stub-local / model：stub-model" in html
     assert 'name="last_run_status" value="success"' in html
     assert 'name="last_run_reason" value="completed_demo_arc"' in html
     assert 'name="last_run_provider" value="stub-local"' in html
@@ -1674,7 +1702,7 @@ def test_web_app_experimental_ai_demo_one_shot_run_can_finish_with_demo_success_
     assert "finalized object：turn_memo" in html
     assert "finalized 摘要：整理为当前轮 finalized memo：" in html
     assert "finalized object：input_pin_focus" not in html
-    assert "停止原因：已形成连续、可读且带 continuity 的受控 demo mini-arc。" in html
+    assert "当前请求停止原因：已形成连续、可读且带 continuity 的受控 demo mini-arc。" in html
     assert "种子上下文" in html
     assert "跟进提示" in html
     assert "执行意图" in html
@@ -1749,11 +1777,12 @@ def test_web_app_experimental_ai_demo_one_shot_run_stops_at_turn_limit_when_demo
     assert 'id="experimental-demo-autopilot-token-surface"' in html
     assert 'data-autopilot-token-phase="done"' in html
     assert ">done</span>" in html
-    assert "当前 bounded autopilot request 已完成：达到轮数上限。" in html
+    assert "当前请求状态：达到轮数上限" in html
     assert (
-        "当前 request 已完成；如果你想放弃这次结果，请直接点击“启动全新 Demo”重新开始。"
+        "当前请求已完成；如果你想放弃这次结果，请直接点击“启动全新 Demo”重新开始。"
         in html
     )
+    assert "当前请求 runtime：provider：stub-local / model：stub-model" in html
     assert 'name="last_run_status" value="max_turns"' in html
     assert 'name="last_run_reason" value="turn_limit_reached"' in html
     assert 'name="last_run_provider" value="stub-local"' in html
@@ -1769,7 +1798,7 @@ def test_web_app_experimental_ai_demo_one_shot_run_stops_at_turn_limit_when_demo
     assert "finalized object：turn_memo" in html
     assert "finalized 摘要：整理为当前轮 finalized memo：" in html
     assert "finalized object：input_advance_focus" not in html
-    assert "停止原因：达到当前受控 one-shot demo run 的最大轮数上限。" in html
+    assert "当前请求停止原因：达到当前受控 one-shot demo run 的最大轮数上限。" in html
     assert "结束状态：达到轮数上限。" in html
     assert "结束原因：达到当前受控 one-shot demo run 的最大轮数上限。" in html
     assert "场景结局判定：部分成功。" in html
