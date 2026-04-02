@@ -791,6 +791,7 @@ def test_web_app_experimental_ai_demo_page_loads_without_breaking_keeper_shell_w
     assert 'data-autopilot-token-phase="ready"' in html
     assert "Autopilot Request Token" in html
     assert "当前请求状态：尚未开始" in html
+    assert html.count("当前请求状态：尚未开始") == 2
     assert "不是后台 job 系统" in html
     assert "cancel-like" in html
     assert (
@@ -804,7 +805,7 @@ def test_web_app_experimental_ai_demo_page_loads_without_breaking_keeper_shell_w
     assert 'data-running-submit-text="running：正在等待当前响应"' in html
     assert "Autoplay Observer" in html
     assert "模式：bounded one-shot autoplay" in html
-    assert "当前状态：尚未运行。" in html
+    assert "当前请求状态：尚未开始" in html
     assert "按轮快照：运行后会在这里追加 very small run-local snapshot 列表。" in html
     assert "按轮 finalized：运行后会在每轮卡片里附加 1 个代表性的 finalized internal object。" in html
     assert 'name="max_turns"' in html
@@ -980,6 +981,41 @@ def test_experimental_ai_demo_last_run_copy_mapping_aligns_status_reason_and_run
         status_text="上一轮状态：达到轮数上限",
         stop_reason_text="上一轮停止原因：达到当前受控 one-shot demo run 的最大轮数上限。",
         runtime_text="上一轮 runtime：provider：ollama_local / model：qwen3:14b",
+    )
+
+
+def test_experimental_ai_demo_observer_current_state_copy_reuses_current_request_runtime_wording() -> None:
+    idle_copy = web_app_route._build_experimental_observer_current_state_copy()
+    done_copy = web_app_route._build_experimental_observer_current_state_copy(
+        run_result=web_app_route.ExperimentalOneShotRunResult(
+            ending_status="max_turns",
+            ending_reason="turn_limit_reached",
+            max_turns=2,
+            turn_records=[],
+            kp_result=None,
+            investigator_result=None,
+            keeper_draft_result=None,
+            visible_draft_result=None,
+            current_turn_index=2,
+            narrative_work_note_value="",
+            keeper_turn_note_value="",
+            visible_turn_note_value="",
+            kp_turn_bridge=None,
+            investigator_turn_bridge=None,
+            keeper_draft_applied=False,
+            visible_draft_applied=False,
+        )
+    )
+
+    assert idle_copy == web_app_route.ExperimentalAutopilotRuntimeCopy(
+        status_text="当前请求状态：尚未开始",
+        stop_reason_text="",
+        runtime_text="",
+    )
+    assert done_copy == web_app_route.ExperimentalAutopilotRuntimeCopy(
+        status_text="当前请求状态：达到轮数上限",
+        stop_reason_text="当前请求停止原因：达到当前受控 one-shot demo run 的最大轮数上限。",
+        runtime_text="",
     )
 
 
@@ -1790,8 +1826,8 @@ def test_web_app_experimental_ai_demo_one_shot_run_stops_at_turn_limit_when_demo
     assert "bounded autopilot run 已结束：达到轮数上限。" in html
     assert "Autoplay Observer" in html
     assert "模式：bounded one-shot autoplay" in html
-    assert "当前状态：达到轮数上限。" in html
-    assert "当前停止原因：达到当前受控 one-shot demo run 的最大轮数上限。" in html
+    assert html.count("当前请求状态：达到轮数上限") == 2
+    assert html.count("当前请求停止原因：达到当前受控 one-shot demo run 的最大轮数上限。") == 2
     assert "按轮内部快照" in html
     assert "第 1 轮快照" in html
     assert "第 2 轮快照" in html

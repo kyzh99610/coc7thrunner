@@ -4924,6 +4924,9 @@ def _render_experimental_one_shot_autoplay_observer_panel(
     observer_last_run_recall_html = _render_experimental_observer_last_run_recall_row(
         last_run_recall
     )
+    current_run_copy = _build_experimental_observer_current_state_copy(
+        run_result=run_result if run_result and run_result.turn_records else None
+    )
     if run_result is None or not run_result.turn_records:
         return f"""
       <section id="experimental-demo-observer" class="surface">
@@ -4937,7 +4940,7 @@ def _render_experimental_one_shot_autoplay_observer_panel(
         {observer_last_run_recall_html}
         <ul class="meta-list">
           <li>模式：bounded one-shot autoplay</li>
-          <li>当前状态：尚未运行。</li>
+          <li>{escape(current_run_copy.status_text)}</li>
           <li>停止边界：success / failure / aborted / max_turns。</li>
           <li>按轮快照：运行后会在这里追加 very small run-local snapshot 列表。</li>
           <li>按轮 finalized：运行后会在每轮卡片里附加 1 个代表性的 finalized internal object。</li>
@@ -4948,10 +4951,6 @@ def _render_experimental_one_shot_autoplay_observer_panel(
     status_label = EXPERIMENTAL_ONE_SHOT_ENDING_STATUS_LABELS.get(
         run_result.ending_status,
         run_result.ending_status,
-    )
-    reason_label = EXPERIMENTAL_ONE_SHOT_ENDING_REASON_LABELS.get(
-        run_result.ending_reason,
-        run_result.ending_reason,
     )
     chain_cards = _build_experimental_one_shot_autoplay_observer_cards(
         run_result=run_result,
@@ -5022,8 +5021,8 @@ def _render_experimental_one_shot_autoplay_observer_panel(
         {observer_last_run_recall_html}
         <ul class="meta-list">
           <li>模式：bounded one-shot autoplay</li>
-          <li>当前状态：{escape(status_label)}。</li>
-          <li>当前停止原因：{escape(reason_label)}</li>
+          <li>{escape(current_run_copy.status_text)}</li>
+          <li>{escape(current_run_copy.stop_reason_text)}</li>
           <li>已跑轮次：{escape(str(len(run_result.turn_records)))} / 最大 {escape(str(run_result.max_turns))}</li>
           <li>当前只显示 4 个代表性 internal helper object：种子上下文、跟进提示、执行意图、Memo 输入。</li>
         </ul>
@@ -5946,6 +5945,30 @@ def _build_experimental_autopilot_runtime_copy(
         status_text=f"{subject_label}状态：{status_label}",
         stop_reason_text=stop_reason_text,
         runtime_text=runtime_text,
+    )
+
+
+def _build_experimental_observer_current_state_copy(
+    *,
+    run_result: ExperimentalOneShotRunResult | None = None,
+) -> ExperimentalAutopilotRuntimeCopy:
+    if run_result is None:
+        return _build_experimental_autopilot_runtime_copy(
+            subject_label="当前请求",
+            status_label="尚未开始",
+        )
+    status_label = EXPERIMENTAL_ONE_SHOT_ENDING_STATUS_LABELS.get(
+        run_result.ending_status,
+        run_result.ending_status,
+    )
+    reason_label = EXPERIMENTAL_ONE_SHOT_ENDING_REASON_LABELS.get(
+        run_result.ending_reason,
+        run_result.ending_reason,
+    )
+    return _build_experimental_autopilot_runtime_copy(
+        subject_label="当前请求",
+        status_label=status_label,
+        reason_label=reason_label,
     )
 
 
