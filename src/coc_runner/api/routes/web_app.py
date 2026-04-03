@@ -378,6 +378,10 @@ class ExperimentalOneShotRunResult:
     investigator_turn_bridge: dict[str, Any] | None
     keeper_draft_applied: bool
     visible_draft_applied: bool
+    successful_turn_streak: int = 0
+    stagnation_streak: int = 0
+    missing_continuity_streak: int = 0
+    previous_signature: str = ""
     scenario_preset_ending: ExperimentalScenarioPresetEnding | None = None
     scenario_preset_internal_diagnostic: (
         ExperimentalScenarioPresetInternalDiagnostic | None
@@ -412,6 +416,39 @@ class ExperimentalAutopilotRuntimeCopy:
     status_text: str
     stop_reason_text: str = ""
     runtime_text: str = ""
+
+
+@dataclass(slots=True)
+class ExperimentalAutonomousSessionLoopCheckpoint:
+    selected_investigator_id: str
+    current_turn_index: int
+    last_batch_max_turns: int
+    continuation_count: int
+    ending_status: str
+    ending_reason: str
+    provider_name: str = ""
+    model: str = ""
+    narrative_work_note_value: str = ""
+    keeper_turn_note_value: str = ""
+    visible_turn_note_value: str = ""
+    previous_kp_payload: dict[str, str] | None = None
+    previous_investigator_payload: dict[str, str] | None = None
+    successful_turn_streak: int = 0
+    stagnation_streak: int = 0
+    missing_continuity_streak: int = 0
+    previous_signature: str = ""
+
+
+@dataclass(slots=True)
+class ExperimentalAutonomousSessionLoopSurface:
+    phase: str
+    badge_label: str
+    badge_tone: str
+    loop_status_text: str
+    detail_text: str
+    batch_status_text: str
+    batch_stop_reason_text: str = ""
+    batch_runtime_text: str = ""
 
 
 EXPERIMENTAL_ONE_SHOT_VISIBLE_SAFE_FORBIDDEN_MARKERS: tuple[str, ...] = (
@@ -2757,6 +2794,13 @@ def _run_experimental_one_shot_demo(
     initial_narrative_work_note_value: str = "",
     initial_keeper_turn_note_value: str = "",
     initial_visible_turn_note_value: str = "",
+    initial_turn_index: int = 0,
+    initial_kp_payload: dict[str, str] | None = None,
+    initial_investigator_payload: dict[str, str] | None = None,
+    initial_successful_turn_streak: int = 0,
+    initial_stagnation_streak: int = 0,
+    initial_missing_continuity_streak: int = 0,
+    initial_previous_signature: str = "",
 ) -> ExperimentalOneShotRunResult:
     runtime_assistance = service.get_keeper_runtime_assistance(keeper_view=keeper_view)
     forbidden_terms = _build_experimental_one_shot_forbidden_visible_terms(
@@ -2764,16 +2808,16 @@ def _run_experimental_one_shot_demo(
         investigator_view=investigator_view,
     )
     turn_records: list[ExperimentalOneShotTurnRecord] = []
-    previous_kp_payload: dict[str, str] | None = None
-    previous_investigator_payload: dict[str, str] | None = None
-    current_turn_index = 0
+    previous_kp_payload = initial_kp_payload
+    previous_investigator_payload = initial_investigator_payload
+    current_turn_index = max(initial_turn_index, 0)
     narrative_work_note_value = initial_narrative_work_note_value
     keeper_turn_note_value = initial_keeper_turn_note_value
     visible_turn_note_value = initial_visible_turn_note_value
-    successful_turn_streak = 0
-    stagnation_streak = 0
-    missing_continuity_streak = 0
-    previous_signature = ""
+    successful_turn_streak = max(initial_successful_turn_streak, 0)
+    stagnation_streak = max(initial_stagnation_streak, 0)
+    missing_continuity_streak = max(initial_missing_continuity_streak, 0)
+    previous_signature = _normalize_form_text(initial_previous_signature) or ""
     last_turn: dict[str, Any] = {
         "kp_result": None,
         "investigator_result": None,
@@ -2784,6 +2828,47 @@ def _run_experimental_one_shot_demo(
         "keeper_draft_applied": False,
         "visible_draft_applied": False,
     }
+
+    def _build_result(
+        *,
+        ending_status: str,
+        ending_reason: str,
+        kp_result: LocalLLMAssistantResult | None,
+        investigator_result: LocalLLMAssistantResult | None,
+        keeper_draft_result: LocalLLMAssistantResult | None,
+        visible_draft_result: LocalLLMAssistantResult | None,
+        current_turn_index_value: int,
+        kp_turn_bridge: dict[str, Any] | None,
+        investigator_turn_bridge: dict[str, Any] | None,
+        keeper_draft_applied: bool,
+        visible_draft_applied: bool,
+        error_message: str = "",
+        secret_breach_term: str = "",
+    ) -> ExperimentalOneShotRunResult:
+        return ExperimentalOneShotRunResult(
+            ending_status=ending_status,
+            ending_reason=ending_reason,
+            max_turns=max_turns,
+            turn_records=turn_records,
+            kp_result=kp_result,
+            investigator_result=investigator_result,
+            keeper_draft_result=keeper_draft_result,
+            visible_draft_result=visible_draft_result,
+            current_turn_index=current_turn_index_value,
+            narrative_work_note_value=narrative_work_note_value,
+            keeper_turn_note_value=keeper_turn_note_value,
+            visible_turn_note_value=visible_turn_note_value,
+            kp_turn_bridge=kp_turn_bridge,
+            investigator_turn_bridge=investigator_turn_bridge,
+            keeper_draft_applied=keeper_draft_applied,
+            visible_draft_applied=visible_draft_applied,
+            successful_turn_streak=successful_turn_streak,
+            stagnation_streak=stagnation_streak,
+            missing_continuity_streak=missing_continuity_streak,
+            previous_signature=previous_signature,
+            error_message=error_message,
+            secret_breach_term=secret_breach_term,
+        )
 
     for _ in range(max_turns):
         context_pack = _build_keeper_context_pack_payload(
@@ -2860,19 +2945,14 @@ def _run_experimental_one_shot_demo(
                 ),
                 "",
             )
-            return ExperimentalOneShotRunResult(
+            return _build_result(
                 ending_status="aborted",
                 ending_reason="llm_unavailable",
-                max_turns=max_turns,
-                turn_records=turn_records,
                 kp_result=kp_result,
                 investigator_result=investigator_result,
                 keeper_draft_result=keeper_draft_result,
                 visible_draft_result=visible_draft_result,
-                current_turn_index=current_turn_index,
-                narrative_work_note_value=narrative_work_note_value,
-                keeper_turn_note_value=keeper_turn_note_value,
-                visible_turn_note_value=visible_turn_note_value,
+                current_turn_index_value=current_turn_index,
                 kp_turn_bridge=turn["kp_turn_bridge"],
                 investigator_turn_bridge=turn["investigator_turn_bridge"],
                 keeper_draft_applied=bool(turn["keeper_draft_applied"]),
@@ -2885,19 +2965,14 @@ def _run_experimental_one_shot_demo(
             forbidden_terms=forbidden_terms,
         )
         if secret_breach_term:
-            return ExperimentalOneShotRunResult(
+            return _build_result(
                 ending_status="aborted",
                 ending_reason="visible_secret_breach",
-                max_turns=max_turns,
-                turn_records=turn_records,
                 kp_result=kp_result,
                 investigator_result=investigator_result,
                 keeper_draft_result=keeper_draft_result,
                 visible_draft_result=visible_draft_result,
-                current_turn_index=current_turn_index,
-                narrative_work_note_value=narrative_work_note_value,
-                keeper_turn_note_value=keeper_turn_note_value,
-                visible_turn_note_value=visible_turn_note_value,
+                current_turn_index_value=current_turn_index,
                 kp_turn_bridge=turn["kp_turn_bridge"],
                 investigator_turn_bridge=turn["investigator_turn_bridge"],
                 keeper_draft_applied=bool(turn["keeper_draft_applied"]),
@@ -2926,76 +3001,56 @@ def _run_experimental_one_shot_demo(
         previous_kp_payload = turn["kp_payload"]
         previous_investigator_payload = turn["investigator_payload"]
         if successful_turn_streak >= EXPERIMENTAL_ONE_SHOT_SUCCESS_STREAK_TARGET:
-            return ExperimentalOneShotRunResult(
+            return _build_result(
                 ending_status="success",
                 ending_reason="completed_demo_arc",
-                max_turns=max_turns,
-                turn_records=turn_records,
                 kp_result=kp_result,
                 investigator_result=investigator_result,
                 keeper_draft_result=keeper_draft_result,
                 visible_draft_result=visible_draft_result,
-                current_turn_index=current_turn_index,
-                narrative_work_note_value=narrative_work_note_value,
-                keeper_turn_note_value=keeper_turn_note_value,
-                visible_turn_note_value=visible_turn_note_value,
+                current_turn_index_value=current_turn_index,
                 kp_turn_bridge=turn["kp_turn_bridge"],
                 investigator_turn_bridge=turn["investigator_turn_bridge"],
                 keeper_draft_applied=bool(turn["keeper_draft_applied"]),
                 visible_draft_applied=bool(turn["visible_draft_applied"]),
             )
         if stagnation_streak >= EXPERIMENTAL_ONE_SHOT_STAGNATION_STREAK_LIMIT:
-            return ExperimentalOneShotRunResult(
+            return _build_result(
                 ending_status="failure",
                 ending_reason="stagnation_threshold",
-                max_turns=max_turns,
-                turn_records=turn_records,
                 kp_result=kp_result,
                 investigator_result=investigator_result,
                 keeper_draft_result=keeper_draft_result,
                 visible_draft_result=visible_draft_result,
-                current_turn_index=current_turn_index,
-                narrative_work_note_value=narrative_work_note_value,
-                keeper_turn_note_value=keeper_turn_note_value,
-                visible_turn_note_value=visible_turn_note_value,
+                current_turn_index_value=current_turn_index,
                 kp_turn_bridge=turn["kp_turn_bridge"],
                 investigator_turn_bridge=turn["investigator_turn_bridge"],
                 keeper_draft_applied=bool(turn["keeper_draft_applied"]),
                 visible_draft_applied=bool(turn["visible_draft_applied"]),
             )
         if missing_continuity_streak >= EXPERIMENTAL_ONE_SHOT_MISSING_CONTINUITY_STREAK_LIMIT:
-            return ExperimentalOneShotRunResult(
+            return _build_result(
                 ending_status="failure",
                 ending_reason="missing_continuity_threshold",
-                max_turns=max_turns,
-                turn_records=turn_records,
                 kp_result=kp_result,
                 investigator_result=investigator_result,
                 keeper_draft_result=keeper_draft_result,
                 visible_draft_result=visible_draft_result,
-                current_turn_index=current_turn_index,
-                narrative_work_note_value=narrative_work_note_value,
-                keeper_turn_note_value=keeper_turn_note_value,
-                visible_turn_note_value=visible_turn_note_value,
+                current_turn_index_value=current_turn_index,
                 kp_turn_bridge=turn["kp_turn_bridge"],
                 investigator_turn_bridge=turn["investigator_turn_bridge"],
                 keeper_draft_applied=bool(turn["keeper_draft_applied"]),
                 visible_draft_applied=bool(turn["visible_draft_applied"]),
             )
 
-    return ExperimentalOneShotRunResult(
+    return _build_result(
         ending_status="max_turns",
         ending_reason="turn_limit_reached",
-        max_turns=max_turns,
-        turn_records=turn_records,
         kp_result=last_turn["kp_result"],
         investigator_result=last_turn["investigator_result"],
         keeper_draft_result=last_turn["keeper_draft_result"],
         visible_draft_result=last_turn["visible_draft_result"],
-        current_turn_index=current_turn_index,
-        narrative_work_note_value=narrative_work_note_value,
-        keeper_turn_note_value=keeper_turn_note_value,
-        visible_turn_note_value=visible_turn_note_value,
+        current_turn_index_value=current_turn_index,
         kp_turn_bridge=last_turn["kp_turn_bridge"],
         investigator_turn_bridge=last_turn["investigator_turn_bridge"],
         keeper_draft_applied=bool(last_turn["keeper_draft_applied"]),
@@ -4358,6 +4413,7 @@ def _render_experimental_ai_demo_primary_controls(
     options_html: str,
     initial_run_button_label: str,
     one_shot_max_turns: int,
+    session_loop_surface_html: str = "",
     autopilot_token_surface_html: str = "",
     last_run_recall_html: str = "",
     last_run_recall_hidden_inputs_html: str = "",
@@ -4379,6 +4435,7 @@ def _render_experimental_ai_demo_primary_controls(
           </article>
         """
     return f"""
+      {session_loop_surface_html}
       <article class="assistant-source-echo">
         <div class="list-head">
           <h3>一键 Bounded Autopilot</h3>
@@ -4428,6 +4485,7 @@ def _render_experimental_ai_demo_workspace_strip(
     current_turn_index: int,
     controls_html: str,
     next_last_run_recall: ExperimentalAutopilotLastRunRecall | None = None,
+    session_loop_checkpoint: ExperimentalAutonomousSessionLoopCheckpoint | None = None,
     demo_boot: bool = False,
     one_shot_run_visible: bool = False,
 ) -> str:
@@ -4465,6 +4523,23 @@ def _render_experimental_ai_demo_workspace_strip(
             "observe": "warn",
             "rerun": "",
         }
+    if (
+        not one_shot_run_visible
+        and current_turn_index <= 0
+        and session_loop_checkpoint is not None
+    ):
+        workspace_mode = (
+            f"已完成第 {session_loop_checkpoint.continuation_count} 段 bounded batch"
+        )
+        if _experimental_autonomous_session_loop_can_continue(session_loop_checkpoint):
+            stage_label = "Session loop checkpoint 已就绪"
+            next_action_label = (
+                f"可继续第 {session_loop_checkpoint.continuation_count + 1} 段 bounded batch；"
+                f"继续时会从第 {session_loop_checkpoint.current_turn_index + 1} 轮接着跑。"
+            )
+        else:
+            stage_label = "当前 loop 已收尾"
+            next_action_label = "当前 session loop 暂无继续入口；如需再试，请 rerun 当前 session 或 fresh 重开。"
     if one_shot_run_visible:
         stage_label = "Observer 回看阶段"
         next_action_label = "先回看 bounded autopilot 结果，再决定 rerun 当前 session、fresh 重开或再次一键自动跑。"
@@ -5969,6 +6044,216 @@ def _build_experimental_observer_current_state_copy(
         status_label=status_label,
         reason_label=reason_label,
     )
+
+
+def _read_experimental_autonomous_session_loop_store(
+    request: Request,
+) -> dict[str, ExperimentalAutonomousSessionLoopCheckpoint]:
+    store = getattr(request.app.state, "experimental_autonomous_session_loop_store", None)
+    if not isinstance(store, dict):
+        store = {}
+        request.app.state.experimental_autonomous_session_loop_store = store
+    return store
+
+
+def _read_experimental_autonomous_session_loop_checkpoint(
+    *,
+    store: Mapping[str, ExperimentalAutonomousSessionLoopCheckpoint],
+    session_id: str,
+) -> ExperimentalAutonomousSessionLoopCheckpoint | None:
+    checkpoint = store.get(session_id)
+    if isinstance(checkpoint, ExperimentalAutonomousSessionLoopCheckpoint):
+        return checkpoint
+    return None
+
+
+def _write_experimental_autonomous_session_loop_checkpoint(
+    *,
+    store: dict[str, ExperimentalAutonomousSessionLoopCheckpoint],
+    session_id: str,
+    checkpoint: ExperimentalAutonomousSessionLoopCheckpoint,
+) -> None:
+    store[session_id] = checkpoint
+
+
+def _experimental_autonomous_session_loop_can_continue(
+    checkpoint: ExperimentalAutonomousSessionLoopCheckpoint | None,
+) -> bool:
+    return bool(
+        checkpoint is not None
+        and checkpoint.ending_status == "max_turns"
+        and checkpoint.current_turn_index > 0
+    )
+
+
+def _build_experimental_autonomous_session_loop_recall(
+    checkpoint: ExperimentalAutonomousSessionLoopCheckpoint,
+) -> ExperimentalAutopilotLastRunRecall:
+    return ExperimentalAutopilotLastRunRecall(
+        ending_status=checkpoint.ending_status,
+        ending_reason=checkpoint.ending_reason,
+        provider_name=checkpoint.provider_name,
+        model=checkpoint.model,
+    )
+
+
+def _build_experimental_autonomous_session_loop_checkpoint_from_run_result(
+    *,
+    run_result: ExperimentalOneShotRunResult,
+    selected_investigator_id: str,
+    max_turns: int,
+    previous_batch_count: int = 0,
+) -> ExperimentalAutonomousSessionLoopCheckpoint:
+    last_run_recall = _build_experimental_autopilot_last_run_recall_from_run_result(
+        run_result
+    )
+    return ExperimentalAutonomousSessionLoopCheckpoint(
+        selected_investigator_id=selected_investigator_id,
+        current_turn_index=run_result.current_turn_index,
+        last_batch_max_turns=max_turns,
+        continuation_count=max(previous_batch_count, 0) + 1,
+        ending_status=run_result.ending_status,
+        ending_reason=run_result.ending_reason,
+        provider_name=last_run_recall.provider_name,
+        model=last_run_recall.model,
+        narrative_work_note_value=run_result.narrative_work_note_value,
+        keeper_turn_note_value=run_result.keeper_turn_note_value,
+        visible_turn_note_value=run_result.visible_turn_note_value,
+        previous_kp_payload=_assistant_result_turn_bridge_payload(run_result.kp_result),
+        previous_investigator_payload=_assistant_result_turn_bridge_payload(
+            run_result.investigator_result
+        ),
+        successful_turn_streak=run_result.successful_turn_streak,
+        stagnation_streak=run_result.stagnation_streak,
+        missing_continuity_streak=run_result.missing_continuity_streak,
+        previous_signature=run_result.previous_signature,
+    )
+
+
+def _build_experimental_autonomous_session_loop_surface(
+    checkpoint: ExperimentalAutonomousSessionLoopCheckpoint,
+) -> ExperimentalAutonomousSessionLoopSurface:
+    status_label = EXPERIMENTAL_ONE_SHOT_ENDING_STATUS_LABELS.get(
+        checkpoint.ending_status,
+        checkpoint.ending_status,
+    )
+    reason_label = EXPERIMENTAL_ONE_SHOT_ENDING_REASON_LABELS.get(
+        checkpoint.ending_reason,
+        checkpoint.ending_reason,
+    )
+    batch_copy = _build_experimental_autopilot_runtime_copy(
+        subject_label="上一段",
+        status_label=status_label,
+        reason_label=reason_label or "未记录",
+        provider_name=checkpoint.provider_name,
+        model=checkpoint.model,
+    )
+    if _experimental_autonomous_session_loop_can_continue(checkpoint):
+        return ExperimentalAutonomousSessionLoopSurface(
+            phase="continuation_ready",
+            badge_label="continuation ready",
+            badge_tone="warn",
+            loop_status_text=(
+                f"当前 loop 状态：第 {checkpoint.continuation_count} 段 bounded batch 已到达边界，可继续第 "
+                f"{checkpoint.continuation_count + 1} 段。"
+            ),
+            detail_text=(
+                f"继续时会从第 {checkpoint.current_turn_index + 1} 轮开始，并复用当前 internal-only continuity "
+                "checkpoint；仍然是 request-bounded 响应，不是 background job system，也不是 history platform。"
+            ),
+            batch_status_text=batch_copy.status_text,
+            batch_stop_reason_text=batch_copy.stop_reason_text,
+            batch_runtime_text=batch_copy.runtime_text,
+        )
+    badge_tone = "success"
+    if checkpoint.ending_status in {"failure", "aborted"}:
+        badge_tone = "danger"
+    return ExperimentalAutonomousSessionLoopSurface(
+        phase="terminal",
+        badge_label="terminal checkpoint",
+        badge_tone=badge_tone,
+        loop_status_text=(
+            f"当前 loop 状态：第 {checkpoint.continuation_count} 段 bounded batch 已收尾；"
+            "当前 session 暂无继续入口。"
+        ),
+        detail_text=(
+            "当前 checkpoint 只作为 very small internal continuity recall，帮助 Keeper 确认这次 bounded "
+            "session 停在何处；不是 diagnostics dashboard，也不是 authoritative history。"
+        ),
+        batch_status_text=batch_copy.status_text,
+        batch_stop_reason_text=batch_copy.stop_reason_text,
+        batch_runtime_text=batch_copy.runtime_text,
+    )
+
+
+def _render_experimental_autonomous_session_loop_surface(
+    *,
+    session_id: str,
+    checkpoint: ExperimentalAutonomousSessionLoopCheckpoint,
+    investigator_candidates: list[dict[str, Any]],
+    demo_boot: bool = False,
+) -> str:
+    surface = _build_experimental_autonomous_session_loop_surface(checkpoint)
+    selected_label = checkpoint.selected_investigator_id or "未记录"
+    for item in investigator_candidates:
+        actor_id = str(item.get("actor_id") or "")
+        if actor_id == checkpoint.selected_investigator_id:
+            selected_label = str(item.get("display_name") or actor_id or "调查员")
+            break
+    checkpoint_parts: list[str] = []
+    if checkpoint.narrative_work_note_value:
+        checkpoint_parts.append("run-local narrative note")
+    if checkpoint.keeper_turn_note_value:
+        checkpoint_parts.append("keeper continuity")
+    if checkpoint.visible_turn_note_value:
+        checkpoint_parts.append("visible continuity")
+    checkpoint_summary = (
+        "continuity checkpoint：继续时会复用 " + " / ".join(checkpoint_parts) + "。"
+        if checkpoint_parts
+        else "continuity checkpoint：当前只保留 turn index 与上一轮 payload bridge。"
+    )
+    next_batch_html = ""
+    if _experimental_autonomous_session_loop_can_continue(checkpoint):
+        last_run_recall_hidden_inputs_html = (
+            _render_experimental_autopilot_last_run_recall_hidden_inputs(
+                _build_experimental_autonomous_session_loop_recall(checkpoint)
+            )
+        )
+        next_batch_html = f"""
+          <form id="experimental-demo-session-loop-continue" method="post" action="/app/sessions/{escape(session_id)}/experimental-ai-demo/continue-bounded-session" class="form-stack">
+            <label>
+              下一段最大轮数
+              <input type="number" name="max_turns" min="1" max="{EXPERIMENTAL_ONE_SHOT_MAX_TURNS_LIMIT}" value="{escape(str(checkpoint.last_batch_max_turns))}">
+            </label>
+            {'<input type="hidden" name="demo_boot" value="1">' if demo_boot else ''}
+            {last_run_recall_hidden_inputs_html}
+            <p class="helper">继续入口只会复用当前 session 的 internal-only experimental checkpoint；不会后台续跑，也不会写入 authoritative state。</p>
+            <div class="toolbar">
+              <button class="button-button warn" type="submit">继续下一段 bounded batch</button>
+            </div>
+          </form>
+        """
+    return f"""
+      <article id="experimental-demo-session-loop-surface" class="assistant-source-echo">
+        <div class="list-head">
+          <h3>Bounded Autonomous Session Loop</h3>
+          <span class="tag{(' ' + surface.badge_tone) if surface.badge_tone else ''}">{escape(surface.badge_label)}</span>
+        </div>
+        <ul class="meta-list">
+          <li>{escape(surface.loop_status_text)}</li>
+          <li>当前调查员视角：{escape(selected_label)}</li>
+          <li>已完成批次：第 {escape(str(checkpoint.continuation_count))} 段。</li>
+          <li>当前 session 已推进到第 {escape(str(checkpoint.current_turn_index))} 轮。</li>
+          <li>{escape(f'下一段起点：第 {checkpoint.current_turn_index + 1} 轮。' if _experimental_autonomous_session_loop_can_continue(checkpoint) else f'当前收尾轮次：第 {checkpoint.current_turn_index} 轮。')}</li>
+          <li>{escape(checkpoint_summary)}</li>
+          <li>{escape(surface.batch_status_text)}</li>
+          <li>{escape(surface.batch_stop_reason_text)}</li>
+          {f'<li>{escape(surface.batch_runtime_text)}</li>' if surface.batch_runtime_text else ''}
+        </ul>
+        <p class="helper">{escape(surface.detail_text)}</p>
+        {next_batch_html}
+      </article>
+    """
 
 
 def _render_experimental_observer_last_run_recall_row(
@@ -8530,6 +8815,7 @@ def _render_experimental_ai_demo_page(
     one_shot_max_turns: int = EXPERIMENTAL_ONE_SHOT_DEFAULT_MAX_TURNS,
     last_run_recall: ExperimentalAutopilotLastRunRecall | None = None,
     one_shot_run_result: ExperimentalOneShotRunResult | None = None,
+    session_loop_checkpoint: ExperimentalAutonomousSessionLoopCheckpoint | None = None,
     one_shot_run_html: str = "",
     demo_boot: bool = False,
     notice: str | None = None,
@@ -8568,11 +8854,22 @@ def _render_experimental_ai_demo_page(
             next_last_run_recall
         )
     )
+    session_loop_surface_html = (
+        _render_experimental_autonomous_session_loop_surface(
+            session_id=session_id,
+            checkpoint=session_loop_checkpoint,
+            investigator_candidates=investigator_candidates,
+            demo_boot=demo_boot,
+        )
+        if session_loop_checkpoint is not None
+        else ""
+    )
     primary_controls_html = _render_experimental_ai_demo_primary_controls(
         session_id=session_id,
         options_html=options_html,
         initial_run_button_label=initial_run_button_label,
         one_shot_max_turns=one_shot_max_turns,
+        session_loop_surface_html=session_loop_surface_html,
         autopilot_token_surface_html=autopilot_token_surface_html,
         last_run_recall_html=last_run_recall_html,
         last_run_recall_hidden_inputs_html=last_run_recall_hidden_inputs_html,
@@ -8752,6 +9049,7 @@ def _render_experimental_ai_demo_page(
             current_turn_index=current_turn_index,
             controls_html=primary_controls_html,
             next_last_run_recall=next_last_run_recall,
+            session_loop_checkpoint=session_loop_checkpoint,
             demo_boot=demo_boot,
             one_shot_run_visible=bool(one_shot_run_html),
         )
@@ -8981,6 +9279,7 @@ def _render_app_experimental_ai_demo_from_service(
     one_shot_max_turns: int = EXPERIMENTAL_ONE_SHOT_DEFAULT_MAX_TURNS,
     last_run_recall: ExperimentalAutopilotLastRunRecall | None = None,
     one_shot_run_result: ExperimentalOneShotRunResult | None = None,
+    session_loop_checkpoint: ExperimentalAutonomousSessionLoopCheckpoint | None = None,
     one_shot_run_html: str = "",
     demo_boot: bool = False,
     notice: str | None = None,
@@ -9068,6 +9367,7 @@ def _render_app_experimental_ai_demo_from_service(
         one_shot_max_turns=one_shot_max_turns,
         last_run_recall=last_run_recall,
         one_shot_run_result=one_shot_run_result,
+        session_loop_checkpoint=session_loop_checkpoint,
         one_shot_run_html=one_shot_run_html,
         demo_boot=demo_boot,
         notice=notice,
@@ -9082,6 +9382,7 @@ def _render_experimental_ai_demo_one_shot_run_from_service(
     service: SessionService,
     local_llm_service: LocalLLMService,
     session_id: str,
+    session_loop_store: dict[str, ExperimentalAutonomousSessionLoopCheckpoint] | None = None,
     selected_investigator_id: str = "",
     max_turns: int = EXPERIMENTAL_ONE_SHOT_DEFAULT_MAX_TURNS,
     last_run_recall: ExperimentalAutopilotLastRunRecall | None = None,
@@ -9089,6 +9390,14 @@ def _render_experimental_ai_demo_one_shot_run_from_service(
     narrative_work_note_value: str = "",
     keeper_turn_note_value: str = "",
     visible_turn_note_value: str = "",
+    initial_turn_index: int = 0,
+    initial_kp_payload: dict[str, str] | None = None,
+    initial_investigator_payload: dict[str, str] | None = None,
+    initial_successful_turn_streak: int = 0,
+    initial_stagnation_streak: int = 0,
+    initial_missing_continuity_streak: int = 0,
+    initial_previous_signature: str = "",
+    previous_batch_count: int = 0,
     demo_boot: bool = False,
     notice_prefix: str | None = None,
 ) -> HTMLResponse:
@@ -9158,11 +9467,32 @@ def _render_experimental_ai_demo_one_shot_run_from_service(
         initial_narrative_work_note_value=narrative_work_note_value,
         initial_keeper_turn_note_value=keeper_turn_note_value,
         initial_visible_turn_note_value=visible_turn_note_value,
+        initial_turn_index=initial_turn_index,
+        initial_kp_payload=initial_kp_payload,
+        initial_investigator_payload=initial_investigator_payload,
+        initial_successful_turn_streak=initial_successful_turn_streak,
+        initial_stagnation_streak=initial_stagnation_streak,
+        initial_missing_continuity_streak=initial_missing_continuity_streak,
+        initial_previous_signature=initial_previous_signature,
     )
     run_result = _finalize_experimental_one_shot_run_result_internal_tooling(
         snapshot=snapshot,
         run_result=run_result,
     )
+    session_loop_checkpoint = (
+        _build_experimental_autonomous_session_loop_checkpoint_from_run_result(
+            run_result=run_result,
+            selected_investigator_id=resolved_investigator_id,
+            max_turns=max_turns,
+            previous_batch_count=previous_batch_count,
+        )
+    )
+    if session_loop_store is not None:
+        _write_experimental_autonomous_session_loop_checkpoint(
+            store=session_loop_store,
+            session_id=session_id,
+            checkpoint=session_loop_checkpoint,
+        )
     ending_status_label = EXPERIMENTAL_ONE_SHOT_ENDING_STATUS_LABELS.get(
         run_result.ending_status,
         run_result.ending_status,
@@ -9202,6 +9532,7 @@ def _render_experimental_ai_demo_one_shot_run_from_service(
         ),
         one_shot_max_turns=max_turns,
         one_shot_run_result=run_result,
+        session_loop_checkpoint=session_loop_checkpoint,
         one_shot_run_html=_render_experimental_one_shot_run_panel(
             run_result=run_result,
             last_run_recall=last_run_recall,
@@ -9297,6 +9628,7 @@ async def web_app_create_session(
     local_llm_service: LocalLLMService = Depends(get_local_llm_service),
 ) -> HTMLResponse:
     raw_form = await _read_form_payload(request)
+    session_loop_store = _read_experimental_autonomous_session_loop_store(request)
     demo_boot_enabled = _is_demo_boot_enabled(raw_form.get("demo_boot"))
     launch_target = _normalize_form_text(raw_form.get("launch_target")) or ""
     autorun_one_shot = _is_demo_boot_enabled(raw_form.get("autorun_one_shot"))
@@ -9311,6 +9643,7 @@ async def web_app_create_session(
                     service=service,
                     local_llm_service=local_llm_service,
                     session_id=response.session_id,
+                    session_loop_store=session_loop_store,
                     max_turns=EXPERIMENTAL_ONE_SHOT_DEFAULT_MAX_TURNS,
                     last_run_recall=last_run_recall,
                     demo_boot=True,
@@ -9448,6 +9781,7 @@ def web_app_keeper_workspace(
 @router.get("/sessions/{session_id}/experimental-ai-demo", response_class=HTMLResponse)
 def web_app_experimental_ai_demo(
     session_id: str,
+    request: Request,
     investigator_id: str | None = None,
     demo_boot: str | None = None,
     last_run_status: str | None = None,
@@ -9458,6 +9792,10 @@ def web_app_experimental_ai_demo(
     local_llm_service: LocalLLMService = Depends(get_local_llm_service),
 ) -> HTMLResponse:
     demo_boot_enabled = _is_demo_boot_enabled(demo_boot)
+    session_loop_checkpoint = _read_experimental_autonomous_session_loop_checkpoint(
+        store=_read_experimental_autonomous_session_loop_store(request),
+        session_id=session_id,
+    )
     last_run_recall = _read_experimental_autopilot_last_run_recall(
         {
             "last_run_status": last_run_status,
@@ -9472,6 +9810,7 @@ def web_app_experimental_ai_demo(
         local_llm_service=local_llm_service,
         selected_investigator_id=_normalize_form_text(investigator_id),
         last_run_recall=last_run_recall,
+        session_loop_checkpoint=session_loop_checkpoint,
         demo_boot=demo_boot_enabled,
         notice=(
             "launcher / demo boot 已就绪：当前页默认用于 observer autoplay demo。"
@@ -9808,10 +10147,12 @@ async def web_app_experimental_ai_demo_one_shot_run(
     local_llm_service: LocalLLMService = Depends(get_local_llm_service),
 ) -> HTMLResponse:
     form = await _read_form_payload(request)
+    session_loop_store = _read_experimental_autonomous_session_loop_store(request)
     return _render_experimental_ai_demo_one_shot_run_from_service(
         service=service,
         local_llm_service=local_llm_service,
         session_id=session_id,
+        session_loop_store=session_loop_store,
         selected_investigator_id=_normalize_form_text(form.get("investigator_id")) or "",
         max_turns=_parse_one_shot_max_turns(form.get("max_turns")),
         last_run_recall=_read_experimental_autopilot_last_run_recall(form),
@@ -9825,6 +10166,72 @@ async def web_app_experimental_ai_demo_one_shot_run(
             _normalize_form_text(form.get("seed_visible_turn_outcome_note")) or ""
         ),
         demo_boot=_is_demo_boot_enabled(form.get("demo_boot")),
+    )
+
+
+@router.post(
+    "/sessions/{session_id}/experimental-ai-demo/continue-bounded-session",
+    response_class=HTMLResponse,
+)
+async def web_app_experimental_ai_demo_continue_bounded_session(
+    session_id: str,
+    request: Request,
+    service: SessionService = Depends(get_session_service),
+    local_llm_service: LocalLLMService = Depends(get_local_llm_service),
+) -> HTMLResponse:
+    form = await _read_form_payload(request)
+    session_loop_store = _read_experimental_autonomous_session_loop_store(request)
+    checkpoint = _read_experimental_autonomous_session_loop_checkpoint(
+        store=session_loop_store,
+        session_id=session_id,
+    )
+    demo_boot_enabled = _is_demo_boot_enabled(form.get("demo_boot"))
+    last_run_recall = _read_experimental_autopilot_last_run_recall(form)
+    if last_run_recall is None and checkpoint is not None:
+        last_run_recall = _build_experimental_autonomous_session_loop_recall(checkpoint)
+    if not _experimental_autonomous_session_loop_can_continue(checkpoint):
+        return _render_app_experimental_ai_demo_from_service(
+            service=service,
+            session_id=session_id,
+            local_llm_service=local_llm_service,
+            selected_investigator_id=(
+                checkpoint.selected_investigator_id if checkpoint is not None else None
+            ),
+            last_run_recall=last_run_recall,
+            session_loop_checkpoint=checkpoint,
+            demo_boot=demo_boot_enabled,
+            detail=(
+                "当前没有可继续的 bounded autonomous session checkpoint；"
+                "请先完成一段因轮数边界停下的 bounded batch。"
+            ),
+            status_code=status.HTTP_400_BAD_REQUEST,
+        )
+    return _render_experimental_ai_demo_one_shot_run_from_service(
+        service=service,
+        local_llm_service=local_llm_service,
+        session_id=session_id,
+        session_loop_store=session_loop_store,
+        selected_investigator_id=checkpoint.selected_investigator_id,
+        max_turns=_parse_one_shot_max_turns(
+            form.get("max_turns") or checkpoint.last_batch_max_turns
+        ),
+        last_run_recall=last_run_recall,
+        narrative_work_note_value=checkpoint.narrative_work_note_value,
+        keeper_turn_note_value=checkpoint.keeper_turn_note_value,
+        visible_turn_note_value=checkpoint.visible_turn_note_value,
+        initial_turn_index=checkpoint.current_turn_index,
+        initial_kp_payload=checkpoint.previous_kp_payload,
+        initial_investigator_payload=checkpoint.previous_investigator_payload,
+        initial_successful_turn_streak=checkpoint.successful_turn_streak,
+        initial_stagnation_streak=checkpoint.stagnation_streak,
+        initial_missing_continuity_streak=checkpoint.missing_continuity_streak,
+        initial_previous_signature=checkpoint.previous_signature,
+        previous_batch_count=checkpoint.continuation_count,
+        demo_boot=demo_boot_enabled,
+        notice_prefix=(
+            f"已基于当前 session loop checkpoint 继续第 "
+            f"{checkpoint.continuation_count + 1} 段 bounded batch。"
+        ),
     )
 
 

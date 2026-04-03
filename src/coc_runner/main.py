@@ -92,6 +92,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             configuration_error=local_llm_configuration_error,
             max_output_tokens=runtime_settings.local_llm_max_output_tokens,
         )
+        app.state.experimental_autonomous_session_loop_store = {}
         app.state.settings = runtime_settings
         yield
 

@@ -1019,6 +1019,46 @@ def test_experimental_ai_demo_observer_current_state_copy_reuses_current_request
     )
 
 
+def test_experimental_autonomous_session_loop_surface_reuses_runtime_phrase_source_and_stays_small() -> None:
+    checkpoint = web_app_route.ExperimentalAutonomousSessionLoopCheckpoint(
+        selected_investigator_id="investigator-1",
+        current_turn_index=2,
+        last_batch_max_turns=2,
+        continuation_count=1,
+        ending_status="max_turns",
+        ending_reason="turn_limit_reached",
+        provider_name="ollama_local",
+        model="qwen3:14b",
+        keeper_turn_note_value="keeper continuity",
+        visible_turn_note_value="visible continuity",
+        previous_kp_payload={"summary": "KP 摘要"},
+        previous_investigator_payload={"summary": "调查员摘要"},
+        successful_turn_streak=2,
+        previous_signature="sig",
+    )
+
+    surface = web_app_route._build_experimental_autonomous_session_loop_surface(
+        checkpoint
+    )
+
+    assert web_app_route._experimental_autonomous_session_loop_can_continue(
+        checkpoint
+    ) is True
+    assert surface == web_app_route.ExperimentalAutonomousSessionLoopSurface(
+        phase="continuation_ready",
+        badge_label="continuation ready",
+        badge_tone="warn",
+        loop_status_text="当前 loop 状态：第 1 段 bounded batch 已到达边界，可继续第 2 段。",
+        detail_text=(
+            "继续时会从第 3 轮开始，并复用当前 internal-only continuity checkpoint；"
+            "仍然是 request-bounded 响应，不是 background job system，也不是 history platform。"
+        ),
+        batch_status_text="上一段状态：达到轮数上限",
+        batch_stop_reason_text="上一段停止原因：达到当前受控 one-shot demo run 的最大轮数上限。",
+        batch_runtime_text="上一段 runtime：provider：ollama_local / model：qwen3:14b",
+    )
+
+
 def test_experimental_ai_demo_observer_header_recall_stays_single_entry_and_small() -> None:
     recall_html = web_app_route._render_experimental_observer_last_run_recall_row(
         web_app_route.ExperimentalAutopilotLastRunRecall(
@@ -1853,6 +1893,103 @@ def test_web_app_experimental_ai_demo_one_shot_run_stops_at_turn_limit_when_demo
     )
     assert "共自动运行 2 轮 / 最大 2 轮。" in html
     assert len(fake_service.requests) == 8
+    after_snapshot = _get_snapshot(client, session_id)
+    assert before_snapshot == after_snapshot
+
+
+def test_web_app_experimental_ai_demo_session_loop_checkpoint_survives_refresh_without_state_mutation(
+    client: TestClient,
+) -> None:
+    session_id = _start_keeper_dashboard_session(client)
+    _advance_keeper_dashboard_session(client, session_id)
+    fake_service = _SequencedOneShotLocalLLMService()
+    client.app.state.local_llm_service = fake_service
+    before_snapshot = _get_snapshot(client, session_id)
+
+    run_response = client.post(
+        f"/app/sessions/{session_id}/experimental-ai-demo/one-shot-run",
+        data={
+            "investigator_id": "investigator-1",
+            "max_turns": "2",
+        },
+    )
+
+    assert run_response.status_code == 200
+    run_html = run_response.text
+    assert 'id="experimental-demo-session-loop-surface"' in run_html
+    assert "Bounded Autonomous Session Loop" in run_html
+    assert "当前 loop 状态：第 1 段 bounded batch 已到达边界，可继续第 2 段。" in run_html
+    assert "下一段起点：第 3 轮。" in run_html
+    assert "上一段状态：达到轮数上限" in run_html
+    assert "上一段停止原因：达到当前受控 one-shot demo run 的最大轮数上限。" in run_html
+    assert (
+        f'action="/app/sessions/{session_id}/experimental-ai-demo/continue-bounded-session"'
+        in run_html
+    )
+    assert "不会后台续跑，也不会写入 authoritative state。" in run_html
+
+    refresh_response = client.get(f"/app/sessions/{session_id}/experimental-ai-demo")
+
+    assert refresh_response.status_code == 200
+    refresh_html = refresh_response.text
+    assert 'id="experimental-demo-session-loop-surface"' in refresh_html
+    assert "当前 loop 状态：第 1 段 bounded batch 已到达边界，可继续第 2 段。" in refresh_html
+    assert "下一段起点：第 3 轮。" in refresh_html
+    assert "上一段 runtime：provider：stub-local / model：stub-model" in refresh_html
+    assert (
+        "request-bounded 响应，不是 background job system，也不是 history platform。"
+        in refresh_html
+    )
+    investigator_response = client.get(
+        f"/app/sessions/{session_id}/investigator/investigator-1"
+    )
+    assert investigator_response.status_code == 200
+    investigator_html = investigator_response.text
+    assert "Bounded Autonomous Session Loop" not in investigator_html
+    assert 'id="experimental-demo-session-loop-surface"' not in investigator_html
+    after_snapshot = _get_snapshot(client, session_id)
+    assert before_snapshot == after_snapshot
+
+
+def test_web_app_experimental_ai_demo_continue_bounded_session_advances_from_checkpoint_without_state_mutation(
+    client: TestClient,
+) -> None:
+    session_id = _start_keeper_dashboard_session(client)
+    _advance_keeper_dashboard_session(client, session_id)
+    fake_service = _SequencedOneShotLocalLLMService()
+    client.app.state.local_llm_service = fake_service
+    before_snapshot = _get_snapshot(client, session_id)
+
+    first_batch = client.post(
+        f"/app/sessions/{session_id}/experimental-ai-demo/one-shot-run",
+        data={
+            "investigator_id": "investigator-1",
+            "max_turns": "2",
+        },
+    )
+
+    assert first_batch.status_code == 200
+    continue_response = client.post(
+        f"/app/sessions/{session_id}/experimental-ai-demo/continue-bounded-session",
+        data={"max_turns": "2"},
+    )
+
+    assert continue_response.status_code == 200
+    html = continue_response.text
+    assert "已基于当前 session loop checkpoint 继续第 2 段 bounded batch。" in html
+    assert "当前请求状态：成功" in html
+    assert "共自动运行 1 轮 / 最大 2 轮。" in html
+    assert "Turn 3" in html
+    assert "第 3 轮快照" in html
+    assert "Turn 1" not in html
+    assert "第 1 轮快照" not in html
+    assert "当前 loop 状态：第 2 段 bounded batch 已收尾；当前 session 暂无继续入口。" in html
+    assert "当前 session 已推进到第 3 轮。" in html
+    assert "当前收尾轮次：第 3 轮。" in html
+    assert "上一段状态：成功" in html
+    assert "上一段停止原因：已形成连续、可读且带 continuity 的受控 demo mini-arc。" in html
+    assert 'id="experimental-demo-session-loop-continue"' not in html
+    assert len(fake_service.requests) == 12
     after_snapshot = _get_snapshot(client, session_id)
     assert before_snapshot == after_snapshot
 
