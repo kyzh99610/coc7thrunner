@@ -451,6 +451,15 @@ class ExperimentalAutonomousSessionLoopSurface:
     batch_runtime_text: str = ""
 
 
+@dataclass(slots=True)
+class ExperimentalAutonomousSessionLoopRecapCopy:
+    loop_status_text: str
+    continuation_count_text: str
+    next_turn_text: str
+    batch_status_text: str
+    batch_stop_reason_text: str
+
+
 EXPERIMENTAL_ONE_SHOT_VISIBLE_SAFE_FORBIDDEN_MARKERS: tuple[str, ...] = (
     "private_notes",
     "secret_state_refs",
@@ -4994,9 +5003,15 @@ def _render_experimental_one_shot_autoplay_observer_panel(
     *,
     run_result: ExperimentalOneShotRunResult | None = None,
     last_run_recall: ExperimentalAutopilotLastRunRecall | None = None,
+    session_loop_checkpoint: ExperimentalAutonomousSessionLoopCheckpoint | None = None,
 ) -> str:
     observer_last_run_recall_html = _render_experimental_observer_last_run_recall_row(
         last_run_recall
+    )
+    observer_session_loop_recap_html = (
+        _render_experimental_observer_session_loop_checkpoint_recap_row(
+            session_loop_checkpoint
+        )
     )
     current_run_copy = _build_experimental_observer_current_state_copy(
         run_result=run_result if run_result and run_result.turn_records else None
@@ -5012,6 +5027,7 @@ def _render_experimental_one_shot_autoplay_observer_panel(
           <span class="tag">idle</span>
         </div>
         {observer_last_run_recall_html}
+        {observer_session_loop_recap_html}
         <ul class="meta-list">
           <li>模式：bounded one-shot autoplay</li>
           <li>{escape(current_run_copy.status_text)}</li>
@@ -5093,6 +5109,7 @@ def _render_experimental_one_shot_autoplay_observer_panel(
           <span class="tag warn">{escape(status_label)}</span>
         </div>
         {observer_last_run_recall_html}
+        {observer_session_loop_recap_html}
         <ul class="meta-list">
           <li>模式：bounded one-shot autoplay</li>
           <li>{escape(current_run_copy.status_text)}</li>
@@ -5171,12 +5188,14 @@ def _render_experimental_one_shot_run_panel(
     *,
     run_result: ExperimentalOneShotRunResult,
     last_run_recall: ExperimentalAutopilotLastRunRecall | None = None,
+    session_loop_checkpoint: ExperimentalAutonomousSessionLoopCheckpoint | None = None,
 ) -> str:
     if not run_result.turn_records:
         return ""
     observer_html = _render_experimental_one_shot_autoplay_observer_panel(
         run_result=run_result,
         last_run_recall=last_run_recall,
+        session_loop_checkpoint=session_loop_checkpoint,
     )
     status_label = EXPERIMENTAL_ONE_SHOT_ENDING_STATUS_LABELS.get(
         run_result.ending_status,
@@ -6256,6 +6275,24 @@ def _render_experimental_autonomous_session_loop_surface(
     """
 
 
+def _build_experimental_autonomous_session_loop_recap_copy(
+    checkpoint: ExperimentalAutonomousSessionLoopCheckpoint,
+) -> ExperimentalAutonomousSessionLoopRecapCopy:
+    surface = _build_experimental_autonomous_session_loop_surface(checkpoint)
+    next_turn_text = (
+        f"下一段起点：第 {checkpoint.current_turn_index + 1} 轮。"
+        if _experimental_autonomous_session_loop_can_continue(checkpoint)
+        else f"当前收尾轮次：第 {checkpoint.current_turn_index} 轮。"
+    )
+    return ExperimentalAutonomousSessionLoopRecapCopy(
+        loop_status_text=surface.loop_status_text,
+        continuation_count_text=f"已完成批次：第 {checkpoint.continuation_count} 段。",
+        next_turn_text=next_turn_text,
+        batch_status_text=surface.batch_status_text,
+        batch_stop_reason_text=surface.batch_stop_reason_text,
+    )
+
+
 def _render_experimental_observer_last_run_recall_row(
     recall: ExperimentalAutopilotLastRunRecall | None,
 ) -> str:
@@ -6276,6 +6313,25 @@ def _render_experimental_observer_last_run_recall_row(
         <span class="experimental-observer-recall-item">{escape(recall_copy.stop_reason_text)}</span>
         {runtime_html}
         <span class="experimental-observer-recall-item">single-entry recall，不是 history system，也不是 diagnostics dashboard。</span>
+      </div>
+    """
+
+
+def _render_experimental_observer_session_loop_checkpoint_recap_row(
+    checkpoint: ExperimentalAutonomousSessionLoopCheckpoint | None,
+) -> str:
+    if checkpoint is None:
+        return ""
+    recap_copy = _build_experimental_autonomous_session_loop_recap_copy(checkpoint)
+    return f"""
+      <div id="experimental-demo-observer-session-loop-recap" class="experimental-observer-recall-strip">
+        <span class="tag warn">checkpoint recap</span>
+        <span class="experimental-observer-recall-item">{escape(recap_copy.loop_status_text)}</span>
+        <span class="experimental-observer-recall-item">{escape(recap_copy.batch_status_text)}</span>
+        <span class="experimental-observer-recall-item">{escape(recap_copy.batch_stop_reason_text)}</span>
+        <span class="experimental-observer-recall-item">{escape(recap_copy.continuation_count_text)}</span>
+        <span class="experimental-observer-recall-item">{escape(recap_copy.next_turn_text)}</span>
+        <span class="experimental-observer-recall-item">single-entry checkpoint recap，不是 history system，也不是 background runtime。</span>
       </div>
     """
 
@@ -8883,7 +8939,8 @@ def _render_experimental_ai_demo_page(
     primary_observer_html = (
         one_shot_run_html
         or _render_experimental_one_shot_autoplay_observer_panel(
-            last_run_recall=last_run_recall
+            last_run_recall=last_run_recall,
+            session_loop_checkpoint=session_loop_checkpoint,
         )
     )
     turn_loop_html = _render_experimental_ai_demo_turn_loop_form(
@@ -9536,6 +9593,7 @@ def _render_experimental_ai_demo_one_shot_run_from_service(
         one_shot_run_html=_render_experimental_one_shot_run_panel(
             run_result=run_result,
             last_run_recall=last_run_recall,
+            session_loop_checkpoint=session_loop_checkpoint,
         ),
         demo_boot=demo_boot,
         notice=notice,
