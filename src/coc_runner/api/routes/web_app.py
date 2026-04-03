@@ -4821,10 +4821,9 @@ def _build_experimental_one_shot_recent_turn_finalized_snapshot_contract(
         run_result.ending_status,
         run_result.ending_status,
     )
-    final_stop_reason = EXPERIMENTAL_ONE_SHOT_ENDING_REASON_LABELS.get(
-        run_result.ending_reason,
-        run_result.ending_reason,
-    )
+    final_stop_reason_text = _build_experimental_observer_current_state_copy(
+        run_result=run_result
+    ).stop_reason_text
     contract_items: list[ExperimentalOneShotRecentTurnFinalizedSnapshotItem] = []
     for record in selected_records:
         finalized_snapshot = _build_experimental_one_shot_turn_finalized_internal_snapshot(
@@ -4845,7 +4844,7 @@ def _build_experimental_one_shot_recent_turn_finalized_snapshot_contract(
                     if finalized_snapshot is not None
                     else "当前轮未产出 representative finalized internal snapshot。"
                 ),
-                "stop_reason": final_stop_reason if is_final_turn else "",
+                "stop_reason": final_stop_reason_text if is_final_turn else "",
             }
         )
     return contract_items
@@ -4986,7 +4985,7 @@ def _render_experimental_one_shot_autoplay_observer_panel(
             <li>continuity 摘要：{escape(snapshot["continuity_summary"])}</li>
             <li>finalized object：{escape(snapshot["finalized_kind"])}</li>
             <li>finalized 摘要：{escape(snapshot["finalized_text"])}</li>
-            {f'<li>停止原因：{escape(snapshot["stop_reason"])}</li>' if snapshot["stop_reason"] else ''}
+            {f'<li>{escape(snapshot["stop_reason"])}</li>' if snapshot["stop_reason"] else ''}
           </ul>
         </article>
         """
@@ -5005,7 +5004,7 @@ def _render_experimental_one_shot_autoplay_observer_panel(
           <li>continuity 摘要：{escape(latest_snapshot["continuity_summary"])}</li>
           <li>finalized object：{escape(latest_snapshot["finalized_kind"])}</li>
           <li>finalized 摘要：{escape(latest_snapshot["finalized_text"])}</li>
-          {f'<li>停止原因：{escape(latest_snapshot["stop_reason"])}</li>' if latest_snapshot["stop_reason"] else ''}
+          {f'<li>{escape(latest_snapshot["stop_reason"])}</li>' if latest_snapshot["stop_reason"] else ''}
         </ul>
       </article>
     """

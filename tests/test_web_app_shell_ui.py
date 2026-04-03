@@ -1739,6 +1739,10 @@ def test_web_app_experimental_ai_demo_one_shot_run_can_finish_with_demo_success_
     assert "finalized 摘要：整理为当前轮 finalized memo：" in html
     assert "finalized object：input_pin_focus" not in html
     assert "当前请求停止原因：已形成连续、可读且带 continuity 的受控 demo mini-arc。" in html
+    assert (
+        html.count("当前请求停止原因：已形成连续、可读且带 continuity 的受控 demo mini-arc。")
+        == 4
+    )
     assert "种子上下文" in html
     assert "跟进提示" in html
     assert "执行意图" in html
@@ -1827,7 +1831,7 @@ def test_web_app_experimental_ai_demo_one_shot_run_stops_at_turn_limit_when_demo
     assert "Autoplay Observer" in html
     assert "模式：bounded one-shot autoplay" in html
     assert html.count("当前请求状态：达到轮数上限") == 2
-    assert html.count("当前请求停止原因：达到当前受控 one-shot demo run 的最大轮数上限。") == 2
+    assert html.count("当前请求停止原因：达到当前受控 one-shot demo run 的最大轮数上限。") == 4
     assert "按轮内部快照" in html
     assert "第 1 轮快照" in html
     assert "第 2 轮快照" in html
@@ -2627,12 +2631,59 @@ def test_experimental_one_shot_recent_turn_finalized_snapshot_contract_returns_s
     assert contract_items[-1]["finalized_kind"] == "turn_memo"
     assert (
         contract_items[-1]["stop_reason"]
-        == "已形成连续、可读且带 continuity 的受控 demo mini-arc。"
+        == "当前请求停止原因：已形成连续、可读且带 continuity 的受控 demo mini-arc。"
     )
     assert "keeper_only_explanatory_text" not in str(contract_items)
     assert "旅店旧图纸" not in str(contract_items)
     assert "储物间账本残页" not in str(contract_items)
     assert "input_pin_focus" not in str(contract_items)
+
+
+def test_experimental_one_shot_recent_turn_finalized_snapshot_contract_reuses_current_request_stop_reason_wording() -> None:
+    run_result = web_app_route.ExperimentalOneShotRunResult(
+        ending_status="max_turns",
+        ending_reason="turn_limit_reached",
+        max_turns=2,
+        turn_records=[
+            web_app_route.ExperimentalOneShotTurnRecord(
+                turn_index=2,
+                kp_summary="KP 摘要",
+                investigator_summary="调查员摘要",
+                keeper_continuity="keeper continuity",
+                visible_continuity="visible continuity",
+                narrative_work_note="narrative note",
+                signature="KP 摘要 | 调查员摘要",
+            )
+        ],
+        kp_result=None,
+        investigator_result=None,
+        keeper_draft_result=None,
+        visible_draft_result=None,
+        current_turn_index=2,
+        narrative_work_note_value="",
+        keeper_turn_note_value="",
+        visible_turn_note_value="",
+        kp_turn_bridge=None,
+        investigator_turn_bridge=None,
+        keeper_draft_applied=False,
+        visible_draft_applied=False,
+    )
+
+    contract_items = (
+        web_app_route._build_experimental_one_shot_recent_turn_finalized_snapshot_contract(
+            run_result=run_result
+        )
+    )
+
+    assert [item["turn_index"] for item in contract_items] == [2]
+    assert contract_items[0]["stop_reason"] == (
+        web_app_route._build_experimental_observer_current_state_copy(
+            run_result=run_result
+        ).stop_reason_text
+    )
+    assert contract_items[0]["stop_reason"] == (
+        "当前请求停止原因：达到当前受控 one-shot demo run 的最大轮数上限。"
+    )
 
 
 def test_experimental_one_shot_recent_turn_finalized_snapshot_contract_can_limit_to_latest_turns(
@@ -2661,7 +2712,7 @@ def test_experimental_one_shot_recent_turn_finalized_snapshot_contract_can_limit
     assert contract_items[-1]["status_label"] == "成功"
     assert (
         contract_items[-1]["stop_reason"]
-        == "已形成连续、可读且带 continuity 的受控 demo mini-arc。"
+        == "当前请求停止原因：已形成连续、可读且带 continuity 的受控 demo mini-arc。"
     )
 
 
@@ -2720,6 +2771,10 @@ def test_experimental_one_shot_autoplay_turn_observer_snapshot_helper_returns_bo
     assert (
         turn_snapshots[-1]["stop_reason"]
         == contract_items[-1]["stop_reason"]
+    )
+    assert (
+        turn_snapshots[-1]["stop_reason"]
+        == "当前请求停止原因：已形成连续、可读且带 continuity 的受控 demo mini-arc。"
     )
     assert "keeper_only_explanatory_text" not in str(turn_snapshots)
     assert "旅店旧图纸" not in str(turn_snapshots)
