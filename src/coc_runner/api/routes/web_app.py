@@ -460,6 +460,15 @@ class ExperimentalAutonomousSessionLoopRecapCopy:
     batch_stop_reason_text: str
 
 
+@dataclass(slots=True)
+class ExperimentalObserverSubheaderStrip:
+    element_id: str
+    tag_label: str
+    tag_tone: str
+    item_texts: tuple[str, ...]
+    boundary_text: str
+
+
 EXPERIMENTAL_ONE_SHOT_VISIBLE_SAFE_FORBIDDEN_MARKERS: tuple[str, ...] = (
     "private_notes",
     "secret_state_refs",
@@ -5005,13 +5014,9 @@ def _render_experimental_one_shot_autoplay_observer_panel(
     last_run_recall: ExperimentalAutopilotLastRunRecall | None = None,
     session_loop_checkpoint: ExperimentalAutonomousSessionLoopCheckpoint | None = None,
 ) -> str:
-    observer_last_run_recall_html = _render_experimental_observer_last_run_recall_row(
-        last_run_recall
-    )
-    observer_session_loop_recap_html = (
-        _render_experimental_observer_session_loop_checkpoint_recap_row(
-            session_loop_checkpoint
-        )
+    observer_subheader_html = _render_experimental_observer_subheader_cluster(
+        last_run_recall=last_run_recall,
+        session_loop_checkpoint=session_loop_checkpoint,
     )
     current_run_copy = _build_experimental_observer_current_state_copy(
         run_result=run_result if run_result and run_result.turn_records else None
@@ -5026,8 +5031,7 @@ def _render_experimental_one_shot_autoplay_observer_panel(
           </div>
           <span class="tag">idle</span>
         </div>
-        {observer_last_run_recall_html}
-        {observer_session_loop_recap_html}
+        {observer_subheader_html}
         <ul class="meta-list">
           <li>模式：bounded one-shot autoplay</li>
           <li>{escape(current_run_copy.status_text)}</li>
@@ -5108,8 +5112,7 @@ def _render_experimental_one_shot_autoplay_observer_panel(
           </div>
           <span class="tag warn">{escape(status_label)}</span>
         </div>
-        {observer_last_run_recall_html}
-        {observer_session_loop_recap_html}
+        {observer_subheader_html}
         <ul class="meta-list">
           <li>模式：bounded one-shot autoplay</li>
           <li>{escape(current_run_copy.status_text)}</li>
@@ -6293,47 +6296,112 @@ def _build_experimental_autonomous_session_loop_recap_copy(
     )
 
 
+def _render_experimental_observer_subheader_strip(
+    strip: ExperimentalObserverSubheaderStrip,
+) -> str:
+    item_html = "".join(
+        '<span class="experimental-observer-recall-item">'
+        f"{escape(item_text)}"
+        "</span>"
+        for item_text in strip.item_texts
+    )
+    tag_tone_suffix = f" {strip.tag_tone}" if strip.tag_tone else ""
+    return f"""
+      <div id="{escape(strip.element_id)}" class="experimental-observer-recall-strip">
+        <span class="tag{tag_tone_suffix}">{escape(strip.tag_label)}</span>
+        {item_html}
+        <span class="experimental-observer-recall-item">{escape(strip.boundary_text)}</span>
+      </div>
+    """
+
+
+def _build_experimental_observer_last_run_recall_strip(
+    recall: ExperimentalAutopilotLastRunRecall | None,
+) -> ExperimentalObserverSubheaderStrip | None:
+    if recall is None:
+        return None
+    recall_copy = _build_experimental_autopilot_last_run_copy(recall)
+    item_texts = [recall_copy.status_text, recall_copy.stop_reason_text]
+    if recall_copy.runtime_text:
+        item_texts.append(recall_copy.runtime_text)
+    return ExperimentalObserverSubheaderStrip(
+        element_id="experimental-demo-observer-last-run-recall",
+        tag_label="last run",
+        tag_tone="",
+        item_texts=tuple(item_texts),
+        boundary_text="single-entry recall，不是 history system，也不是 diagnostics dashboard。",
+    )
+
+
 def _render_experimental_observer_last_run_recall_row(
     recall: ExperimentalAutopilotLastRunRecall | None,
 ) -> str:
-    if recall is None:
+    strip = _build_experimental_observer_last_run_recall_strip(recall)
+    if strip is None:
         return ""
-    recall_copy = _build_experimental_autopilot_last_run_copy(recall)
-    runtime_html = ""
-    if recall_copy.runtime_text:
-        runtime_html = (
-            '<span class="experimental-observer-recall-item">'
-            f"{escape(recall_copy.runtime_text)}"
-            "</span>"
-        )
-    return f"""
-      <div id="experimental-demo-observer-last-run-recall" class="experimental-observer-recall-strip">
-        <span class="tag">last run</span>
-        <span class="experimental-observer-recall-item">{escape(recall_copy.status_text)}</span>
-        <span class="experimental-observer-recall-item">{escape(recall_copy.stop_reason_text)}</span>
-        {runtime_html}
-        <span class="experimental-observer-recall-item">single-entry recall，不是 history system，也不是 diagnostics dashboard。</span>
-      </div>
-    """
+    return _render_experimental_observer_subheader_strip(strip)
+
+
+def _build_experimental_observer_session_loop_checkpoint_recap_strip(
+    checkpoint: ExperimentalAutonomousSessionLoopCheckpoint | None,
+) -> ExperimentalObserverSubheaderStrip | None:
+    if checkpoint is None:
+        return None
+    recap_copy = _build_experimental_autonomous_session_loop_recap_copy(checkpoint)
+    return ExperimentalObserverSubheaderStrip(
+        element_id="experimental-demo-observer-session-loop-recap",
+        tag_label="checkpoint recap",
+        tag_tone="warn",
+        item_texts=(
+            recap_copy.loop_status_text,
+            recap_copy.batch_status_text,
+            recap_copy.batch_stop_reason_text,
+            recap_copy.continuation_count_text,
+            recap_copy.next_turn_text,
+        ),
+        boundary_text=(
+            "single-entry checkpoint recap，不是 history system，也不是 background runtime。"
+        ),
+    )
 
 
 def _render_experimental_observer_session_loop_checkpoint_recap_row(
     checkpoint: ExperimentalAutonomousSessionLoopCheckpoint | None,
 ) -> str:
-    if checkpoint is None:
+    strip = _build_experimental_observer_session_loop_checkpoint_recap_strip(
+        checkpoint
+    )
+    if strip is None:
         return ""
-    recap_copy = _build_experimental_autonomous_session_loop_recap_copy(checkpoint)
-    return f"""
-      <div id="experimental-demo-observer-session-loop-recap" class="experimental-observer-recall-strip">
-        <span class="tag warn">checkpoint recap</span>
-        <span class="experimental-observer-recall-item">{escape(recap_copy.loop_status_text)}</span>
-        <span class="experimental-observer-recall-item">{escape(recap_copy.batch_status_text)}</span>
-        <span class="experimental-observer-recall-item">{escape(recap_copy.batch_stop_reason_text)}</span>
-        <span class="experimental-observer-recall-item">{escape(recap_copy.continuation_count_text)}</span>
-        <span class="experimental-observer-recall-item">{escape(recap_copy.next_turn_text)}</span>
-        <span class="experimental-observer-recall-item">single-entry checkpoint recap，不是 history system，也不是 background runtime。</span>
-      </div>
-    """
+    return _render_experimental_observer_subheader_strip(strip)
+
+
+def _render_experimental_observer_subheader_cluster(
+    *,
+    last_run_recall: ExperimentalAutopilotLastRunRecall | None = None,
+    session_loop_checkpoint: ExperimentalAutonomousSessionLoopCheckpoint | None = None,
+) -> str:
+    strips = [
+        strip
+        for strip in (
+            _build_experimental_observer_last_run_recall_strip(last_run_recall),
+            _build_experimental_observer_session_loop_checkpoint_recap_strip(
+                session_loop_checkpoint
+            ),
+        )
+        if strip is not None
+    ]
+    if not strips:
+        return ""
+    strips_html = "".join(
+        _render_experimental_observer_subheader_strip(strip) for strip in strips
+    )
+    return (
+        '<div id="experimental-demo-observer-subheader" '
+        'class="experimental-observer-subheader-cluster">'
+        f"{strips_html}"
+        "</div>"
+    )
 
 
 def _render_setup_page(

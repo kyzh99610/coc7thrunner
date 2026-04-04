@@ -1100,15 +1100,34 @@ def test_experimental_autonomous_session_loop_checkpoint_recap_copy_stays_single
 
 
 def test_experimental_ai_demo_observer_header_recall_stays_single_entry_and_small() -> None:
+    recall = web_app_route.ExperimentalAutopilotLastRunRecall(
+        ending_status="max_turns",
+        ending_reason="turn_limit_reached",
+        provider_name="ollama_local",
+        model="qwen3:14b",
+    )
+    recall_strip = web_app_route._build_experimental_observer_last_run_recall_strip(
+        recall
+    )
     recall_html = web_app_route._render_experimental_observer_last_run_recall_row(
-        web_app_route.ExperimentalAutopilotLastRunRecall(
-            ending_status="max_turns",
-            ending_reason="turn_limit_reached",
-            provider_name="ollama_local",
-            model="qwen3:14b",
-        )
+        recall
     )
 
+    assert recall_strip == web_app_route.ExperimentalObserverSubheaderStrip(
+        element_id="experimental-demo-observer-last-run-recall",
+        tag_label="last run",
+        tag_tone="",
+        item_texts=(
+            "上一轮状态：达到轮数上限",
+            "上一轮停止原因：达到当前受控 one-shot demo run 的最大轮数上限。",
+            "上一轮 runtime：provider：ollama_local / model：qwen3:14b",
+        ),
+        boundary_text="single-entry recall，不是 history system，也不是 diagnostics dashboard。",
+    )
+    assert recall_strip is not None
+    assert recall_html == web_app_route._render_experimental_observer_subheader_strip(
+        recall_strip
+    )
     assert 'id="experimental-demo-observer-last-run-recall"' in recall_html
     assert "上一轮状态：达到轮数上限" in recall_html
     assert "上一轮停止原因：达到当前受控 one-shot demo run 的最大轮数上限。" in recall_html
@@ -1116,6 +1135,74 @@ def test_experimental_ai_demo_observer_header_recall_stays_single_entry_and_smal
     assert "single-entry recall，不是 history system，也不是 diagnostics dashboard。" in recall_html
     assert "Turn 1" not in recall_html
     assert "finalized object" not in recall_html
+
+
+def test_experimental_ai_demo_observer_subheader_shared_render_stays_tiny_and_single_entry() -> None:
+    recall = web_app_route.ExperimentalAutopilotLastRunRecall(
+        ending_status="max_turns",
+        ending_reason="turn_limit_reached",
+        provider_name="ollama_local",
+        model="qwen3:14b",
+    )
+    checkpoint = web_app_route.ExperimentalAutonomousSessionLoopCheckpoint(
+        selected_investigator_id="investigator-1",
+        current_turn_index=2,
+        last_batch_max_turns=2,
+        continuation_count=1,
+        ending_status="max_turns",
+        ending_reason="turn_limit_reached",
+        provider_name="ollama_local",
+        model="qwen3:14b",
+    )
+
+    checkpoint_strip = (
+        web_app_route._build_experimental_observer_session_loop_checkpoint_recap_strip(
+            checkpoint
+        )
+    )
+    cluster_html = web_app_route._render_experimental_observer_subheader_cluster(
+        last_run_recall=recall,
+        session_loop_checkpoint=checkpoint,
+    )
+
+    assert checkpoint_strip == web_app_route.ExperimentalObserverSubheaderStrip(
+        element_id="experimental-demo-observer-session-loop-recap",
+        tag_label="checkpoint recap",
+        tag_tone="warn",
+        item_texts=(
+            "当前 loop 状态：第 1 段 bounded batch 已到达边界，可继续第 2 段。",
+            "上一段状态：达到轮数上限",
+            "上一段停止原因：达到当前受控 one-shot demo run 的最大轮数上限。",
+            "已完成批次：第 1 段。",
+            "下一段起点：第 3 轮。",
+        ),
+        boundary_text=(
+            "single-entry checkpoint recap，不是 history system，也不是 background runtime。"
+        ),
+    )
+    assert checkpoint_strip is not None
+    assert (
+        web_app_route._render_experimental_observer_session_loop_checkpoint_recap_row(
+            checkpoint
+        )
+        == web_app_route._render_experimental_observer_subheader_strip(
+            checkpoint_strip
+        )
+    )
+    assert 'id="experimental-demo-observer-subheader"' in cluster_html
+    assert cluster_html.count('class="experimental-observer-recall-strip"') == 2
+    assert 'id="experimental-demo-observer-last-run-recall"' in cluster_html
+    assert 'id="experimental-demo-observer-session-loop-recap"' in cluster_html
+    assert "上一轮 runtime：provider：ollama_local / model：qwen3:14b" in cluster_html
+    assert "下一段起点：第 3 轮。" in cluster_html
+    assert "single-entry recall，不是 history system，也不是 diagnostics dashboard。" in cluster_html
+    assert (
+        "single-entry checkpoint recap，不是 history system，也不是 background runtime。"
+        in cluster_html
+    )
+    assert "Turn 1" not in cluster_html
+    assert "finalized object" not in cluster_html
+    assert "private_notes" not in cluster_html
 
 
 def test_web_app_experimental_ai_demo_page_can_recall_last_autopilot_run_near_current_token_surface(
@@ -1135,6 +1222,7 @@ def test_web_app_experimental_ai_demo_page_can_recall_last_autopilot_run_near_cu
     assert response.status_code == 200
     html = response.text
     assert 'id="experimental-demo-last-run-token-history"' in html
+    assert 'id="experimental-demo-observer-subheader"' in html
     assert 'id="experimental-demo-observer-last-run-recall"' in html
     assert 'id="experimental-demo-observer-session-loop-recap"' not in html
     assert "Last Autopilot Recall" in html
@@ -1977,6 +2065,7 @@ def test_web_app_experimental_ai_demo_session_loop_checkpoint_survives_refresh_w
     assert refresh_response.status_code == 200
     refresh_html = refresh_response.text
     assert 'id="experimental-demo-session-loop-surface"' in refresh_html
+    assert 'id="experimental-demo-observer-subheader"' in refresh_html
     assert 'id="experimental-demo-observer-session-loop-recap"' in refresh_html
     assert "当前 loop 状态：第 1 段 bounded batch 已到达边界，可继续第 2 段。" in refresh_html
     assert "已完成批次：第 1 段。" in refresh_html
@@ -1993,6 +2082,7 @@ def test_web_app_experimental_ai_demo_session_loop_checkpoint_survives_refresh_w
     investigator_html = investigator_response.text
     assert "Bounded Autonomous Session Loop" not in investigator_html
     assert 'id="experimental-demo-session-loop-surface"' not in investigator_html
+    assert 'id="experimental-demo-observer-subheader"' not in investigator_html
     assert 'id="experimental-demo-observer-session-loop-recap"' not in investigator_html
     after_snapshot = _get_snapshot(client, session_id)
     assert before_snapshot == after_snapshot
@@ -2026,6 +2116,7 @@ def test_web_app_experimental_ai_demo_observer_header_can_show_last_run_recall_a
 
     assert response.status_code == 200
     html = response.text
+    assert 'id="experimental-demo-observer-subheader"' in html
     assert 'id="experimental-demo-observer-last-run-recall"' in html
     assert 'id="experimental-demo-observer-session-loop-recap"' in html
     assert "上一轮状态：达到轮数上限" in html
@@ -2064,6 +2155,7 @@ def test_web_app_experimental_ai_demo_continue_bounded_session_advances_from_che
     assert continue_response.status_code == 200
     html = continue_response.text
     assert "已基于当前 session loop checkpoint 继续第 2 段 bounded batch。" in html
+    assert 'id="experimental-demo-observer-subheader"' in html
     assert 'id="experimental-demo-observer-session-loop-recap"' in html
     assert "当前请求状态：成功" in html
     assert "共自动运行 1 轮 / 最大 2 轮。" in html
