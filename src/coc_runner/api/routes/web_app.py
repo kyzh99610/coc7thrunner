@@ -6296,6 +6296,18 @@ def _build_experimental_autonomous_session_loop_recap_copy(
     )
 
 
+def _build_experimental_observer_subheader_boundary_text(
+    *,
+    focus_text: str,
+    single_entry_label: str,
+    excluded_surface_label: str,
+) -> str:
+    return (
+        f"observer subheader：只保留{focus_text}的 single-entry {single_entry_label}，"
+        f"不是 history system，也不是 {excluded_surface_label}。"
+    )
+
+
 def _render_experimental_observer_subheader_strip(
     strip: ExperimentalObserverSubheaderStrip,
 ) -> str:
@@ -6329,7 +6341,11 @@ def _build_experimental_observer_last_run_recall_strip(
         tag_label="last run",
         tag_tone="",
         item_texts=tuple(item_texts),
-        boundary_text="single-entry recall，不是 history system，也不是 diagnostics dashboard。",
+        boundary_text=_build_experimental_observer_subheader_boundary_text(
+            focus_text="上一轮结果",
+            single_entry_label="recall",
+            excluded_surface_label="diagnostics dashboard",
+        ),
     )
 
 
@@ -6359,8 +6375,10 @@ def _build_experimental_observer_session_loop_checkpoint_recap_strip(
             recap_copy.continuation_count_text,
             recap_copy.next_turn_text,
         ),
-        boundary_text=(
-            "single-entry checkpoint recap，不是 history system，也不是 background runtime。"
+        boundary_text=_build_experimental_observer_subheader_boundary_text(
+            focus_text="session continuation 上下文",
+            single_entry_label="checkpoint recap",
+            excluded_surface_label="background runtime",
         ),
     )
 

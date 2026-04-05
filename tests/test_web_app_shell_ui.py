@@ -1093,10 +1093,42 @@ def test_experimental_autonomous_session_loop_checkpoint_recap_copy_stays_single
     assert "上一段停止原因：达到当前受控 one-shot demo run 的最大轮数上限。" in recap_html
     assert "已完成批次：第 1 段。" in recap_html
     assert "下一段起点：第 3 轮。" in recap_html
-    assert "single-entry checkpoint recap，不是 history system，也不是 background runtime。" in recap_html
+    assert (
+        "observer subheader：只保留session continuation 上下文的 single-entry checkpoint recap，"
+        "不是 history system，也不是 background runtime。"
+        in recap_html
+    )
     assert "Turn 1" not in recap_html
     assert "finalized object" not in recap_html
     assert "private_notes" not in recap_html
+
+
+def test_experimental_ai_demo_observer_subheader_boundary_wording_helper_stays_shared_and_tiny() -> None:
+    recall_boundary = web_app_route._build_experimental_observer_subheader_boundary_text(
+        focus_text="上一轮结果",
+        single_entry_label="recall",
+        excluded_surface_label="diagnostics dashboard",
+    )
+    checkpoint_boundary = (
+        web_app_route._build_experimental_observer_subheader_boundary_text(
+            focus_text="session continuation 上下文",
+            single_entry_label="checkpoint recap",
+            excluded_surface_label="background runtime",
+        )
+    )
+
+    assert (
+        recall_boundary
+        == "observer subheader：只保留上一轮结果的 single-entry recall，不是 history system，也不是 diagnostics dashboard。"
+    )
+    assert (
+        checkpoint_boundary
+        == "observer subheader：只保留session continuation 上下文的 single-entry checkpoint recap，不是 history system，也不是 background runtime。"
+    )
+    assert recall_boundary.startswith("observer subheader：只保留")
+    assert checkpoint_boundary.startswith("observer subheader：只保留")
+    assert "history system" in recall_boundary
+    assert "history system" in checkpoint_boundary
 
 
 def test_experimental_ai_demo_observer_header_recall_stays_single_entry_and_small() -> None:
@@ -1122,7 +1154,10 @@ def test_experimental_ai_demo_observer_header_recall_stays_single_entry_and_smal
             "上一轮停止原因：达到当前受控 one-shot demo run 的最大轮数上限。",
             "上一轮 runtime：provider：ollama_local / model：qwen3:14b",
         ),
-        boundary_text="single-entry recall，不是 history system，也不是 diagnostics dashboard。",
+        boundary_text=(
+            "observer subheader：只保留上一轮结果的 single-entry recall，不是 history system，"
+            "也不是 diagnostics dashboard。"
+        ),
     )
     assert recall_strip is not None
     assert recall_html == web_app_route._render_experimental_observer_subheader_strip(
@@ -1132,7 +1167,11 @@ def test_experimental_ai_demo_observer_header_recall_stays_single_entry_and_smal
     assert "上一轮状态：达到轮数上限" in recall_html
     assert "上一轮停止原因：达到当前受控 one-shot demo run 的最大轮数上限。" in recall_html
     assert "上一轮 runtime：provider：ollama_local / model：qwen3:14b" in recall_html
-    assert "single-entry recall，不是 history system，也不是 diagnostics dashboard。" in recall_html
+    assert (
+        "observer subheader：只保留上一轮结果的 single-entry recall，不是 history system，"
+        "也不是 diagnostics dashboard。"
+        in recall_html
+    )
     assert "Turn 1" not in recall_html
     assert "finalized object" not in recall_html
 
@@ -1177,7 +1216,8 @@ def test_experimental_ai_demo_observer_subheader_shared_render_stays_tiny_and_si
             "下一段起点：第 3 轮。",
         ),
         boundary_text=(
-            "single-entry checkpoint recap，不是 history system，也不是 background runtime。"
+            "observer subheader：只保留session continuation 上下文的 single-entry checkpoint recap，"
+            "不是 history system，也不是 background runtime。"
         ),
     )
     assert checkpoint_strip is not None
@@ -1195,11 +1235,17 @@ def test_experimental_ai_demo_observer_subheader_shared_render_stays_tiny_and_si
     assert 'id="experimental-demo-observer-session-loop-recap"' in cluster_html
     assert "上一轮 runtime：provider：ollama_local / model：qwen3:14b" in cluster_html
     assert "下一段起点：第 3 轮。" in cluster_html
-    assert "single-entry recall，不是 history system，也不是 diagnostics dashboard。" in cluster_html
     assert (
-        "single-entry checkpoint recap，不是 history system，也不是 background runtime。"
+        "observer subheader：只保留上一轮结果的 single-entry recall，不是 history system，"
+        "也不是 diagnostics dashboard。"
         in cluster_html
     )
+    assert (
+        "observer subheader：只保留session continuation 上下文的 single-entry checkpoint recap，"
+        "不是 history system，也不是 background runtime。"
+        in cluster_html
+    )
+    assert cluster_html.count("observer subheader：只保留") == 2
     assert "Turn 1" not in cluster_html
     assert "finalized object" not in cluster_html
     assert "private_notes" not in cluster_html
@@ -1229,7 +1275,11 @@ def test_web_app_experimental_ai_demo_page_can_recall_last_autopilot_run_near_cu
     assert html.count("上一轮状态：达到轮数上限") == 2
     assert html.count("上一轮停止原因：达到当前受控 one-shot demo run 的最大轮数上限。") == 2
     assert html.count("上一轮 runtime：provider：ollama_local / model：qwen3:14b") == 2
-    assert "single-entry recall，不是 history system，也不是 diagnostics dashboard。" in html
+    assert (
+        "observer subheader：只保留上一轮结果的 single-entry recall，不是 history system，"
+        "也不是 diagnostics dashboard。"
+        in html
+    )
     assert (
         "只保留最近一次 autopilot run 的 very small recall，不是 full runtime history，也不是 diagnostics dashboard。"
         in html
@@ -2053,7 +2103,11 @@ def test_web_app_experimental_ai_demo_session_loop_checkpoint_survives_refresh_w
     assert "下一段起点：第 3 轮。" in run_html
     assert "上一段状态：达到轮数上限" in run_html
     assert "上一段停止原因：达到当前受控 one-shot demo run 的最大轮数上限。" in run_html
-    assert "single-entry checkpoint recap，不是 history system，也不是 background runtime。" in run_html
+    assert (
+        "observer subheader：只保留session continuation 上下文的 single-entry checkpoint recap，"
+        "不是 history system，也不是 background runtime。"
+        in run_html
+    )
     assert (
         f'action="/app/sessions/{session_id}/experimental-ai-demo/continue-bounded-session"'
         in run_html
@@ -2169,7 +2223,11 @@ def test_web_app_experimental_ai_demo_continue_bounded_session_advances_from_che
     assert "当前收尾轮次：第 3 轮。" in html
     assert "上一段状态：成功" in html
     assert "上一段停止原因：已形成连续、可读且带 continuity 的受控 demo mini-arc。" in html
-    assert "single-entry checkpoint recap，不是 history system，也不是 background runtime。" in html
+    assert (
+        "observer subheader：只保留session continuation 上下文的 single-entry checkpoint recap，"
+        "不是 history system，也不是 background runtime。"
+        in html
+    )
     assert 'id="experimental-demo-session-loop-continue"' not in html
     assert len(fake_service.requests) == 12
     after_snapshot = _get_snapshot(client, session_id)
