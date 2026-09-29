@@ -1,2 +1,0 @@
-coc_runner
-knowledge

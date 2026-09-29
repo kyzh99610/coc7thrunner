@@ -1,14 +1,45 @@
+# Python / tooling caches
 __pycache__/
+*.pyc
+*.egg-info/
 .pytest_cache/
 .pytest-run-execution/
 .venv/
 .tools/
 .tmp/
+build/
+dist/
+
+# Test run output (throwaway databases created by the test suite)
 .test-artifacts/
 test-artifacts/
 pytestrun/
 pytestrun-new*/
-*.pyc
+
+# Local app data
 data/
 
-# Keep hand-saved session dumps and milestone notes under notes/.
+# Editor / tool local settings
+.claude/settings.local.json
+.Rhistory
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# Personal notes, AI chat prompts and planning docs (kept locally, not published)
+notes/
+PROMPT_*.txt
+MVP_SPEC.md
+PHASE2_PLAN.md
+PLAYTEST_RESULT_*.md
+PYTHON_VERSION_NOTES.md
+house_rules.md
+review_policy.md
+
+# Copyrighted rulebooks and published scenarios (kept locally only).
+# The .xlsx character sheets in this folder stay tracked because tests use them.
+coc7th rules and templates/**/*.pdf
+coc7th rules and templates/**/*.docx
+coc7th rules and templates/**/*.jpg
+coc7th rules and templates/**/*.png
