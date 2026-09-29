@@ -36,3 +36,10 @@ PLAYTEST_RESULT_*.md
 PYTHON_VERSION_NOTES.md
 house_rules.md
 review_policy.md
+
+# Copyrighted rulebooks and published scenarios (kept locally only).
+# The .xlsx character sheets in this folder stay tracked because tests use them.
+coc7th rules and templates/**/*.pdf
+coc7th rules and templates/**/*.docx
+coc7th rules and templates/**/*.jpg
+coc7th rules and templates/**/*.png
